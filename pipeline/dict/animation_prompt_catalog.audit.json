@@ -1,0 +1,78 @@
+{
+  "contract": "pet_generation_v2.animation_prompt_catalog.v1.lint.v1",
+  "model": "handwritten",
+  "entries": [
+    {
+      "id": "idle",
+      "failures": []
+    },
+    {
+      "id": "rest",
+      "failures": []
+    },
+    {
+      "id": "sleep",
+      "failures": []
+    },
+    {
+      "id": "thinking",
+      "failures": []
+    },
+    {
+      "id": "at_glass",
+      "failures": []
+    },
+    {
+      "id": "watching",
+      "failures": []
+    },
+    {
+      "id": "work",
+      "failures": []
+    },
+    {
+      "id": "happy",
+      "failures": []
+    },
+    {
+      "id": "sad",
+      "failures": []
+    },
+    {
+      "id": "angry",
+      "failures": []
+    },
+    {
+      "id": "refusal",
+      "failures": []
+    },
+    {
+      "id": "frightened",
+      "failures": []
+    },
+    {
+      "id": "curious",
+      "failures": []
+    },
+    {
+      "id": "tender",
+      "failures": []
+    },
+    {
+      "id": "stretch",
+      "failures": []
+    },
+    {
+      "id": "greeting",
+      "failures": []
+    },
+    {
+      "id": "signature_move",
+      "failures": []
+    },
+    {
+      "id": "playful",
+      "failures": []
+    }
+  ]
+}

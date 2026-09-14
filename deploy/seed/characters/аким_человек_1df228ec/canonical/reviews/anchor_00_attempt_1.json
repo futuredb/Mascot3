@@ -1,0 +1,9 @@
+{
+  "status": "skipped_budget_profile",
+  "hard_pass": true,
+  "manual_review_flags": [
+    "ai_review_skipped"
+  ],
+  "notes": "Mascot 3 keeps local framing QA and requires user acceptance instead of a paid AI review.",
+  "attempt": 1
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "name": "Марс",
+    "status": "READY",
+    "createdAt": "2026-09-14T09:19:20.937Z",
+    "generationProfile": "pet_generation_v2.5_mini_budget",
+    "maxHeroCostUsd": 5,
+    "stages": {
+      "deal": "done",
+      "lore": "done",
+      "design": "done",
+      "canonical": "approved",
+      "animations": "ready"
+    },
+    "characterSlug": "павел_человек_28631420",
+    "previewPath": "anchor_00.png",
+    "acceptedAt": "2026-09-14T09:23:57.561Z",
+    "active": true,
+    "animationStatus": "ready",
+    "animationEstimateUsd": 2.1315
+  },
+  {
+    "id": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "name": "Аким",
+    "status": "READY",
+    "createdAt": "2026-09-14T10:50:45.247Z",
+    "generationProfile": "pet_generation_v2.5_mini_budget",
+    "maxHeroCostUsd": 5,
+    "stages": {
+      "deal": "done",
+      "lore": "done",
+      "design": "done",
+      "canonical": "approved",
+      "animations": "ready"
+    },
+    "characterSlug": "аким_человек_1df228ec",
+    "previewPath": "anchor_00.png",
+    "acceptedAt": "2026-09-14T10:52:50.958Z",
+    "active": false,
+    "animationStatus": "ready",
+    "animationEstimateUsd": 2.1315
+  }
+]

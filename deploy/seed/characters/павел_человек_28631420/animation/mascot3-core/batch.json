@@ -1,0 +1,55 @@
+{
+  "contract": "pet_generation_v2.selected_animation_batch.v1",
+  "character_dir": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420",
+  "catalog_version": 43,
+  "created_at": "2026-09-14T09:31:09.019Z",
+  "submitted": true,
+  "output_directory": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/animation/mascot3-core",
+  "state_count": 4,
+  "total_seconds": 28,
+  "estimated_price_per_second_usd": 0.076125,
+  "estimated_total_usd": 2.1315,
+  "max_cost_usd": 3,
+  "states": [
+    {
+      "id": "idle",
+      "output": "mascot3-core/idle",
+      "duration_seconds": 6,
+      "estimated_cost_usd": 0.4567,
+      "catalog_entry_hash": "f6aef395a69370c17db0be4f5472e33fc9a1b601bebd50186999c2249bf60203",
+      "status": "assembled",
+      "job": "mjBnA4gE4vAGpNAho61C",
+      "animation_dir": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/animation/mascot3-core/idle/loop"
+    },
+    {
+      "id": "happy",
+      "output": "mascot3-core/happy",
+      "duration_seconds": 8,
+      "estimated_cost_usd": 0.609,
+      "catalog_entry_hash": "a7213c8e6c4a6c1ab37e72a7a33475765fd1633b4bfda607f20b798f82829dd4",
+      "status": "assembled",
+      "job": "8f4qUWB12eVuhcKIHScL",
+      "animation_dir": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/animation/mascot3-core/happy/loop"
+    },
+    {
+      "id": "sleep",
+      "output": "mascot3-core/sleep",
+      "duration_seconds": 6,
+      "estimated_cost_usd": 0.4567,
+      "catalog_entry_hash": "7835e185daeae3954de61f352316f6bb1ff202f6b512cd3693d1c4cbf8366f93",
+      "status": "assembled",
+      "job": "jK4VmNUHFhbIv4dPTyE3",
+      "animation_dir": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/animation/mascot3-core/sleep/loop"
+    },
+    {
+      "id": "playful",
+      "output": "mascot3-core/playful",
+      "duration_seconds": 8,
+      "estimated_cost_usd": 0.609,
+      "catalog_entry_hash": "af49921c7c05240349e285568b6d3f02a45ae98d90c8c5cd4a3224d21f116558",
+      "status": "assembled",
+      "job": "pmVUF5dA5rPEiUNuq6yV",
+      "animation_dir": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/animation/mascot3-core/playful/loop"
+    }
+  ]
+}

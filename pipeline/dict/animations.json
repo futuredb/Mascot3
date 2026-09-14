@@ -1,0 +1,296 @@
+{
+  "dictionary": "animations",
+  "contract": 4,
+  "id_namespace": "animation",
+  "instruction": "One bookended loop per observable state. Identity and personality are carried by the canonical anchor and deterministic prompt placeholders; phase transitions and trait source resolution are not used in v4.",
+  "entries": [
+    {
+      "id": "idle",
+      "label": "idle",
+      "group": "low_activity",
+      "function": "waits with a familiar small habit",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "rest",
+      "label": "rest",
+      "group": "low_activity",
+      "function": "recovers calmly without falling asleep",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "sleep",
+      "label": "sleep",
+      "group": "low_activity",
+      "function": "sleeps using a body-appropriate resting state",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "thinking",
+      "label": "thinking",
+      "group": "low_activity",
+      "function": "checks a familiar idea through a visible small action",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "at_glass",
+      "label": "at_glass",
+      "group": "low_activity",
+      "function": "physically interacts with the glass",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "watching",
+      "label": "watching",
+      "group": "low_activity",
+      "function": "holds directed attention without acting",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "work",
+      "label": "work",
+      "group": "purposeful_activity",
+      "function": "stays occupied with their own characteristic ongoing activity",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 6,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "happy",
+      "label": "happy",
+      "group": "emotion",
+      "function": "expresses personal delight",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "sad",
+      "label": "sad",
+      "group": "emotion",
+      "function": "expresses personal disappointment",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "angry",
+      "label": "angry",
+      "group": "emotion",
+      "function": "expresses anger at a personal irritant",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "refusal",
+      "label": "refusal",
+      "group": "emotion",
+      "function": "holds a visible personal boundary",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "frightened",
+      "label": "frightened",
+      "group": "emotion",
+      "function": "shows continuing fear",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "curious",
+      "label": "curious",
+      "group": "low_activity",
+      "function": "explores a familiar visible detail",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "tender",
+      "label": "tender",
+      "group": "emotion",
+      "function": "shows tenderness toward a personal soft spot",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "stretch",
+      "label": "stretch",
+      "group": "active_motion",
+      "function": "stretches the whole body out to full extension and releases",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "greeting",
+      "label": "greeting",
+      "group": "active_motion",
+      "function": "greets whoever is on the other side",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "signature_move",
+      "label": "signature_move",
+      "group": "active_motion",
+      "function": "performs the selected personal habit",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    },
+    {
+      "id": "playful",
+      "label": "playful",
+      "group": "emotion",
+      "function": "plays for the action itself",
+      "expected": "The state remains recognizable and returns to its anchor state.",
+      "loop": {
+        "required": true,
+        "seam": "The final frame matches the first in pose, orientation, coordinates, props, and physical state."
+      },
+      "duration": {
+        "min_seconds": 2,
+        "max_seconds": 10
+      },
+      "physics": "Silent Interlayer: planar motion with body-appropriate momentum; the background is static."
+    }
+  ]
+}

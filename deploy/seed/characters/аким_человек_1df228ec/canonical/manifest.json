@@ -1,0 +1,63 @@
+{
+  "status": "approved",
+  "turnaround_status": "complete",
+  "model": "google/gemini-3.1-flash-image-preview",
+  "chroma_key": "#00FF00",
+  "anchors": [
+    "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/аким_человек_1df228ec/canonical/anchor_00.png"
+  ],
+  "turnaround_candidates": [],
+  "plan": [
+    {
+      "id": "front",
+      "view": "front",
+      "purpose": "Separate front anchor showing the stepped layered silhouette and the tiny keepsake book at the wrist."
+    }
+  ],
+  "style_reference_folder": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs/23",
+  "style_reference_hashes": [
+    "a2d80ffc53dddca152855ff514b47d2739418eb0cb901d4b3a9d58bc28759eb5",
+    "dbd32c4bce076a9f09f0d63129b81e0999e683a046b20fa027946b31f7edc29a",
+    "65e3b23d304b9b0eac00b30efa9a9ca0171d1c5fd5c43685d0c22bc7e5c75cc3"
+  ],
+  "style_reference_count_sent": 3,
+  "master_validation": {
+    "status": "skipped_budget_profile",
+    "hard_pass": true,
+    "manual_review_flags": [
+      "ai_review_skipped"
+    ],
+    "notes": "Mascot 3 keeps local framing QA and requires user acceptance instead of a paid AI review.",
+    "attempt": 1
+  },
+  "anchor_validations": [
+    {
+      "view": "front",
+      "status": "skipped_budget_profile",
+      "hard_pass": true,
+      "manual_review_flags": [
+        "ai_review_skipped"
+      ],
+      "notes": "Mascot 3 keeps local framing QA and requires user acceptance instead of a paid AI review.",
+      "attempt": 1
+    }
+  ],
+  "framing_validations": [
+    {
+      "view": "front",
+      "pass": true,
+      "min_height": 0,
+      "max_height": 0.7,
+      "min_margin": 0.15,
+      "observed_height": 0.6689453125,
+      "observed_min_margin": 0.1650390625
+    }
+  ],
+  "reference_master_experiment": true,
+  "vision_similarity": {
+    "status": "skipped_budget_profile"
+  },
+  "approved_at": "2026-09-14T10:52:50.953Z",
+  "manual_verdict": "approved",
+  "manual_review_notes": null
+}

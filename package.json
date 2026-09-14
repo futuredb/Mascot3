@@ -1,0 +1,23 @@
+{
+  "name": "mascot3",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Budget-capped Seedance Mini profile for the Pet Generation v2.5 pipeline",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js",
+    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js",
+    "build": "npm run check",
+    "test": "node --test pipeline/*.test.js server/*.test.js",
+    "test:pipeline": "node --test pipeline/*.test.js",
+    "preflight": "node pipeline/run_preflight.js",
+    "verify": "npm run check && npm test && npm run build"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=20"
+  }
+}

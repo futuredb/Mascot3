@@ -1,0 +1,22 @@
+{
+  "refs_root": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs",
+  "style_pack": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs/6",
+  "seed": "be400e54-b520-44c7-b8e5-07a1977946cf",
+  "references": [
+    {
+      "hash": "3fac9b66475d9968210eba929b2ca197eb4615f4a7ec68ea5db144733080bf5c",
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs/6/image 1926988878.png",
+      "duplicates": []
+    },
+    {
+      "hash": "a9a67f745ae644dfba12d3f69e1c7d878e04edca60f05830e54261048d9b5d76",
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs/6/image 1926988877.png",
+      "duplicates": []
+    },
+    {
+      "hash": "4c2e503af39836025c76a2b1ded3cc27186a056f1c4f3e2c7937d461e33f21fe",
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/refs/6/image 1926988879.png",
+      "duplicates": []
+    }
+  ]
+}

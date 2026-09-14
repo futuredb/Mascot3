@@ -1,0 +1,23 @@
+{
+  "frames": null,
+  "frame_count": 74,
+  "animation_webp": null,
+  "preview_mp4": null,
+  "webp_disposal": null,
+  "endpoint_drift": 0.16683612898284314,
+  "sampled_identity_drift": [
+    {
+      "offset_seconds": 1.5,
+      "delta": 0.16725260416666668
+    },
+    {
+      "offset_seconds": 3,
+      "delta": 0.16690506280637254
+    },
+    {
+      "offset_seconds": 4.5,
+      "delta": 0.16823203890931374
+    }
+  ],
+  "calibration": "Thresholds require labeled visible_drift/no_visible_drift pilot clips; metrics are reported but do not auto-reject."
+}

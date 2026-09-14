@@ -1,0 +1,50 @@
+name: Verify and deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mascot3-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: docker build -t futuredb/mascot3:${{ github.sha }} .
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
+    steps:
+      - name: Trigger Coolify deployment
+        if: env.COOLIFY_TOKEN != '' && env.COOLIFY_WEBHOOK != ''
+        run: >
+          curl --fail-with-body --retry 3 --retry-all-errors
+          --request POST "$COOLIFY_WEBHOOK"
+          --header "Authorization: Bearer $COOLIFY_TOKEN"
+      - name: Deployment is not enabled yet
+        if: env.COOLIFY_TOKEN == '' || env.COOLIFY_WEBHOOK == ''
+        run: echo "Coolify deployment remains disabled until the resource is connected."

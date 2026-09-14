@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+android
+dist
+server-data
+pipeline/characters
+pipeline/runs
+pipeline/_state
+pipeline/preflight
+output
+*.log
+.DS_Store

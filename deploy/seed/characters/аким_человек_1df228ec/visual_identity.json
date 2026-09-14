@@ -1,0 +1,36 @@
+{
+  "character_brief": "Akim is a compact miniature adult man with a naturally compressed dwarf-like build, floating upright in a relaxed neutral pose with two fully visible separate legs and natural joints. He calmly keeps one item within reach while one finger is gently poised to trace a future trajectory. Several long soft layers form a stepped contour around his narrow torso, and a tiny keepsake book rests against his wrist.",
+  "anchor_prop": {
+    "prop_id": "tiny_keepsake_book",
+    "mode": "resting_against_body",
+    "placement": "resting against the character's wrist"
+  },
+  "render_identity": {
+    "subject": "compact miniature adult human man",
+    "silhouette_cue": "stepped layered outer silhouette",
+    "proportion_cue": "compact compressed torso, short limbs, and enlarged identity-bearing upper volume; never use ordinary full-sized human proportions",
+    "persistent_prop": "tiny_keepsake_book",
+    "prop_placement": "resting against the character's wrist",
+    "neutral_pose": "neutral upright levitation with two fully visible separated legs"
+  },
+  "view_mode": "front",
+  "canonical_anchor_plan": [
+    {
+      "id": "front",
+      "view": "front",
+      "purpose": "Separate front anchor showing the stepped layered silhouette and the tiny keepsake book at the wrist."
+    },
+    {
+      "id": "side",
+      "view": "side",
+      "purpose": "Separate side anchor showing the stepped layered silhouette depth and the tiny keepsake book at the wrist."
+    },
+    {
+      "id": "back",
+      "view": "back",
+      "purpose": "Separate back anchor showing the stepped layered silhouette and the tiny keepsake book placement at the wrist."
+    }
+  ],
+  "chroma_key": "#00FF00",
+  "subject_kind": "living"
+}

@@ -1,0 +1,216 @@
+{
+  "contract": "pet_generation_v2.primary_data",
+  "version": 1,
+  "seed": "ce5a27fd-a8cf-4417-9bcc-0c0b5b1f7eaa",
+  "input": {
+    "name": "Аким",
+    "name_source": "generated",
+    "subject": null,
+    "subject_kind": null,
+    "gender": null,
+    "age": null,
+    "origin": null,
+    "brief": null
+  },
+  "selected": {
+    "subject_request": null,
+    "requested_object": null,
+    "subject_kind": "living",
+    "gender": {
+      "id": "male",
+      "description": "Мужской пол."
+    },
+    "age": 20,
+    "origin_world": {
+      "id": "steam_machine_city",
+      "name": "Город паровых машин",
+      "origin_fact": "Персонаж родился в городе паровых машин."
+    },
+    "character": {
+      "energy": {
+        "id": "unhurried",
+        "description": "Неторопливый: даёт редкие мягкие импульсы и обычно не успевает набрать дрейф, который пришлось бы отдельно ловить."
+      },
+      "sociality": {
+        "id": "extrovert",
+        "description": "Экстравертный: легко направляет внимание наружу и оживляется от возможного присутствия другого."
+      },
+      "emotional_tone": [
+        {
+          "id": "calm",
+          "description": "Спокойный: основное состояние мягкое и уравновешенное, без внутренней суеты."
+        },
+        {
+          "id": "contemplative",
+          "description": "Тихо-задумчивый: воспринимает происходящее приглушённо и внимательно замечает малые изменения."
+        }
+      ],
+      "humor_style": [
+        {
+          "id": "repetition_escalation",
+          "fun": true,
+          "description": "Повтор с нарастанием: несколько раз возвращается к одному жесту, каждый раз заметно усиливая или меняя одну деталь."
+        },
+        {
+          "id": "visual_misdirection",
+          "fun": true,
+          "description": "Визуальная обманка: всем видом готовится к одному понятному действию, а завершает другим безопасным и неожиданным жестом."
+        }
+      ],
+      "mood_dynamics": {
+        "id": "stable",
+        "description": "Устойчивый: настроение меняется редко и сохраняет выбранный тон достаточно долго."
+      }
+    },
+    "inner_modifiers": {
+      "motivation": {
+        "id": "keep_a_favorite_close",
+        "description": "Держать любимую вещь рядом: чувствовать себя лучше, когда знакомая собственная вещь остаётся в пределах касания."
+      },
+      "fear": {
+        "id": "collide_own_things",
+        "description": "Неверно рассчитать путь двух собственных предметов и увидеть, как они вот-вот столкнутся."
+      },
+      "interest": [
+        {
+          "id": "movement_experiments",
+          "description": "Практические опыты с траекториями, вращением и отдачей собственных небольших предметов."
+        },
+        {
+          "id": "miniature_construction",
+          "description": "Миниатюрные конструкции из нескольких простых деталей, которые нужно точно совместить."
+        }
+      ],
+      "goal": {
+        "id": "invent_a_new_use",
+        "description": "Найти для обычной собственной вещи неожиданное, но действительно работающее применение."
+      },
+      "habit": [
+        {
+          "id": "hide_face_when_embarrassed",
+          "description": "При смущении закрывает лицо или переднюю сторону ближайшей частью тела либо собственной вещью."
+        },
+        {
+          "id": "scratch_head_when_puzzled",
+          "description": "Когда озадачен, машинально чешет затылок или соответствующую ему заднюю часть тела."
+        },
+        {
+          "id": "draw_idea_in_air",
+          "description": "Во время размышления обводит в воздухе воображаемую форму пальцем, кончиком лапы или другой тонкой частью."
+        }
+      ]
+    },
+    "external_modifiers": {
+      "appearance_trait": [
+        {
+          "id": "layered_silhouette",
+          "group": "silhouette",
+          "description": "Внешний контур образован несколькими естественно перекрывающимися мягкими слоями, прядями, складками или пластинами."
+        },
+        {
+          "id": "fine_speckling",
+          "group": "surface",
+          "description": "Часть поверхности покрыта россыпью мелких контрастных точек, искр, крапинок или коротких штрихов."
+        }
+      ],
+      "prop": [
+        {
+          "id": "sorting_case",
+          "description": "Плоский футляр с несколькими ячейками для малых собственных деталей; открывается и закрывается одним движением.",
+          "role": "utility"
+        },
+        {
+          "id": "tiny_keepsake_book",
+          "description": "Маленькая книжечка-раскладушка с собственными узорами и картинками, которую приятно листать без чтения.",
+          "role": "attachment"
+        }
+      ],
+      "superpower": [
+        {
+          "id": "elastic_body",
+          "group": "spectacular",
+          "description": "Сверхэластичность: безопасно растягивает, сплющивает и закручивает существующие части тела на комиксно большую величину, после чего собирается обратно.",
+          "visible_on": "body"
+        },
+        {
+          "id": "shape_recall",
+          "description": "Память формы: после одного взгляда помнит точный силуэт, узор и взаимное положение частей собственной вещи.",
+          "group": "quiet",
+          "visible_on": "effects"
+        }
+      ]
+    },
+    "scene_lead": {
+      "path": "inner_modifiers.fear.collide_own_things"
+    }
+  },
+  "fingerprint": "1df228ec09f7aae36c4664d288b62839fa06fe33e7522f1e4e879767c816893e",
+  "selection_provenance": {
+    "dictionaries": {
+      "base_traits": 1,
+      "inner_modifiers": 2,
+      "external_modifiers": 1,
+      "names": 1
+    },
+    "rules": {
+      "base_traits": {
+        "gender": "one_compatible_with_subject",
+        "age": "one",
+        "origin_world": "one",
+        "character": {
+          "energy": "one",
+          "sociality": "one",
+          "emotional_tone": {
+            "mode": "exactly",
+            "count": 2,
+            "order": "primary_then_secondary"
+          },
+          "humor_style": {
+            "mode": "fun_gate_then_exactly",
+            "fun_probability": 0.9,
+            "count": 2,
+            "not_comedic_id": "not_comedic",
+            "order": "primary_then_secondary_when_comedic"
+          },
+          "mood_dynamics": "one"
+        }
+      },
+      "inner_modifiers": {
+        "motivation": "one",
+        "fear": "one",
+        "interest": {
+          "mode": "exactly",
+          "count": 2,
+          "order": "primary_then_secondary"
+        },
+        "goal": "one",
+        "habit": {
+          "mode": "exactly",
+          "count": 3,
+          "order": "primary_then_secondary_then_tertiary"
+        }
+      },
+      "external_modifiers": {
+        "appearance_trait": {
+          "mode": "required_group_plus_any",
+          "required_group": "silhouette",
+          "excluded_groups_from_extra": [
+            "silhouette"
+          ],
+          "count": 2
+        },
+        "prop": {
+          "mode": "exactly",
+          "count": 2
+        },
+        "superpower": {
+          "mode": "one_per_group",
+          "groups": [
+            "spectacular",
+            "quiet"
+          ]
+        }
+      }
+    }
+  }
+}

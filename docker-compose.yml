@@ -1,0 +1,29 @@
+services:
+  mascot3:
+    build:
+      context: .
+    environment:
+      NODE_ENV: production
+      MASCOT3_PORT: "8788"
+      MASCOT3_DATA_DIR: /data
+    env_file:
+      - .env
+    expose:
+      - "8788"
+    volumes:
+      - mascot3_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+volumes:
+  mascot3_data:

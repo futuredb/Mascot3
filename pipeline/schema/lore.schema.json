@@ -1,0 +1,220 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "identity",
+    "body_profile",
+    "visual_signature",
+    "passport",
+    "portrait",
+    "realization"
+  ],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "subject",
+        "subject_kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_kind": {
+          "enum": [
+            "living",
+            "made"
+          ]
+        }
+      }
+    },
+    "body_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body_concept",
+        "silhouette",
+        "scale",
+        "front",
+        "visible_parts",
+        "movement_contact",
+        "view_predisposition"
+      ],
+      "properties": {
+        "body_concept": {
+          "type": "string",
+          "minLength": 1
+        },
+        "front": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible_parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "movement_contact": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "silhouette": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "view_predisposition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "reason"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "front",
+                "top",
+                "either"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "visual_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_silhouette_cue",
+        "secondary_readable_detail",
+        "body_language"
+      ],
+      "properties": {
+        "primary_silhouette_cue": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secondary_readable_detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body_language": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "passport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "occupation",
+        "appearance",
+        "character",
+        "motivation",
+        "fear",
+        "interests",
+        "goal",
+        "habits",
+        "props",
+        "superpowers",
+        "power_manifestation"
+      ],
+      "properties": {
+        "occupation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "appearance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "character": {
+          "type": "string",
+          "minLength": 1
+        },
+        "motivation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fear": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interests": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "habits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "props": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "superpowers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "power_manifestation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "portrait": {
+      "type": "string",
+      "minLength": 100
+    },
+    "realization": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

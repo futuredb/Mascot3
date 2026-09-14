@@ -1,0 +1,46 @@
+{
+  "status": "assembled",
+  "contract": "pet_generation_v2.bookended_animation.v1",
+  "animation_id": "happy",
+  "model": "bytedance/seedance-2.0-mini",
+  "duration": 8,
+  "resolution": "720p",
+  "template": "Delight runs through it in waves and it bounces with each one, unable to keep still. Light and lively.",
+  "prompt": "The character in the picture moves with the body it actually has. Delight runs through it in waves and it bounces with each one, unable to keep still. Light and lively. It floats free in open space with nothing beneath it. Movement runs through it the whole time and never settles. Its body holds together as one shape, and it moves and poses as big and as freely as it likes while staying inside the picture. Whatever hangs loose on it swings after it and settles a moment later. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.",
+  "catalog_version": 43,
+  "catalog_entry_hash": "ca23afda29ac8cd657bafde6e64eb69a4b41a662d3c029eaf65329dfd48f3400",
+  "source_hash": "a7213c8e6c4a6c1ab37e72a7a33475765fd1633b4bfda607f20b798f82829dd4",
+  "anchor": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+  "frame_slots": [
+    {
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+      "frame_type": "first_frame"
+    },
+    {
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+      "frame_type": "last_frame"
+    }
+  ],
+  "video": "source_video.mp4",
+  "frames": null,
+  "frame_count": 98,
+  "animation_webp": null,
+  "preview_mp4": null,
+  "webp_disposal": null,
+  "endpoint_drift": 0.1522039675245098,
+  "sampled_identity_drift": [
+    {
+      "offset_seconds": 2,
+      "delta": 0.15944776348039216
+    },
+    {
+      "offset_seconds": 4,
+      "delta": 0.1597464767156863
+    },
+    {
+      "offset_seconds": 6,
+      "delta": 0.1568282781862745
+    }
+  ],
+  "calibration": "Thresholds require labeled visible_drift/no_visible_drift pilot clips; metrics are reported but do not auto-reject."
+}

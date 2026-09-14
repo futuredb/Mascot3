@@ -1,0 +1,26 @@
+{
+  "id": "pmVUF5dA5rPEiUNuq6yV",
+  "polling_url": "https://openrouter.ai/api/v1/videos/pmVUF5dA5rPEiUNuq6yV",
+  "status": "pending",
+  "contract": "pet_generation_v2.bookended_animation.v1",
+  "animation_id": "playful",
+  "model": "bytedance/seedance-2.0-mini",
+  "duration": 8,
+  "resolution": "720p",
+  "template": "It plays with its own momentum, tipping and catching itself, staying near where it began, and keeps the game going. Quick and springy.",
+  "prompt": "The character in the picture moves with the body it actually has. It plays with its own momentum, tipping and catching itself, staying near where it began, and keeps the game going. Quick and springy. It floats free in open space with nothing beneath it. Movement runs through it the whole time and never settles. Its body holds together as one shape, and it moves and poses as big and as freely as it likes while staying inside the picture. Whatever hangs loose on it swings after it and settles a moment later. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.",
+  "catalog_version": 43,
+  "catalog_entry_hash": "b8d49655c4de0f71bbb4fe1066bc29b50e735f3de73a05c96aeb57f852a5e263",
+  "source_hash": "af49921c7c05240349e285568b6d3f02a45ae98d90c8c5cd4a3224d21f116558",
+  "anchor": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+  "frame_slots": [
+    {
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+      "frame_type": "first_frame"
+    },
+    {
+      "source": "/Users/alex/Documents/ChatGPT/Маскоты/mascot3/pipeline/characters/павел_человек_28631420/canonical/anchor_00.png",
+      "frame_type": "last_frame"
+    }
+  ]
+}

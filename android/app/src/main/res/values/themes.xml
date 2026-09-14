@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.GenerativeMascot" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#E8F4FC</item>
+        <item name="android:navigationBarColor">#E8F4FC</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

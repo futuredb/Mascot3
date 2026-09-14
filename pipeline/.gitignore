@@ -1,0 +1,12 @@
+# Local secrets and dependencies
+.env
+.env.*
+node_modules/
+
+# Generated character artifacts and resumable jobs
+characters/
+runs/
+_state/
+
+# Local diagnostic output
+*.log

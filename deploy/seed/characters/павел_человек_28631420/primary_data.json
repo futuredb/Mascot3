@@ -1,0 +1,216 @@
+{
+  "contract": "pet_generation_v2.primary_data",
+  "version": 1,
+  "seed": "be400e54-b520-44c7-b8e5-07a1977946cf",
+  "input": {
+    "name": "Павел",
+    "name_source": "generated",
+    "subject": null,
+    "subject_kind": null,
+    "gender": null,
+    "age": null,
+    "origin": null,
+    "brief": null
+  },
+  "selected": {
+    "subject_request": null,
+    "requested_object": null,
+    "subject_kind": "living",
+    "gender": {
+      "id": "male",
+      "description": "Мужской пол."
+    },
+    "age": 21,
+    "origin_world": {
+      "id": "living_emotions_world",
+      "name": "Общество открытых эмоций",
+      "origin_fact": "Персонаж родился в мире, где эмоции принято точно называть и открыто обсуждать."
+    },
+    "character": {
+      "energy": {
+        "id": "bursty",
+        "description": "Порывистый: долго висит почти неподвижно, затем резко срывается в действие и тратит заметное время на коррекцию дрейфа."
+      },
+      "sociality": {
+        "id": "ambivert",
+        "description": "Амбивертный: одинаково естественно бывает обращён внутрь себя и наружу, в зависимости от текущего состояния."
+      },
+      "emotional_tone": [
+        {
+          "id": "contemplative",
+          "description": "Тихо-задумчивый: воспринимает происходящее приглушённо и внимательно замечает малые изменения."
+        },
+        {
+          "id": "calm",
+          "description": "Спокойный: основное состояние мягкое и уравновешенное, без внутренней суеты."
+        }
+      ],
+      "humor_style": [
+        {
+          "id": "deadpan",
+          "fun": true,
+          "description": "Сухой юмор: делает очевидно нелепое с совершенно серьёзным выражением и не подчёркивает шутку."
+        },
+        {
+          "id": "visual_misdirection",
+          "fun": true,
+          "description": "Визуальная обманка: всем видом готовится к одному понятному действию, а завершает другим безопасным и неожиданным жестом."
+        }
+      ],
+      "mood_dynamics": {
+        "id": "stable",
+        "description": "Устойчивый: настроение меняется редко и сохраняет выбранный тон достаточно долго."
+      }
+    },
+    "inner_modifiers": {
+      "motivation": {
+        "id": "play_for_its_own_sake",
+        "description": "Играть ради самого действия: повторять приятный жест или затею, даже когда от неё ничего не требуется."
+      },
+      "fear": {
+        "id": "harm_what_matters",
+        "description": "Неловким движением зацепить и повредить именно любимую или важную собственную вещь."
+      },
+      "interest": [
+        {
+          "id": "movement_experiments",
+          "description": "Практические опыты с траекториями, вращением и отдачей собственных небольших предметов."
+        },
+        {
+          "id": "favorite_objects",
+          "description": "Знакомые личные вещи, чьи мелкие детали приятно рассматривать, поправлять и держать рядом."
+        }
+      ],
+      "goal": {
+        "id": "enjoy_a_favorite_thing",
+        "description": "Побыть рядом с любимой собственной вещью, касаясь, рассматривая или бережно удерживая её без иной цели."
+      },
+      "habit": [
+        {
+          "id": "stick_out_tongue_in_concentration",
+          "description": "При особенно точной работе непроизвольно высовывает язык; тело без языка выдвигает вперёд небольшую подвижную деталь."
+        },
+        {
+          "id": "twirl_object_while_thinking",
+          "description": "Во время раздумий постоянно поворачивает одну маленькую вещь, отпуская её лишь настолько, чтобы сразу поймать обратно."
+        },
+        {
+          "id": "refuse_a_final_pause",
+          "description": "Завершив одно движение, немедленно начинает следующее, не оставляя себе ни мгновения спокойной паузы."
+        }
+      ]
+    },
+    "external_modifiers": {
+      "appearance_trait": [
+        {
+          "id": "trailing_soft_detail",
+          "group": "silhouette",
+          "description": "Одна мягкая часть покрова или оформления образует заметное продолжение силуэта и с запозданием следует за движением."
+        },
+        {
+          "id": "translucent_outer_layer",
+          "group": "surface",
+          "description": "Тонкий внешний слой частично прозрачен и накладывает цвет или фактуру на основное тело, не показывая анатомию внутри."
+        }
+      ],
+      "prop": [
+        {
+          "id": "sorting_case",
+          "description": "Плоский футляр с несколькими ячейками для малых собственных деталей; открывается и закрывается одним движением.",
+          "role": "utility"
+        },
+        {
+          "id": "favorite_pebble",
+          "description": "Гладкий разноцветный камешек любимой формы, который приятно перекатывать в ладони или держать рядом.",
+          "role": "attachment"
+        }
+      ],
+      "superpower": [
+        {
+          "id": "elastic_body",
+          "group": "spectacular",
+          "description": "Сверхэластичность: безопасно растягивает, сплющивает и закручивает существующие части тела на комиксно большую величину, после чего собирается обратно.",
+          "visible_on": "body"
+        },
+        {
+          "id": "rhythm_sense",
+          "description": "Чувство ритма: телом точно чувствует повторение, паузу и момент, когда несколько собственных движений снова совпадают.",
+          "group": "quiet",
+          "visible_on": "body"
+        }
+      ]
+    },
+    "scene_lead": {
+      "path": "inner_modifiers.goal.enjoy_a_favorite_thing"
+    }
+  },
+  "fingerprint": "28631420eff6f0957c84338e6eff36358bf7909b08670b3a4fab48ec193c762a",
+  "selection_provenance": {
+    "dictionaries": {
+      "base_traits": 1,
+      "inner_modifiers": 2,
+      "external_modifiers": 1,
+      "names": 1
+    },
+    "rules": {
+      "base_traits": {
+        "gender": "one_compatible_with_subject",
+        "age": "one",
+        "origin_world": "one",
+        "character": {
+          "energy": "one",
+          "sociality": "one",
+          "emotional_tone": {
+            "mode": "exactly",
+            "count": 2,
+            "order": "primary_then_secondary"
+          },
+          "humor_style": {
+            "mode": "fun_gate_then_exactly",
+            "fun_probability": 0.9,
+            "count": 2,
+            "not_comedic_id": "not_comedic",
+            "order": "primary_then_secondary_when_comedic"
+          },
+          "mood_dynamics": "one"
+        }
+      },
+      "inner_modifiers": {
+        "motivation": "one",
+        "fear": "one",
+        "interest": {
+          "mode": "exactly",
+          "count": 2,
+          "order": "primary_then_secondary"
+        },
+        "goal": "one",
+        "habit": {
+          "mode": "exactly",
+          "count": 3,
+          "order": "primary_then_secondary_then_tertiary"
+        }
+      },
+      "external_modifiers": {
+        "appearance_trait": {
+          "mode": "required_group_plus_any",
+          "required_group": "silhouette",
+          "excluded_groups_from_extra": [
+            "silhouette"
+          ],
+          "count": 2
+        },
+        "prop": {
+          "mode": "exactly",
+          "count": 2
+        },
+        "superpower": {
+          "mode": "one_per_group",
+          "groups": [
+            "spectacular",
+            "quiet"
+          ]
+        }
+      }
+    }
+  }
+}
