@@ -120,6 +120,7 @@ class AppViewModel(
                 session.saveAcceptedMascot(id)
                 MascotDto(
                     id = id,
+                    name = heroStore.mascotName(id),
                     status = "READY",
                     promptVersion = "local-library",
                     previewUrl = heroStore.baseFile(id)?.toURI()?.toString(),
@@ -173,13 +174,23 @@ class AppViewModel(
         val active = runCatching { api.activeMascot() }.getOrNull()?.takeIf { it.isSuccessful }?.body()
         val localAccepted = acceptedId
             ?.takeIf { heroStore.baseFile(it) != null }
-            ?.let { MascotDto(id = it, status = "READY") }
+            ?.let { MascotDto(id = it, name = heroStore.mascotName(it), status = "READY") }
+        val localBundled = heroStore.localMascotIds().firstOrNull()?.let { id ->
+            MascotDto(
+                id = id,
+                name = heroStore.mascotName(id),
+                status = "READY",
+                promptVersion = "bundled-library",
+                previewUrl = heroStore.baseFile(id)?.toURI()?.toString(),
+            )
+        }
         val shown = when {
             waitingForHero(restored) || restored?.status == "AWAITING_ACCEPTANCE" -> restored
             restored?.status == "READY" -> restored
             accepted?.status == "READY" -> accepted
             active != null -> active
             localAccepted != null -> localAccepted
+            localBundled != null -> localBundled
             else -> restored
         }
         val waiting = waitingForHero(shown)
@@ -648,7 +659,7 @@ class AppViewModel(
                     if (base == null && frames.isEmpty()) return@mapNotNull null
                     HeroLibraryItem(
                         id = id,
-                        name = names[id]?.name,
+                        name = names[id]?.name ?: heroStore.mascotName(id),
                         baseFrames = frames.map { it.toURI().toString() },
                         baseStill = base?.toURI()?.toString(),
                         active = id == activeId,

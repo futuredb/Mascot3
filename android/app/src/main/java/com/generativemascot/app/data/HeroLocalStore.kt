@@ -42,6 +42,13 @@ class HeroLocalStore(context: Context) {
     fun baseFile(mascotId: String): File? =
         File(root, "$mascotId/base.png").takeIf { it.isFile }
 
+    fun mascotName(mascotId: String): String? =
+        File(root, "$mascotId/name.txt")
+            .takeIf { it.isFile }
+            ?.readText()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
     fun expressionPackReady(mascotId: String): Boolean = EXPRESSION_STATES.all { state ->
         File(root, "$mascotId/states/$state.png").isFile
     }
