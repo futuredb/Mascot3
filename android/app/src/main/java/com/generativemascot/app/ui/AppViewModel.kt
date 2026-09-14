@@ -577,7 +577,7 @@ class AppViewModel(
                 it.copy(
                     route = "animations",
                     packBusy = true,
-                    packMessage = "Запускаем четыре анимации…",
+                    packMessage = "Запускаем 17 анимаций…",
                     error = null,
                     mascot = mascot.copy(
                         stages = mascot.stages + ("animations" to "running"),
@@ -585,7 +585,7 @@ class AppViewModel(
                 )
             }
             viewModelScope.launch {
-                runCatching { api.generateVideos(mascot.id, 4) }
+                runCatching { api.generateVideos(mascot.id, ANIMATION_PACK_SIZE) }
                     .onSuccess { result ->
                         MediaRefreshWorker.enqueue(
                             session.appContext,
@@ -600,9 +600,9 @@ class AppViewModel(
                                 route = "animations",
                                 packBusy = false,
                                 packMessage = if (stage == "ready") {
-                                    "Все четыре анимации готовы"
+                                    "Все $ANIMATION_PACK_SIZE анимаций готовы"
                                 } else {
-                                    "Генерация идёт: готово $ready из 4"
+                                    "Генерация идёт: готово $ready из $ANIMATION_PACK_SIZE"
                                 },
                                 mascot = mascot.copy(
                                     status = "READY",
@@ -634,7 +634,7 @@ class AppViewModel(
                 route = "knock",
                 creating = true,
                 busy = true,
-                generationLabel = "Seedance Mini создаёт четыре живые анимации…",
+                generationLabel = "Seedance Mini создаёт 17 живых анимаций…",
                 error = null,
                 mascot = mascot.copy(
                     previewUrl = null,

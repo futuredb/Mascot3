@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -32,11 +34,28 @@ import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
 import kotlinx.coroutines.delay
 
-val ANIMATION_STATE_KEYS = listOf("idle", "joyful", "sleeping", "dancing")
+val ANIMATION_STATE_KEYS = listOf(
+    "idle", "resting", "sleeping", "thinking", "at_glass", "watching", "joyful", "sad", "angry",
+    "refusal", "frightened", "curious", "tender", "stretching", "greeting", "signature_move", "dancing",
+)
+const val ANIMATION_PACK_SIZE = 17
 private val actionDescriptions = mapOf(
     "idle" to "Тихо осматривается и ждёт, когда ты снова окажешься рядом",
+    "resting" to "Отпускает напряжение и спокойно отдыхает, оставаясь рядом",
+    "thinking" to "Неторопливо ищет ответ и перебирает идеи",
+    "at_glass" to "Подходит совсем близко и будто касается стекла",
+    "watching" to "Внимательно следит за тем, что происходит вокруг",
     "joyful" to "Искренне радуется твоему вниманию",
     "sleeping" to "Засыпает и спокойно дышит",
+    "sad" to "Немного грустит и ждёт твоей поддержки",
+    "angry" to "Сердится выразительно, но совсем не страшно",
+    "refusal" to "Уверенно показывает, что сейчас не согласен",
+    "frightened" to "Пугается неожиданности и осторожно приходит в себя",
+    "curious" to "С любопытством изучает что-то новое",
+    "tender" to "Делится тихим и очень тёплым моментом",
+    "stretching" to "Хорошенько потягивается и снова становится бодрым",
+    "greeting" to "Приветствует тебя своим особенным способом",
+    "signature_move" to "Показывает фирменный жест, который умеет только он",
     "dancing" to "Пускается в свой самый любимый танец",
 )
 
@@ -250,8 +269,8 @@ fun AnimationLibraryScreen(
                     ) {
                         Text(
                             when {
-                                inProgress -> "Создаём: $readyCount из 4 готовы"
-                                syncing -> "Сохраняем: $readyCount из 4"
+                                inProgress -> "Создаём: $readyCount из $ANIMATION_PACK_SIZE готовы"
+                                syncing -> "Сохраняем: $readyCount из $ANIMATION_PACK_SIZE"
                                 interrupted -> "Продолжить анимацию"
                                 else -> "Оживить героя"
                             },
@@ -271,9 +290,9 @@ fun AnimationLibraryScreen(
             text = {
                 Text(
                     if (interrupted) {
-                        "Уже готово $readyCount из 4. Сохранённые результаты используются повторно; приложение продолжит с незавершённых этапов."
+                        "Уже готово $readyCount из $ANIMATION_PACK_SIZE. Сохранённые результаты используются повторно; приложение продолжит с незавершённых этапов."
                     } else {
-                        "Сервер создаст четыре цельных видео: ожидание, радость, сон и танец. Для спокойного сна используется тот же проверенный ролик. Это платная генерация с лимитом стоимости и без автоматических платных повторов."
+                        "Сервер создаст 17 отдельных действий на Seedance 2 Mini. Это 112 секунд платной генерации с лимитом до $9 за анимации. Уже готовые результаты и незавершённые задания сохраняются, платных автоматических повторов нет."
                     },
                 )
             },
@@ -298,10 +317,10 @@ private fun AnimationPackStatus(
     onDismiss: () -> Unit,
 ) {
     val title = when {
-        packReady -> "Все 4 анимации готовы"
-        inProgress -> "Создаём анимации: $readyCount из 4 готовы"
-        syncing -> "Сохраняем анимации: $readyCount из 4"
-        interrupted -> "Готово $readyCount из 4 — можно продолжить"
+        packReady -> "Все $ANIMATION_PACK_SIZE анимаций готовы"
+        inProgress -> "Создаём анимации: $readyCount из $ANIMATION_PACK_SIZE готовы"
+        syncing -> "Сохраняем анимации: $readyCount из $ANIMATION_PACK_SIZE"
+        interrupted -> "Готово $readyCount из $ANIMATION_PACK_SIZE — можно продолжить"
         else -> "Анимации пока не созданы"
     }
     val detail = when {
@@ -339,17 +358,12 @@ private fun AnimationPackStatus(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            repeat(4) { index ->
-                Box(
-                    Modifier.weight(1f).height(5.dp).clip(CircleShape)
-                        .background(
-                            if (index < readyCount) FigmaInk.copy(alpha = .82f)
-                            else FigmaInk.copy(alpha = .12f),
-                        ),
-                )
-            }
-        }
+        LinearProgressIndicator(
+            progress = { readyCount.toFloat() / ANIMATION_PACK_SIZE },
+            modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
+            color = FigmaInk.copy(alpha = .82f),
+            trackColor = FigmaInk.copy(alpha = .12f),
+        )
         Spacer(Modifier.height(8.dp))
         Text(detail, color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, lineHeight = 15.sp)
         if (!packReady && !message.isNullOrBlank() && message != title) {
@@ -418,13 +432,14 @@ private fun ActionDetail(
                 textAlign = TextAlign.Center)
         }
         Spacer(Modifier.height(16.dp))
-        Row(
+        LazyRow(
             Modifier.fillMaxWidth().height(64.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
+            contentPadding = PaddingValues(horizontal = 4.dp),
         ) {
-            ANIMATION_STATE_KEYS.forEach { key ->
-                val available = videoUrls[key] != null || legacyVideoUrl != null || key == action
+            lazyRowItems(ANIMATION_STATE_KEYS, key = { it }) { key ->
+                val available = videoUrls[key] != null || key == action
                 Box(
                     Modifier.size(56.dp).clip(CircleShape)
                         .background(Color.White.copy(alpha = if (key == action) .60f else .20f))

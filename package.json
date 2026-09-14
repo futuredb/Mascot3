@@ -2,7 +2,7 @@
   "name": "mascot3",
   "version": "1.0.0",
   "private": true,
-  "description": "Budget-capped Seedance Mini profile for the Pet Generation v2.5 pipeline",
+  "description": "Full 17-animation Seedance Mini profile for the Pet Generation v2.5 pipeline",
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",

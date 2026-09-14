@@ -21,27 +21,50 @@ const MASCOTS_FILE = path.join(SERVER_DATA_DIR, "mascots.json");
 const IDEMPOTENCY_FILE = path.join(SERVER_DATA_DIR, "idempotency.json");
 const BUDGET_LEDGER_FILE = path.join(SERVER_DATA_DIR, "budget-ledger.json");
 const SEED_ROOT = path.join(ROOT, "deploy", "seed");
+const ANIMATION_CATALOG = JSON.parse(fs.readFileSync(path.join(PIPELINE, "dict", "animation_prompt_catalog.json"), "utf8"));
+const ENABLED_ANIMATION_ENTRIES = ANIMATION_CATALOG.entries.filter((entry) => entry.availability === "enabled");
+const UI_TO_PIPELINE_ANIMATION = Object.freeze({
+  idle: "idle",
+  resting: "rest",
+  sleeping: "sleep",
+  thinking: "thinking",
+  at_glass: "at_glass",
+  watching: "watching",
+  joyful: "happy",
+  sad: "sad",
+  angry: "angry",
+  refusal: "refusal",
+  frightened: "frightened",
+  curious: "curious",
+  tender: "tender",
+  stretching: "stretch",
+  greeting: "greeting",
+  signature_move: "signature_move",
+  dancing: "playful",
+  // A local playback derivative of `sleep`; it is never a separate paid job.
+  sleep_loop: "sleep",
+});
+const LIBRARY_UI_STATES = Object.keys(UI_TO_PIPELINE_ANIMATION).filter((state) => state !== "sleep_loop");
+const ENABLED_ANIMATION_IDS = ENABLED_ANIMATION_ENTRIES.map((entry) => entry.id);
+if (LIBRARY_UI_STATES.length !== 17 || ENABLED_ANIMATION_IDS.join(",") !== LIBRARY_UI_STATES.map((state) => UI_TO_PIPELINE_ANIMATION[state]).join(",")) {
+  throw new Error("Mascot 3 UI animation mapping is out of sync with the enabled v2.5 catalog");
+}
 const runtimeEnv = {
   ...env,
   PET_V2_DATA_DIR: DATA_ROOT || PIPELINE,
 };
 const PROFILE = Object.freeze({
-  id: "pet_generation_v2.5_mini_budget",
+  id: "pet_generation_v2.5_mini_full17",
   videoModel: "bytedance/seedance-2.0-mini",
   videoResolution: "720p",
-  pipelineAnimations: ["idle", "happy", "sleep", "playful"],
-  uiStates: ["idle", "joyful", "sleeping", "sleep_loop", "dancing"],
-  maxHeroCostUsd: Number(env.MASCOT3_MAX_HERO_COST_USD || 5),
-  maxAnimationCostUsd: Number(env.MASCOT3_MAX_ANIMATION_COST_USD || 3),
+  pipelineAnimations: ENABLED_ANIMATION_IDS,
+  uiStates: LIBRARY_UI_STATES,
+  totalVideoSeconds: ENABLED_ANIMATION_ENTRIES.reduce((total, entry) => total + entry.duration_seconds, 0),
+  estimatedVideoCostUsd: Number((ENABLED_ANIMATION_ENTRIES.reduce((total, entry) => total + entry.duration_seconds, 0) * Number(env.MASCOT3_VIDEO_PRICE_PER_SECOND_USD || 0.076125)).toFixed(4)),
+  maxHeroCostUsd: Number(env.MASCOT3_MAX_HERO_COST_USD || 11),
+  maxAnimationCostUsd: Number(env.MASCOT3_MAX_ANIMATION_COST_USD || 9),
   baseCostReserveUsd: Number(env.MASCOT3_BASE_COST_RESERVE_USD || 1.75),
   videoPricePerSecondUsd: Number(env.MASCOT3_VIDEO_PRICE_PER_SECOND_USD || 0.076125),
-});
-const UI_TO_PIPELINE_ANIMATION = Object.freeze({
-  idle: "idle",
-  joyful: "happy",
-  sleeping: "sleep",
-  sleep_loop: "sleep",
-  dancing: "playful",
 });
 const jobs = new Map();
 const mascots = new Map();
@@ -204,6 +227,11 @@ async function writeJsonAtomic(file, value) {
 }
 
 function mascotDto(mascot) {
+  const fullAnimationPackReady = PROFILE.pipelineAnimations.every((id) => Boolean(animationSource(mascot, id)));
+  const stages = { ...(mascot.stages || {}) };
+  if (!fullAnimationPackReady && stages.animations === "ready") {
+    stages.animations = PROFILE.pipelineAnimations.some((id) => Boolean(animationSource(mascot, id))) ? "partial" : "pending";
+  }
   return {
     id: mascot.id,
     name: mascot.name || null,
@@ -211,7 +239,7 @@ function mascotDto(mascot) {
     reroll_used: 0,
     reroll_limit: 1,
     prompt_version: PROFILE.id,
-    stages: mascot.stages || {},
+    stages,
     preview_url: mascot.previewPath ? `/assets/${mascot.id}/base.png` : null,
     preview_animation_url: null,
   };
@@ -338,10 +366,19 @@ function presentationPreviewPath(mascot) {
 
 function animationSource(mascot, pipelineId) {
   if (!mascot.characterDir) return null;
-  const loopDir = path.join(mascot.characterDir, "animation", "mascot3-core", pipelineId, "loop");
-  if (!fs.existsSync(loopDir)) return null;
-  const name = fs.readdirSync(loopDir).find((entry) => /^source_video\.[a-z0-9]+$/i.test(entry));
-  return name ? path.join(loopDir, name) : null;
+  const batchDirs = [
+    mascot.animationBatchDir,
+    `mascot3-mini-full-v${ANIMATION_CATALOG.version}`,
+    `mascot3-mini-completion-v${ANIMATION_CATALOG.version}`,
+    "mascot3-core",
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  for (const batchDir of batchDirs) {
+    const loopDir = path.join(mascot.characterDir, "animation", batchDir, pipelineId, "loop");
+    if (!fs.existsSync(loopDir)) continue;
+    const name = fs.readdirSync(loopDir).find((entry) => /^source_video\.[a-z0-9]+$/i.test(entry));
+    if (name) return path.join(loopDir, name);
+  }
+  return null;
 }
 
 function videoDurationSeconds(source) {
@@ -408,7 +445,7 @@ function animationPackDto(mascot) {
     ? PROFILE.uiStates.filter((state) => !ready.includes(state))
     : [];
   const queued = blocked.length ? [] : PROFILE.uiStates.filter((state) => !ready.includes(state));
-  return { mascot_id: mascot.id, kind: "video", pack: 4, requested: PROFILE.uiStates, ready, queued, blocked };
+  return { mascot_id: mascot.id, kind: "video", pack: PROFILE.uiStates.length, requested: PROFILE.uiStates, ready, queued, blocked };
 }
 
 function videoAsset(mascot, state) {
@@ -425,12 +462,16 @@ function videoAsset(mascot, state) {
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function runAnimationBatch(mascot) {
+  const batchIds = mascot.animationBatchIds;
+  if (!Array.isArray(batchIds) || !batchIds.length || !mascot.animationBatchDir) {
+    throw new Error("animation_batch_plan_missing");
+  }
   const args = [
     path.join(PIPELINE, "scripts", "character_cli.js"),
     "animate",
     `--character=${mascot.characterDir}`,
-    `--animations=${PROFILE.pipelineAnimations.join(",")}`,
-    "--batch-dir=mascot3-core",
+    `--animations=${batchIds.join(",")}`,
+    `--batch-dir=${mascot.animationBatchDir}`,
     "--submit=yes",
     "--allow-pending-canonical=yes",
     `--video-model=${PROFILE.videoModel}`,
@@ -442,7 +483,7 @@ async function runAnimationBatch(mascot) {
   mascot.stages = { ...mascot.stages, animations: "running" };
   await saveMascots();
   try {
-    for (let poll = 0; poll < 160; poll += 1) {
+    for (let poll = 0; poll < 480; poll += 1) {
       const raw = await runNode(args);
       const result = JSON.parse(raw);
       mascot.animationEstimateUsd = result.estimated_total_usd;
@@ -475,14 +516,26 @@ async function startAnimationBatch(mascot) {
   if (!Number.isFinite(PROFILE.maxHeroCostUsd) || PROFILE.maxHeroCostUsd <= 0 || PROFILE.maxAnimationCostUsd > PROFILE.maxHeroCostUsd) {
     throw Object.assign(new Error("invalid_cost_budget"), { status: 500 });
   }
-  const animationEstimate = PROFILE.pipelineAnimations.reduce((seconds, id) => {
-    const durations = { idle: 6, happy: 8, sleep: 6, playful: 8 };
-    return seconds + durations[id];
-  }, 0) * PROFILE.videoPricePerSecondUsd;
+  const animationEstimate = PROFILE.estimatedVideoCostUsd;
   if (PROFILE.baseCostReserveUsd + animationEstimate > PROFILE.maxHeroCostUsd) {
     throw Object.assign(new Error("hero_budget_exceeded"), { status: 409 });
   }
   if (!animationWorkers.has(mascot.id) && animationPackDto(mascot).ready.length < PROFILE.uiStates.length) {
+    const persistedPlanIsValid = Array.isArray(mascot.animationBatchIds)
+      && mascot.animationBatchIds.length > 0
+      && mascot.animationBatchIds.every((id) => PROFILE.pipelineAnimations.includes(id))
+      && typeof mascot.animationBatchDir === "string"
+      && /^mascot3-mini-[a-z0-9-]+$/i.test(mascot.animationBatchDir);
+    if (!persistedPlanIsValid) {
+      const missing = PROFILE.pipelineAnimations.filter((id) => !animationSource(mascot, id));
+      mascot.animationBatchIds = missing;
+      mascot.animationBatchDir = missing.length === PROFILE.pipelineAnimations.length
+        ? `mascot3-mini-full-v${ANIMATION_CATALOG.version}`
+        : `mascot3-mini-completion-v${ANIMATION_CATALOG.version}`;
+      // Persist the exact paid set before the worker starts. After a process or
+      // network interruption, the same batch.json and provider job IDs resume.
+      await saveMascots();
+    }
     const worker = runAnimationBatch(mascot);
     animationWorkers.set(mascot.id, worker);
   }
@@ -494,7 +547,8 @@ function nativeManifest(mascot) {
   const base = previewPath
     ? { url: `/assets/${mascot.id}/base.png`, sha256: sha256File(previewPath), mime_type: "image/png", format: "png" }
     : null;
-  const states = Object.fromEntries(PROFILE.uiStates.map((state) => {
+  const manifestStates = [...PROFILE.uiStates, "sleep_loop"];
+  const states = Object.fromEntries(manifestStates.map((state) => {
     const animation = videoAsset(mascot, state);
     return [state, { still: null, animation, sequence: null, status: animation ? "ready" : "pending" }];
   }));
@@ -505,7 +559,7 @@ function nativeContext(mascot) {
   return {
     state_key: "idle",
     reason_code: PROFILE.id,
-    reason_text: "Строгий герой v2.5, бюджетный профиль Mini",
+    reason_text: "Строгий герой v2.5, полный профиль из 17 анимаций на Mini",
     city_name: "Москва",
     still_url: mascot?.previewPath ? `/assets/${mascot.id}/base.png` : null,
     animation_url: mascot ? videoAsset(mascot, "idle")?.url || null : null,
@@ -649,6 +703,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && videosMatch) {
       const mascot = mascots.get(videosMatch[1]);
       if (!mascot) return send(res, 404, { detail: "mascot_not_found" });
+      if (Number(videosMatch[2]) !== PROFILE.uiStates.length) {
+        return send(res, 400, { detail: `video_pack_must_be_${PROFILE.uiStates.length}` });
+      }
       return send(res, 202, await startAnimationBatch(mascot));
     }
     if (req.method === "GET" && url.pathname === "/v1/context/current") {
@@ -685,10 +742,14 @@ const server = http.createServer(async (req, res) => {
       if (!previewPath) return send(res, 404, { error: "not_found" });
       return serveFile(res, path.dirname(previewPath), path.basename(previewPath));
     }
-    const videoAssetMatch = url.pathname.match(/^\/assets\/([^/]+)\/videos\/(idle|joyful|sleeping|sleep_loop|dancing)\.mp4$/);
+    const videoAssetMatch = url.pathname.match(/^\/assets\/([^/]+)\/videos\/([a-z_]+)\.mp4$/);
     if (req.method === "GET" && videoAssetMatch) {
       const mascot = mascots.get(videoAssetMatch[1]);
-      const source = mascot && presentationVideoPath(mascot, videoAssetMatch[2]);
+      const state = videoAssetMatch[2];
+      if (!Object.prototype.hasOwnProperty.call(UI_TO_PIPELINE_ANIMATION, state)) {
+        return send(res, 404, { error: "not_found" });
+      }
+      const source = mascot && presentationVideoPath(mascot, state);
       if (!source) return send(res, 404, { error: "not_found" });
       return serveFile(res, path.dirname(source), path.basename(source));
     }
@@ -699,7 +760,21 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "0.0.0.0", () => console.log(`Mascot 3 is running on port ${port}`));
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Mascot 3 is running on port ${port}`);
+  if (!env.OPENROUTER_API_KEY) return;
+  for (const mascot of mascots.values()) {
+    const shouldResume = mascot.status === "READY"
+      && mascot.animationStatus === "running"
+      && Array.isArray(mascot.animationBatchIds)
+      && mascot.animationBatchIds.length > 0
+      && mascot.animationBatchDir
+      && !PROFILE.pipelineAnimations.every((id) => Boolean(animationSource(mascot, id)));
+    if (!shouldResume || animationWorkers.has(mascot.id)) continue;
+    const worker = runAnimationBatch(mascot);
+    animationWorkers.set(mascot.id, worker);
+  }
+});
 
 function shutdown(signal) {
   console.log(`Mascot 3 received ${signal}; draining HTTP connections`);

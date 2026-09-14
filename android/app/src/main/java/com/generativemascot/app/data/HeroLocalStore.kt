@@ -815,7 +815,13 @@ class HeroLocalStore(context: Context) {
         // `sleep_loop` is generated separately from a frame inside that transition,
         // so it can remain asleep indefinitely without replaying the lie-down motion.
         val CORE_VIDEO_ACTIONS = listOf("idle", "joyful", "sleeping", "dancing")
-        val VIDEO_ACTIONS = CORE_VIDEO_ACTIONS + "sleep_loop"
+        val LIBRARY_VIDEO_ACTIONS = listOf(
+            "idle", "resting", "sleeping", "thinking", "at_glass", "watching", "joyful", "sad", "angry",
+            "refusal", "frightened", "curious", "tender", "stretching", "greeting", "signature_move", "dancing",
+        )
+        // `sleep_loop` is a free playback derivative of `sleeping`, not an
+        // eighteenth provider generation.
+        val VIDEO_ACTIONS = LIBRARY_VIDEO_ACTIONS + "sleep_loop"
         const val FULL_FRAME_FPS = 12
         const val FULL_FRAME_COUNT = 12
         private const val MIN_FULL_FRAME_COUNT = FULL_FRAME_COUNT
@@ -834,9 +840,13 @@ class HeroLocalStore(context: Context) {
 
         fun normalizeVideoAction(stateKey: String): String = when (stateKey) {
             "sleep_loop" -> "sleep_loop"
-            "joyful", "content", "eating" -> "joyful"
-            "sleeping" -> "sleeping"
-            "dancing", "working" -> "dancing"
+            "rest", "resting" -> "resting"
+            "sleep", "sleeping" -> "sleeping"
+            "happy", "joyful", "content", "eating" -> "joyful"
+            "stretch", "stretching" -> "stretching"
+            "playful", "dancing", "working" -> "dancing"
+            "thinking", "at_glass", "watching", "sad", "angry", "refusal", "frightened", "curious",
+            "tender", "greeting", "signature_move" -> stateKey
             else -> "idle"
         }
         @Volatile

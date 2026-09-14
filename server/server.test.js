@@ -44,6 +44,15 @@ test("health stays public while mutations require the client token", async (t) =
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
 
+  const diagnostics = await fetch(`http://127.0.0.1:${port}/api/health`).then((response) => response.json());
+  assert.equal(diagnostics.profile.videoModel, "bytedance/seedance-2.0-mini");
+  assert.equal(diagnostics.profile.pipelineAnimations.length, 17);
+  assert.equal(diagnostics.profile.uiStates.length, 17);
+  assert.equal(diagnostics.profile.totalVideoSeconds, 112);
+  assert.equal(diagnostics.profile.estimatedVideoCostUsd, 8.526);
+  assert.equal(diagnostics.profile.maxAnimationCostUsd, 9);
+  assert.equal(diagnostics.profile.maxHeroCostUsd, 11);
+
   const unauthorized = await fetch(`http://127.0.0.1:${port}/v1/profile/city`, {
     method: "PUT",
     headers: { "content-type": "application/json" },

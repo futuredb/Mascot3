@@ -78,7 +78,7 @@ test("character CLI plans exactly the requested animation IDs without submitting
   assert.ok(!fs.existsSync(path.join(directory, "animation", batchFolder)), "dry-run must not create animation output");
 });
 
-test("Mascot 3 Mini profile plans four UI animations below the hard cap", (t) => {
+test("Mascot 3 Mini profile plans all 17 enabled animations below the hard cap", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mascot3-mini-budget-"));
   fs.mkdirSync(path.join(directory, "canonical"), { recursive: true });
   fs.writeFileSync(path.join(directory, "canonical", "manifest.json"), JSON.stringify({ status: "approved", anchors: ["anchor.png"] }));
@@ -87,20 +87,24 @@ test("Mascot 3 Mini profile plans four UI animations below the hard cap", (t) =>
   const result = JSON.parse(run(
     "animate",
     `--character=${directory}`,
-    "--animations=idle,happy,sleep,playful",
-    "--batch-dir=mascot3-core",
+    "--all-enabled",
+    "--batch-dir=mascot3-mini-full-v43",
     "--video-model=bytedance/seedance-2.0-mini",
     "--resolution=720p",
     "--price-per-second-usd=0.076125",
-    "--max-cost-usd=3",
+    "--max-cost-usd=9",
   ));
-  assert.equal(result.total_seconds, 28);
-  assert.equal(result.estimated_total_usd, 2.1315);
-  assert.equal(result.max_cost_usd, 3);
-  assert.deepEqual(result.states.map((state) => state.id), ["idle", "happy", "sleep", "playful"]);
+  assert.equal(result.state_count, 17);
+  assert.equal(result.total_seconds, 112);
+  assert.equal(result.estimated_total_usd, 8.526);
+  assert.equal(result.max_cost_usd, 9);
+  assert.deepEqual(result.states.map((state) => state.id), [
+    "idle", "rest", "sleep", "thinking", "at_glass", "watching", "happy", "sad", "angry",
+    "refusal", "frightened", "curious", "tender", "stretch", "greeting", "signature_move", "playful",
+  ]);
 });
 
-test("Mascot 3 rejects the 17-animation pack before submission", (t) => {
+test("Mascot 3 rejects the 17-animation pack when the old four-animation cap is used", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mascot3-full-pack-budget-"));
   fs.mkdirSync(path.join(directory, "canonical"), { recursive: true });
   fs.writeFileSync(path.join(directory, "canonical", "manifest.json"), JSON.stringify({ status: "approved", anchors: ["anchor.png"] }));
@@ -111,14 +115,14 @@ test("Mascot 3 rejects the 17-animation pack before submission", (t) => {
     "animate",
     `--character=${directory}`,
     "--all-enabled",
-    "--batch-dir=forbidden-full-pack",
+    "--batch-dir=old-cap-full-pack",
     "--video-model=bytedance/seedance-2.0-mini",
     "--price-per-second-usd=0.076125",
     "--max-cost-usd=3",
   ], { cwd: ROOT, encoding: "utf8" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /exceeds hard limit/);
-  assert.ok(!fs.existsSync(path.join(directory, "animation", "forbidden-full-pack")));
+  assert.ok(!fs.existsSync(path.join(directory, "animation", "old-cap-full-pack")));
 });
 
 test("character CLI rejects animation generation options", () => {
