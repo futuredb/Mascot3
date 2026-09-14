@@ -145,6 +145,9 @@ fun SoraMascotVideo(
         val normalized = HeroLocalStore.normalizeVideoAction(action ?: "idle")
         if (normalized != "idle") queue(normalized)
     }
+    LaunchedEffect(interaction.actionSerial) {
+        if (interaction.actionSerial > 0) interaction.actionName?.let(::queue)
+    }
     LaunchedEffect(interaction.tapSerial) { if (interaction.tapSerial > 0) queue("joyful") }
     LaunchedEffect(interaction.petSerial) { if (interaction.petSerial > 0) queue("joyful") }
     LaunchedEffect(interaction.playSerial) { if (interaction.playSerial > 0) queue("joyful") }
@@ -197,9 +200,11 @@ fun SoraMascotVideo(
                             FrameLayout.LayoutParams.MATCH_PARENT,
                             FrameLayout.LayoutParams.MATCH_PARENT,
                         )
-                        // Match PlayerView's zoom crop exactly. FIT_CENTER adds
-                        // transparent side padding to the portrait anchor image.
-                        image.scaleType = ImageView.ScaleType.CENTER_CROP
+                        // Match PlayerView's fit mode exactly. Generated motion
+                        // may widen beyond the neutral pose, so cropping a square
+                        // source into this tall container can hide hands, ears or
+                        // props even when the paid source video is still intact.
+                        image.scaleType = ImageView.ScaleType.FIT_CENTER
                         image.setBackgroundColor(Color.TRANSPARENT)
                         image.setImageURI(mediaUri(url))
                         image.alpha = 0f
@@ -641,6 +646,11 @@ private fun LegacyPerformanceVideo(
     LaunchedEffect(interaction.sleepSerial) { if (interaction.sleepSerial > 0) showReaction("sleeping") }
     LaunchedEffect(interaction.spinSerial) { if (interaction.spinSerial > 0) showReaction("dancing") }
     LaunchedEffect(interaction.danceSerial) { if (interaction.danceSerial > 0) showReaction("dancing") }
+    LaunchedEffect(interaction.actionSerial) {
+        if (interaction.actionSerial > 0) {
+            interaction.actionName?.let { showReaction(HeroLocalStore.normalizeVideoAction(it)) }
+        }
+    }
 
     val activeBeat = videoBeat(reaction ?: action)
     AndroidView(

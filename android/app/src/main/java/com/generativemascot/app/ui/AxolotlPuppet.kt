@@ -28,6 +28,8 @@ private val RequiredParts = setOf(
 )
 
 data class PuppetInteraction(
+    val actionName: String? = null,
+    val actionSerial: Int = 0,
     val tapSerial: Int = 0,
     val petSerial: Int = 0,
     val playSerial: Int = 0,

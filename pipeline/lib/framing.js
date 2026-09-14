@@ -156,18 +156,42 @@ function addSharedSafeChromaFrames(panels, outputDir, { targetFill = 0.68, outpu
   });
 }
 
-function videoFramingQa(videoPath, { minMargin = 0.12, maxEndpointScaleDrift = 0.03 } = {}) {
+function videoFramingQa(videoPath, {
+  minMargin = 0.10,
+  hardMinMargin = 0.015,
+  maxEndpointScaleDrift = 0.03,
+  sampleFps = 12,
+  analysisSize = 240,
+} = {}) {
   const durationResult = run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", videoPath]);
   const duration = Number(durationResult.stdout.trim());
-  const { width, height } = imageSize(videoPath);
-  const result = spawnSync("ffmpeg", ["-v", "error", "-i", videoPath, "-vf", "fps=24,format=rgb24", "-f", "rawvideo", "-"], { encoding: null, maxBuffer: Math.max(20 * 1024 * 1024, width * height * 3 * Math.ceil(duration * 24 + 2)) });
+  const width = analysisSize;
+  const height = analysisSize;
+  const result = spawnSync("ffmpeg", ["-v", "error", "-i", videoPath, "-vf", `fps=${sampleFps},scale=${width}:${height}:flags=area,format=rgb24`, "-f", "rawvideo", "-"], { encoding: null, maxBuffer: Math.max(20 * 1024 * 1024, width * height * 3 * Math.ceil(duration * sampleFps + 2)) });
   if (result.status !== 0 || !result.stdout?.length) throw new Error(`ffmpeg full-frame extraction failed: ${result.stderr?.toString() || ""}`);
   const bytesPerFrame = width * height * 3;
   const frameCount = Math.floor(result.stdout.length / bytesPerFrame);
   const frames = Array.from({ length: frameCount }, (_, index) => {
     const rgb = result.stdout.subarray(index * bytesPerFrame, (index + 1) * bytesPerFrame);
-    const components = connectedComponents({ width, height, rgb });
-    return { index, seek_seconds: index / 24, component_count: components.length, bbox: unionBox(components, width, height) };
+    // Video compression shifts the matte luminance much more than still PNGs.
+    // Use the same wider chroma tolerance as the Android player/QA so a codec
+    // halo is not mistaken for a full-frame foreground component.
+    const components = connectedComponents(
+      { width, height, rgb },
+      { greenTolerance: 105, minPixels: Math.max(32, Math.floor(width * height / 2000)) },
+    );
+    // The authored contract requires one connected body. Judge its largest
+    // component for framing; isolated codec noise at a canvas border must not
+    // turn a healthy clip into a false crop failure.
+    const primary = components.reduce((largest, component) => (
+      !largest || component.pixels > largest.pixels ? component : largest
+    ), null);
+    return {
+      index,
+      seek_seconds: index / sampleFps,
+      component_count: components.length,
+      bbox: unionBox(primary ? [primary] : components, width, height),
+    };
   });
   if (frameCount < 2) throw new Error("Video yielded fewer than two frames for framing QA");
   const first = frames[0].bbox; const last = frames.at(-1).bbox;
@@ -175,8 +199,9 @@ function videoFramingQa(videoPath, { minMargin = 0.12, maxEndpointScaleDrift = 0
   const observedMinMargin = Math.min(...frames.flatMap((frame) => Object.values(frame.bbox.margins)));
   return {
     contract: "pet_generation_v2.framing_qa.v1", duration_seconds: duration, sampled_frames: frames,
-    thresholds: { min_margin: minMargin, max_endpoint_scale_drift: maxEndpointScaleDrift },
+    thresholds: { min_margin: minMargin, hard_min_margin: hardMinMargin, max_endpoint_scale_drift: maxEndpointScaleDrift },
     observed: { min_margin: observedMinMargin, endpoint_scale_drift: scaleLastMinusFirst },
+    hard_pass: observedMinMargin >= hardMinMargin,
     framing_pass: observedMinMargin >= minMargin && scaleLastMinusFirst <= maxEndpointScaleDrift,
   };
 }

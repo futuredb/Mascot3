@@ -4,6 +4,7 @@ const fssync = require("node:fs");
 const path = require("node:path");
 const { createVeoBridgeFromEnv } = require("../../extensions/01_bridges/veo/bridge.js");
 const { assemble } = require("./media.js");
+const { videoFramingQa } = require("./framing.js");
 const { resolveVideoModel, requiresSeedanceProfile } = require("./animation.js");
 const { resolveTemplate, validateCatalog, hash, PROMPT_LIMIT } = require("./prompt_catalog.js");
 
@@ -49,11 +50,16 @@ async function runProductionAnimation({ root, env, characterDir, animationId, op
   await fs.mkdir(animationDir, { recursive: true });
   if (options["assemble-only"]) {
     const videoPath = path.resolve(options["assemble-only"]);
-    const qa = await assemble({
+    const assembly = await assemble({
       videoPath, outputDir: animationDir, chromaKey: "#00FF00",
       keepFrames: false, createPreview: false, edgeCleanup: null,
     });
+    const framingQa = videoFramingQa(videoPath);
+    const qa = { ...assembly, framing_qa: framingQa };
     await write(path.join(animationDir, "qa.json"), qa);
+    if (!framingQa.hard_pass) {
+      throw new Error(`Animation '${animationId}' touches the picture boundary and was preserved for manual review; no paid retry was submitted`);
+    }
     return { status: "assembled", animationDir, ...qa };
   }
   const jobPath = path.join(animationDir, "veo_job.json");
@@ -72,12 +78,18 @@ async function runProductionAnimation({ root, env, characterDir, animationId, op
   const video = await veo.downloadVideo(status.data.id || job.id, { timeoutMs: 240000 });
   const videoPath = path.join(animationDir, `source_video${video.extension}`);
   await fs.writeFile(videoPath, video.buffer);
-  const qa = await assemble({
+  const assembly = await assemble({
     videoPath, outputDir: animationDir, chromaKey: "#00FF00",
     keepFrames: false, createPreview: false, edgeCleanup: null,
   });
+  const framingQa = videoFramingQa(videoPath);
+  const qa = { ...assembly, framing_qa: framingQa };
   await write(path.join(animationDir, "qa.json"), qa);
-  await write(path.join(animationDir, "result.json"), { status: "assembled", ...payloadSummary, video: path.basename(videoPath), ...qa });
+  const statusName = framingQa.hard_pass ? "assembled" : "needs_manual_review";
+  await write(path.join(animationDir, "result.json"), { status: statusName, ...payloadSummary, video: path.basename(videoPath), ...qa });
+  if (!framingQa.hard_pass) {
+    throw new Error(`Animation '${animationId}' touches the picture boundary and was preserved for manual review; no paid retry was submitted`);
+  }
   return { status: "assembled", animationDir, job: job.id, video: path.basename(videoPath), ...qa };
 }
 module.exports = { resolveProductionAnimation, runProductionAnimation };

@@ -652,6 +652,7 @@ private fun protectedInvariants(character: MobileCharacterContract): List<String
     "Body topology never changes: ${character.body.visibleParts}.",
     "Identity cues remain unchanged: ${character.visualSignature.primarySilhouetteCue}; ${character.visualSignature.secondaryReadableDetail}.",
     "Palette, face, material, markings, scale, orientation and on-canvas position remain locked to the source image.",
+    "At least fifteen percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything it carries stay inside the central seventy percent of the image.",
     "Every pixel outside the silhouette remains the same perfectly uniform matte with no additional visible element.",
 )
 
@@ -749,7 +750,9 @@ internal fun buildCharacterAnimationPrompt(
 
         Animate the mascot as one complete indivisible body with believable weight, arcs, anticipation, overlapping
         action, follow-through and natural easing. Never animate it as separate cutout pieces. Keep a locked portrait
-        camera, fixed framing and fixed scale. Every pixel outside the character is the perfectly uniform matte $matteHex
+        camera, fixed framing and fixed scale. At every moment the complete silhouette, every limb and anything the
+        mascot carries must remain inside the central seventy percent of the image. Preserve at least fifteen percent
+        of untouched empty matte on the left, right, top and bottom throughout the entire motion. Every pixel outside the character is the perfectly uniform matte $matteHex
         in every frame, reserved only for local GPU removal; do not use that key color on the character. Keep the empty
         matte completely flat, without any other visible geometry, gradient, texture, halo, scenery or lighting change.
         No audio, cut, zoom, camera movement, depth travel, loose prop, text, logo, watermark or extra creature. Avoid morphing, identity drift, flicker,

@@ -121,6 +121,14 @@ fun PngSequence(
         genericReaction = "sleeping"; genericReactionStartedAt = startedAt
         delay(3_900); if (genericReactionStartedAt == startedAt) genericReaction = null
     }
+    LaunchedEffect(interaction.actionSerial) {
+        if (interaction.actionSerial == 0) return@LaunchedEffect
+        val startedAt = System.nanoTime()
+        genericReaction = interaction.actionName
+        genericReactionStartedAt = startedAt
+        delay(3_900)
+        if (genericReactionStartedAt == startedAt) genericReaction = null
+    }
     val activeAction = remember(genericReaction, puppetAction) {
         HeroLocalStore.normalizeFullFrameAction(genericReaction ?: puppetAction)
     }

@@ -5,6 +5,9 @@ const test = require("node:test");
 const { validateCatalog, resolveTemplate, PROMPT_LIMIT } = require("./lib/prompt_catalog.js");
 const { patchWebpFrameDisposal } = require("./lib/media.js");
 const { validateRenderIdentity } = require("./lib/canonical.js");
+const { videoFramingQa } = require("./lib/framing.js");
+const { spawnSync } = require("node:child_process");
+const os = require("node:os");
 
 const ROOT = __dirname;
 // The only words the catalog may never contain. Each one was observed being drawn as a
@@ -66,4 +69,30 @@ test("WebP disposal patch changes only ANMF flags", () => {
   assert.equal(before.length, after.length);
   assert.equal(after[35], 3);
   for (let index = 0; index < before.length; index += 1) if (index !== 35) assert.equal(before[index], after[index]);
+});
+
+test("video framing QA blocks source-boundary contact without requiring the preferred margin", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mascot-framing-test-"));
+  const contained = path.join(directory, "contained.mp4");
+  const tight = path.join(directory, "tight.mp4");
+  const clipped = path.join(directory, "clipped.mp4");
+  const render = (output, boxX) => spawnSync("ffmpeg", [
+    "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+    `color=c=0x00ff00:s=240x240:d=1:r=12,drawbox=x=${boxX}:y=70:w=100:h=100:color=white:t=fill`,
+    "-pix_fmt", "yuv420p", output,
+  ]);
+  assert.equal(render(contained, 70).status, 0);
+  assert.equal(render(tight, 10).status, 0);
+  assert.equal(render(clipped, 0).status, 0);
+
+  const containedQa = videoFramingQa(contained, { minMargin: 0.10, hardMinMargin: 0.015 });
+  const tightQa = videoFramingQa(tight, { minMargin: 0.10, hardMinMargin: 0.015 });
+  const clippedQa = videoFramingQa(clipped, { minMargin: 0.10, hardMinMargin: 0.015 });
+  assert.equal(containedQa.hard_pass, true);
+  assert.equal(containedQa.framing_pass, true);
+  assert.equal(tightQa.hard_pass, true);
+  assert.equal(tightQa.framing_pass, false);
+  assert.equal(clippedQa.hard_pass, false);
+  assert.equal(clippedQa.framing_pass, false);
+  fs.rmSync(directory, { recursive: true, force: true });
 });

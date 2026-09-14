@@ -1,6 +1,7 @@
 package com.generativemascot.app.ui
 
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -78,6 +79,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.random.Random
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -112,7 +114,54 @@ private val heroLines = mapOf(
         "Смотри, это мой фирменный танец!",
         "Серьёзность отменяется на несколько секунд.",
     ),
+    "resting" to listOf("Немного передохну и снова буду в форме."),
+    "thinking" to listOf("Тс-с… у меня почти появилась идея."),
+    "at_glass" to listOf("Интересно, что там, по ту сторону экрана?"),
+    "watching" to listOf("Я всё вижу. Ну… почти всё."),
+    "sad" to listOf("Можно я минутку погрущу? Скоро пройдёт."),
+    "angry" to listOf("Вот сейчас я очень серьёзный. Почти."),
+    "refusal" to listOf("Нет-нет, на это я точно не согласен."),
+    "frightened" to listOf("Ой! Это было немного неожиданно."),
+    "curious" to listOf("А что будет, если посмотреть чуть ближе?"),
+    "tender" to listOf("Хорошо, что ты рядом."),
+    "stretching" to listOf("Размялся. Теперь можно и в приключение."),
+    "greeting" to listOf("Привет! Я уже успел соскучиться."),
+    "signature_move" to listOf("А вот и мой фирменный номер!"),
 )
+
+private const val AMBIENT_MIN_DELAY_MS = 12_000L
+private const val AMBIENT_MAX_DELAY_MS = 19_000L
+
+/**
+ * Idle is already the baseline and sleep belongs to a deliberate long press.
+ * Every other generated library action participates in a shuffled home-screen
+ * deck, so all authored clips are seen before the deck starts repeating.
+ */
+internal fun mainScreenActionPool(availableActions: Set<String>): List<String> {
+    val normalized = availableActions.map(HeroLocalStore::normalizeVideoAction).toSet()
+    return HeroLocalStore.LIBRARY_VIDEO_ACTIONS.filter { action ->
+        action != "idle" && action != "sleeping" && action in normalized
+    }
+}
+
+private fun nextAmbientDelayMs(): Long = Random.nextLong(
+    AMBIENT_MIN_DELAY_MS,
+    AMBIENT_MAX_DELAY_MS + 1L,
+)
+
+private fun shuffledActionDeck(actions: List<String>, previousAction: String?): List<String> {
+    if (actions.size < 2) return actions
+    val shuffled = actions.shuffled().toMutableList()
+    if (shuffled.firstOrNull() == previousAction) {
+        val replacement = shuffled.indexOfFirst { it != previousAction }
+        if (replacement > 0) {
+            val first = shuffled[0]
+            shuffled[0] = shuffled[replacement]
+            shuffled[replacement] = first
+        }
+    }
+    return shuffled
+}
 
 internal fun heroLine(action: String?, index: Int): String {
     val normalized = HeroLocalStore.normalizeVideoAction(action ?: "idle")
@@ -170,12 +219,14 @@ fun KnockHeroScreen(
     var revealAt by remember { mutableLongStateOf(if (generating) 1L else 0L) }
     var blinkAt by remember { mutableLongStateOf(-1L) }
     var waiting by remember { mutableStateOf(generating) }
-    var puppetTap by remember { mutableIntStateOf(0) }
-    var puppetPet by remember { mutableIntStateOf(0) }
-    var puppetPlay by remember { mutableIntStateOf(0) }
-    var puppetSpin by remember { mutableIntStateOf(0) }
-    var puppetDance by remember { mutableIntStateOf(0) }
-    var puppetSleep by remember { mutableIntStateOf(0) }
+    var puppetAction by remember(mascotId) { mutableStateOf<String?>(null) }
+    var puppetActionSerial by remember(mascotId) { mutableIntStateOf(0) }
+    var actionDeck by remember(mascotId) { mutableStateOf(emptyList<String>()) }
+    var previousDeckAction by remember(mascotId) { mutableStateOf<String?>(null) }
+    var sleepLocked by remember(mascotId) { mutableStateOf(false) }
+    var nextAmbientAt by remember(mascotId) {
+        mutableLongStateOf(SystemClock.elapsedRealtime() + nextAmbientDelayMs())
+    }
     var heroPressed by remember { mutableStateOf(false) }
     var rawDragX by remember { mutableStateOf(0f) }
     var rawDragY by remember { mutableStateOf(0f) }
@@ -213,6 +264,9 @@ fun KnockHeroScreen(
     val visualAnimationVideoUrl = if (visualMascotId == mascotId) animationVideoUrl else {
         visualMascotId?.let { HeroLocalStore.current?.performanceVideoFile(it)?.toURI()?.toString() }
     }
+    val mainActionPool = remember(animationVideoUrls.keys) {
+        mainScreenActionPool(animationVideoUrls.keys)
+    }
     val showWaiting = generating && visualPreviewUrl.isNullOrBlank()
     val heroReady = !visualPreviewUrl.isNullOrBlank() && !showWaiting
     val displayName = pickerHero?.name?.takeIf { it.isNotBlank() }
@@ -226,6 +280,30 @@ fun KnockHeroScreen(
         animationSpec = tween(220, easing = MascotEase),
         label = "quote lift",
     )
+
+    fun postponeAmbientAction() {
+        nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
+    }
+
+    fun takeNextMainAction(): String? {
+        val validDeck = actionDeck.filter { it in mainActionPool }
+        val deck = if (validDeck.isEmpty()) {
+            shuffledActionDeck(mainActionPool, previousDeckAction)
+        } else {
+            validDeck
+        }
+        val next = deck.firstOrNull() ?: return null
+        actionDeck = deck.drop(1)
+        previousDeckAction = next
+        return next
+    }
+
+    fun playMainAction(action: String) {
+        puppetAction = action
+        puppetActionSerial += 1
+        quoteAction = action
+        quoteIndex = 0
+    }
 
     LaunchedEffect(heroReady) {
         if (heroReady) tapCount = 0
@@ -300,14 +378,28 @@ fun KnockHeroScreen(
     LaunchedEffect(mascotId, accepted, quoteAction) {
         if (!accepted) return@LaunchedEffect
         while (true) {
-            delay(if (quoteAction == "idle" || quoteAction == "sleep_loop" || quoteAction == "sleeping") 9_000 else 7_000)
-            if (quoteAction == "joyful" || quoteAction == "dancing") {
+            delay(if (quoteAction == "idle" || quoteAction == "sleep_loop" || quoteAction == "sleeping") 9_000 else 8_000)
+            if (quoteAction != "idle" && quoteAction != "sleep_loop" && quoteAction != "sleeping") {
                 quoteAction = "idle"
                 quoteIndex = 0
                 return@LaunchedEffect
             }
             quoteIndex += 1
         }
+    }
+    LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool) {
+        if (!accepted || heroPickerExpanded || mainActionPool.isEmpty()) return@LaunchedEffect
+        while (true) {
+            delay(500)
+            val elapsedNow = SystemClock.elapsedRealtime()
+            if (!sleepLocked && elapsedNow >= nextAmbientAt) {
+                takeNextMainAction()?.let(::playMainAction)
+                nextAmbientAt = elapsedNow + nextAmbientDelayMs()
+            }
+        }
+    }
+    LaunchedEffect(heroPickerExpanded) {
+        if (accepted) postponeAmbientAction()
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -359,8 +451,6 @@ fun KnockHeroScreen(
         val heroTop = 104.dp
         val heroHeight = (maxHeight - heroTop - 240.dp).coerceAtLeast(1.dp)
         val density = LocalDensity.current
-        val heroWidthPx = with(density) { contentWidth.toPx() }
-        val heroHeightPx = with(density) { heroHeight.toPx() }
         if (!accepted) {
             Image(
                 painter = painterResource(if (showWaiting) R.drawable.figma_waiting_bg else R.drawable.figma_mascot_bg),
@@ -515,6 +605,8 @@ fun KnockHeroScreen(
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
                             heroPressed = true
+                            sleepLocked = false
+                            postponeAmbientAction()
                             gestureDownX = event.x
                             gestureDownY = event.y
                             gestureDownAt = event.eventTime
@@ -535,45 +627,16 @@ fun KnockHeroScreen(
                             val heldMs = event.eventTime - gestureDownAt
                             when {
                                 heldMs >= 500L && travel < 70f -> {
-                                    puppetSleep += 1
-                                    quoteAction = "sleeping"
-                                    quoteIndex += 1
+                                    sleepLocked = true
+                                    playMainAction("sleeping")
                                     buzz(45, 50)
                                 }
                                 -dy > 90f && -dy > kotlin.math.abs(dx) * 1.2f -> {
-                                    puppetDance += 1
-                                    quoteAction = "dancing"
-                                    quoteIndex += 1
+                                    playMainAction("joyful")
                                     buzz(48, 110)
                                 }
-                                kotlin.math.abs(dx) > 90f && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f -> {
-                                    puppetSpin += 1
-                                    quoteAction = "dancing"
-                                    quoteIndex += 1
-                                    buzz(38, 85)
-                                }
-                                travel > 70f -> {
-                                    puppetPet += 1
-                                    quoteAction = "joyful"
-                                    quoteIndex += 1
-                                    buzz(35, 60)
-                                }
-                                event.y < heroHeightPx * .46f -> {
-                                    puppetPet += 1
-                                    quoteAction = "joyful"
-                                    quoteIndex += 1
-                                    buzz(28, 55)
-                                }
-                                event.x > heroWidthPx * .68f && event.y < heroHeightPx * .78f -> {
-                                    puppetTap += 1
-                                    quoteAction = "joyful"
-                                    quoteIndex += 1
-                                    buzz(28, 100)
-                                }
                                 else -> {
-                                    puppetPlay += 1
-                                    quoteAction = "joyful"
-                                    quoteIndex += 1
+                                    playMainAction(takeNextMainAction() ?: "joyful")
                                     buzz(24, 85)
                                 }
                             }
@@ -589,12 +652,8 @@ fun KnockHeroScreen(
                     true
                 }
             val interaction = PuppetInteraction(
-                tapSerial = puppetTap,
-                petSerial = puppetPet,
-                playSerial = puppetPlay,
-                spinSerial = puppetSpin,
-                danceSerial = puppetDance,
-                sleepSerial = puppetSleep,
+                actionName = puppetAction,
+                actionSerial = puppetActionSerial,
                 dragX = dragX,
                 dragY = dragY,
             )

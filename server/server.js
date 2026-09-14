@@ -376,7 +376,21 @@ function animationSource(mascot, pipelineId) {
     const loopDir = path.join(mascot.characterDir, "animation", batchDir, pipelineId, "loop");
     if (!fs.existsSync(loopDir)) continue;
     const name = fs.readdirSync(loopDir).find((entry) => /^source_video\.[a-z0-9]+$/i.test(entry));
-    if (name) return path.join(loopDir, name);
+    if (name) {
+      const qaPath = path.join(loopDir, "qa.json");
+      if (fs.existsSync(qaPath)) {
+        try {
+          const qa = JSON.parse(fs.readFileSync(qaPath, "utf8"));
+          // Older paid clips predate framing_qa and remain compatible. New
+          // clips that visibly touch a source boundary stay preserved on disk,
+          // but are not published and never trigger an automatic paid retry.
+          if (qa.framing_qa?.hard_pass === false) continue;
+        } catch (error) {
+          console.error(`animation_qa_read_failed(${pipelineId}): ${error.message}`);
+        }
+      }
+      return path.join(loopDir, name);
+    }
   }
   return null;
 }

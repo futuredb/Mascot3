@@ -10,7 +10,7 @@ const check = process.argv.includes("--check");
 const writeAudit = process.argv.includes("--write-audit");
 
 const prefix = "The character in the picture moves with the body it actually has.";
-const suffix = "It floats free in open space with nothing beneath it. Movement runs through it the whole time and never settles. Its body holds together as one shape, and it moves and poses as big and as freely as it likes while staying inside the picture. Whatever hangs loose on it swings after it and settles a moment later. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.";
+const suffix = "It floats free in open space with nothing beneath it. Movement runs through it continuously. Its body stays one shape. Its complete silhouette, every limb and carried thing stay inside the central seventy percent of the picture, leaving fifteen percent of the unchanged flat background visible on every side. Loose parts follow and settle. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.";
 
 // Every beat below is written by hand and read aloud. If a clause does not make a
 // picture on its own, it does not belong here.
@@ -76,13 +76,15 @@ async function main() {
   const entries = animations.entries.map((animation) => {
     const template = templates[animation.id];
     if (!template) throw new Error(`No hand-written template for ${animation.id}`);
+    const previous = existing.entries.find((entry) => entry.id === animation.id);
+    const remainsRejected = previous?.availability === "disabled" && previous?.verified?.verdict === "rejected";
     return {
       id: animation.id,
-      availability: "enabled",
+      availability: remainsRejected ? "disabled" : "enabled",
       template,
       duration_seconds: lowEnergyIds.has(animation.id) ? 6 : 8,
       source_hash: hash(JSON.stringify(sourceSnapshot(animation))),
-      verified: { verdict: "pending_verification" },
+      verified: remainsRejected ? previous.verified : { verdict: "pending_verification" },
     };
   });
   const catalog = { contract: CONTRACT, version: existing.version + 1, model: MODEL, prefix, suffix, entries };

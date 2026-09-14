@@ -1,9 +1,9 @@
 {
   "contract": "pet_generation_v2.animation_prompt_catalog.v1",
-  "version": 43,
+  "version": 44,
   "model": "handwritten",
   "prefix": "The character in the picture moves with the body it actually has.",
-  "suffix": "It floats free in open space with nothing beneath it. Movement runs through it the whole time and never settles. Its body holds together as one shape, and it moves and poses as big and as freely as it likes while staying inside the picture. Whatever hangs loose on it swings after it and settles a moment later. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.",
+  "suffix": "It floats free in open space with nothing beneath it. Movement runs through it continuously. Its body stays one shape. Its complete silhouette, every limb and carried thing stay inside the central seventy percent of the picture, leaving fifteen percent of the unchanged flat background visible on every side. Loose parts follow and settle. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.",
   "entries": [
     {
       "id": "idle",
