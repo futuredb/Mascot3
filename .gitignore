@@ -5,6 +5,7 @@ dist/
 .DS_Store
 server-data/
 android/.gradle/
+android/.kotlin/
 android/local.properties
 android/app/build/
 pipeline/characters/*
