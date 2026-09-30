@@ -24,6 +24,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.generativemascot.app.data.resolveMediaUrl
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.animationFramesWithoutZero
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -46,7 +47,9 @@ fun PngSequence(
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val resolved = remember(frames) { frames.mapNotNull(::resolveMediaUrl) }
+    val resolved = remember(frames) {
+        animationFramesWithoutZero(frames) { it }.mapNotNull(::resolveMediaUrl)
+    }
     val mascotId = remember(resolved, fallback, mascotIdHint) {
         mascotIdHint ?: extractMascotId(resolved.firstOrNull()) ?: extractMascotId(fallback)
     }
@@ -80,8 +83,8 @@ fun PngSequence(
     var frameTime by remember(resolved) { mutableLongStateOf(0L) }
     var genericReaction by remember(mascotId) { mutableStateOf<String?>(null) }
     var genericReactionStartedAt by remember(mascotId) { mutableLongStateOf(0L) }
-    LaunchedEffect(bitmaps, reactionBitmaps, fallbackBitmap) {
-        while (isActive && (bitmaps.isNotEmpty() || reactionBitmaps.isNotEmpty() || fallbackBitmap != null)) {
+    LaunchedEffect(bitmaps) {
+        while (isActive && bitmaps.size > 1) {
             withFrameNanos { frameTime = it }
         }
     }
@@ -143,12 +146,12 @@ fun PngSequence(
     ) {
         value = withContext(Dispatchers.IO) {
             if (mascotId == null || !needsLocalSequence) return@withContext emptyList()
-            HeroLocalStore.current?.sequenceFiles(mascotId, activeAction).orEmpty()
+            animationFramesWithoutZero(HeroLocalStore.current?.sequenceFiles(mascotId, activeAction).orEmpty()) { it.name }
                 .mapNotNull { file -> decodeFile(file.absolutePath, decodeSize) }
         }
     }
     LaunchedEffect(fullFrameBitmaps) {
-        while (isActive && fullFrameBitmaps.isNotEmpty()) withFrameNanos { frameTime = it }
+        while (isActive && fullFrameBitmaps.size > 1) withFrameNanos { frameTime = it }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val activeReaction = genericReaction ?: puppetAction
@@ -164,7 +167,7 @@ fun PngSequence(
             WholeCharacterFrames(
                 frames = playback,
                 fps = fps.coerceIn(1, 60),
-                frameTimeNanos = frameTime,
+                frameTimeNanos = { frameTime },
                 startedAtNanos = genericReactionStartedAt.takeIf { genericReaction != null } ?: 0L,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -179,7 +182,7 @@ fun PngSequence(
             WholeCharacterFrames(
                 frames = listOfNotNull(playback.firstOrNull() ?: bitmap),
                 fps = 1,
-                frameTimeNanos = frameTime,
+                frameTimeNanos = { frameTime },
                 startedAtNanos = 0L,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -198,16 +201,19 @@ fun PngSequence(
 private fun WholeCharacterFrames(
     frames: List<Bitmap>,
     fps: Int,
-    frameTimeNanos: Long,
+    frameTimeNanos: () -> Long,
     startedAtNanos: Long,
     modifier: Modifier = Modifier,
 ) {
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
     Canvas(modifier = modifier) {
         if (frames.isEmpty()) return@Canvas
+        // Read the clock only in the draw phase: PNG playback must not recompose
+        // the entire hero UI every frame. A single still needs no clock at all.
+        val frameTime = if (frames.size > 1) frameTimeNanos() else 0L
         val elapsed = if (startedAtNanos > 0L) {
-            (frameTimeNanos - startedAtNanos).coerceAtLeast(0L)
-        } else frameTimeNanos
+            (frameTime - startedAtNanos).coerceAtLeast(0L)
+        } else frameTime
         val index = ((elapsed / (1_000_000_000L / fps.coerceAtLeast(1))) % frames.size).toInt()
         val bitmap = frames[index]
         val scale = minOf(size.width / bitmap.width, size.height / bitmap.height)

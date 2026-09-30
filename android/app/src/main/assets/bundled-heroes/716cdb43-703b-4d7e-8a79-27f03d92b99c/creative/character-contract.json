@@ -1,0 +1,31 @@
+{
+    "seed": 1487918641,
+    "fingerprint": "601aabaf5474c69a07655fde52c56d2f0d5ed8af22a2c1c4d90f2e0dfbc45b4e",
+    "body": {
+        "archetype": "humanoid",
+        "subject": "a small original samurai guardian in historically respectful lamellar-inspired armor, empty-handed and without a weapon or real clan symbol",
+        "visibleParts": "one head, one torso, exactly two arms, two hands, two legs and two feet; one compact helmet, two short helmet cords and every armor plate form an attached, coherent costume",
+        "movementContacts": "torso, neck, arms, hands, legs, helmet cords and attached armor plates",
+        "front": "the face opening, chest armor overlap and tied waist define the front",
+        "scale": "a compact widget-sized miniature; any body detail is smaller than the torso and no loose prop is present"
+    },
+    "visualSignature": {
+        "primarySilhouetteCue": "a low wide silhouette that can compress and unfurl without losing identity",
+        "secondaryReadableDetail": "one small crescent chest marking offset from center",
+        "bodyLanguage": "a low comfortable center of gravity and an observant head angle"
+    },
+    "behavior": {
+        "motivation": "It keeps watch for the possibility that something interesting may happen, without demanding that it does.",
+        "worldview": "The world is full of almost-events, and noticing them is satisfying on its own.",
+        "movementSignature": "The gaze leads first, the body follows a fraction later and secondary parts settle last.",
+        "recurringMannerism": "It listens with one side of the silhouette before the rest of the body responds.",
+        "idlePerformance": "Quiet breathing, two differently directed listening poses and a slow return to open attention.",
+        "joyfulPerformance": "It recognizes attention, listens closely, answers with one bright physical accent and remains curious after settling.",
+        "sleepPerformance": "It listens until the head grows heavy, folds into sleep without losing the listening shape and breathes until deliberately awakened.",
+        "dancePerformance": "An alert call-and-response rhythm travels from gaze to torso to feet, then returns through the same chain in reverse."
+    },
+    "palette": "raspberry pink, dark burgundy and muted apricot",
+    "materialAndTechnique": "bold cel-shaded game art with hand-painted edge variation and simple value groups",
+    "faceSystem": "low-set expressive eyes, a tiny nose and a mouth that remains readable when closed",
+    "plasticity": "soft compression with delayed secondary settling while facial topology remains stable"
+}

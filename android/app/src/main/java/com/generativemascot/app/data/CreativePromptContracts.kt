@@ -585,12 +585,12 @@ internal fun animationContract(
         )
         "sleeping" -> MobileAnimationContract(
             action = normalized,
-            actionGoal = "Enter sleep, sustain a genuinely living sleep loop until interaction, then wake and return to idle.",
+            actionGoal = "It falls fast asleep; only slow breathing moves it during the quiet middle of the clip.",
             beats = listOf(
-                "Become progressively drowsy from the canonical home pose without an abrupt pose swap.",
-                character.behavior.sleepPerformance,
-                "Remain unmistakably asleep in one stable resting pose with closed eyes, continuous slow breathing and one very small characteristic sleep mannerism.",
-                "Only after the loop section, wake naturally and reverse the weight path back to the exact canonical home pose.",
+                "Grow drowsy from the exact home pose and settle without an abrupt pose swap.",
+                "Become fully asleep with closed eyes and stable body contacts.",
+                "Complete one slow whole-body breath while remaining deeply asleep.",
+                "Wake softly and recover along the same weight path to the exact home pose.",
             ),
             tempo = "slow enter, long quiet breathing plateau, then a soft deliberate exit",
             gaze = "eyes close during enter, remain closed for the entire loop, and reopen only during exit",
@@ -598,10 +598,10 @@ internal fun animationContract(
             protectedInvariants = protectedInvariants(character),
             performanceFreedom = performanceFreedom(character),
             closure = exactClosure(),
-            enterSeconds = 3.8,
-            loopStartSeconds = 3.8,
-            loopEndSeconds = 8.4,
-            exitSeconds = (durationSeconds - 8.4).coerceAtLeast(1.0),
+            enterSeconds = 1.25,
+            loopStartSeconds = 1.25,
+            loopEndSeconds = (durationSeconds - 1.25).coerceAtLeast(2.0),
+            exitSeconds = 1.25,
         )
         "dancing" -> MobileAnimationContract(
             action = normalized,
@@ -624,35 +624,69 @@ internal fun animationContract(
             exitSeconds = 1.0,
         )
         else -> MobileAnimationContract(
-            action = "idle",
-            actionGoal = "Remain quietly alive and recognizable during repeated passive viewing.",
+            action = normalized,
+            actionGoal = animationCatalogGoals.getValue(normalized),
             beats = listOf(
-                "Begin in the exact canonical home pose and establish slow continuous breathing.",
-                character.behavior.idlePerformance,
-                "Express the recurring mannerism once at low intensity, separated from the first accent by stillness.",
-                "Let every secondary part settle and return to the same pose and breathing phase.",
+                "Begin in the exact canonical home pose and prepare the action with one clear anticipation.",
+                animationCatalogGoals.getValue(normalized),
+                "Develop only that same readable action once, with natural weight and restrained secondary follow-through.",
+                "Settle every moving part and return through a calm readable path to the exact home pose.",
             ),
-            tempo = "mostly still, with two small non-simultaneous accents and generous readable pauses",
-            gaze = "calm environmental attention with no large reaction or direct performance to camera",
-            secondaryMotion = "breathing never stops; one existing secondary part may respond subtly after the torso",
+            tempo = animationCatalogTempos.getValue(normalized),
+            gaze = "the gaze supports this action and returns to the canonical gaze before the final hold",
+            secondaryMotion = "existing ears, tail, wings, clothing or gills may follow the torso with a small natural delay and must settle last",
             protectedInvariants = protectedInvariants(character),
             performanceFreedom = performanceFreedom(character),
             closure = exactClosure(),
-            enterSeconds = 0.0,
-            loopStartSeconds = 0.0,
-            loopEndSeconds = durationSeconds.toDouble(),
-            exitSeconds = 0.0,
+            enterSeconds = 0.65,
+            loopStartSeconds = 0.65,
+            loopEndSeconds = (durationSeconds - 0.75).coerceAtLeast(2.0),
+            exitSeconds = 0.75,
         )
     }
     return direction
 }
+
+private val animationCatalogGoals = mapOf(
+    "idle" to "It settles into a habit it knows by heart, works through it, and begins again.",
+    "resting" to "It lets its tension go and hangs loose, drifting gently, still awake.",
+    "thinking" to "It weighs something up, leaning slowly to one side and then the other, unable to settle on either.",
+    "at_glass" to "It leans into the empty air directly ahead, pushes, works sideways, and pushes again.",
+    "watching" to "It searches beyond the picture, looking hard to one side and then the other.",
+    "sad" to "It gathers itself as if to lift, gives up part way, and sinks back down smaller and more closed.",
+    "angry" to "Anger drives through it in sharp, stubborn waves without changing its identity.",
+    "refusal" to "It turns firmly away and closes its posture, then refuses once more with a clear final gesture.",
+    "frightened" to "Something beyond the picture startles it; it shrinks back and stays wary before recovering.",
+    "curious" to "It notices something and studies it closely from two careful angles.",
+    "tender" to "It draws itself in protectively, eases open a little, and folds back into the same gentle curl.",
+    "stretching" to "It stretches long and slowly, presses a little farther, then eases back.",
+    "greeting" to "It notices the viewer and gives one clear, warm greeting natural to its body.",
+    "signature_move" to "It performs the confident move that is entirely its own and is proud of it.",
+)
+
+private val animationCatalogTempos = mapOf(
+    "idle" to "easy and unhurried",
+    "resting" to "slow and unwinding",
+    "thinking" to "slow and absorbed",
+    "at_glass" to "steady and patient",
+    "watching" to "alert and intent",
+    "sad" to "slow and quiet",
+    "angry" to "sharp and stubborn",
+    "refusal" to "hard and final",
+    "frightened" to "a sharp start, then wary",
+    "curious" to "alert and unhurried",
+    "tender" to "slow and gentle",
+    "stretching" to "long and luxurious",
+    "greeting" to "warm and lively",
+    "signature_move" to "rhythmic and confident",
+)
 
 private fun protectedInvariants(character: MobileCharacterContract): List<String> = listOf(
     "Exactly one same character: ${character.body.subject}.",
     "Body topology never changes: ${character.body.visibleParts}.",
     "Identity cues remain unchanged: ${character.visualSignature.primarySilhouetteCue}; ${character.visualSignature.secondaryReadableDetail}.",
     "Palette, face, material, markings, scale, orientation and on-canvas position remain locked to the source image.",
-    "At least fifteen percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything it carries stay inside the central seventy percent of the image.",
+    "At least twenty percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything integrated into it stay inside the central sixty percent of the image.",
     "Every pixel outside the silhouette remains the same perfectly uniform matte with no additional visible element.",
 )
 
@@ -696,8 +730,11 @@ internal fun buildCanonicalCharacterPrompt(seed: Int): String {
         through silhouette, face and body language rather than tiny decoration. Use controlled detail and production-
         quality mobile-game finish. Avoid generic permanent open-mouth cuteness and avoid resemblance to any franchise.
 
-        Return a genuine transparent PNG with a clean alpha edge. No floor, contact shadow, cast shadow, reflection,
-        scenery, frame, text, logo, watermark, loose prop, second creature, duplicated body part or canvas-edge contact.
+        Render the character against one completely flat, uniform solid #00FF00 chroma-key green background filling
+        every pixel outside the silhouette. Reserve chroma-key green exclusively for the background; keep all character
+        colors clearly separated from it. Make the silhouette edge clean and crisp so the background can be removed
+        locally. No floor, contact shadow, cast shadow, reflection, scenery, gradient, texture, frame, text, logo,
+        watermark, loose prop, second creature, duplicated body part or canvas-edge contact.
     """.trimIndent()
 }
 
@@ -715,7 +752,7 @@ internal fun buildCharacterAnimationPrompt(
     val phaseTiming = if (direction.action == "sleep_loop") {
         "The entire clip is one closed breathing cycle in the same sleeping pose. There is no entrance, wake-up or exit."
     } else if (direction.action == "sleeping") {
-        "Enter during 0.0-${direction.enterSeconds}s. The sleep loop is ${direction.loopStartSeconds}-${direction.loopEndSeconds}s and its endpoints must match in pose and breathing phase. Exit only after ${direction.loopEndSeconds}s."
+        "Enter during 0.0-${direction.enterSeconds}s. Remain fully asleep through ${direction.loopStartSeconds}-${direction.loopEndSeconds}s, then wake and recover during the final ${direction.exitSeconds}s."
     } else if (direction.action == "idle") {
         "The entire clip is one quiet closed loop; distribute the beats with unhurried pauses."
     } else {
@@ -751,7 +788,7 @@ internal fun buildCharacterAnimationPrompt(
         Animate the mascot as one complete indivisible body with believable weight, arcs, anticipation, overlapping
         action, follow-through and natural easing. Never animate it as separate cutout pieces. Keep a locked portrait
         camera, fixed framing and fixed scale. At every moment the complete silhouette, every limb and anything the
-        mascot carries must remain inside the central seventy percent of the image. Preserve at least fifteen percent
+        mascot carries must remain inside the central sixty percent of the image. Preserve at least twenty percent
         of untouched empty matte on the left, right, top and bottom throughout the entire motion. Every pixel outside the character is the perfectly uniform matte $matteHex
         in every frame, reserved only for local GPU removal; do not use that key color on the character. Keep the empty
         matte completely flat, without any other visible geometry, gradient, texture, halo, scenery or lighting change.

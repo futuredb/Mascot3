@@ -12,6 +12,7 @@ class HomeActionDirectorTest {
         val pool = mainScreenActionPool(HeroLocalStore.VIDEO_ACTIONS.toSet())
 
         assertEquals(HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size - 2, pool.size)
+        assertFalse("welcome" in pool)
         assertFalse("idle" in pool)
         assertFalse("sleeping" in pool)
         assertFalse("sleep_loop" in pool)

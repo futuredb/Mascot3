@@ -13,5 +13,7 @@ pipeline/runs/*
 !pipeline/runs/character_batches/
 pipeline/runs/character_batches/*
 output/
+tmp/
 .playwright-cli/
 *.log
+/AGENTS.md

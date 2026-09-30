@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -52,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
@@ -134,13 +134,14 @@ private const val AMBIENT_MAX_DELAY_MS = 19_000L
 
 /**
  * Idle is already the baseline and sleep belongs to a deliberate long press.
+ * App entry reuses the existing greeting; no extra video is generated.
  * Every other generated library action participates in a shuffled home-screen
  * deck, so all authored clips are seen before the deck starts repeating.
  */
 internal fun mainScreenActionPool(availableActions: Set<String>): List<String> {
     val normalized = availableActions.map(HeroLocalStore::normalizeVideoAction).toSet()
     return HeroLocalStore.LIBRARY_VIDEO_ACTIONS.filter { action ->
-        action != "idle" && action != "sleeping" && action in normalized
+        action != "idle" && action != "sleeping" && action != "welcome" && action in normalized
     }
 }
 
@@ -188,12 +189,19 @@ fun KnockHeroScreen(
     animationFps: Int = 12,
     error: String?,
     accepted: Boolean,
+    heroLoading: Boolean = false,
+    greetingInterrupted: Boolean = false,
+    onResumeGreeting: () -> Unit = {},
+    onDeferGreeting: () -> Unit = {},
     mascotId: String? = null,
     heroName: String? = null,
+    welcomeRequestId: Long? = null,
+    onConsumeWelcome: (Long) -> Boolean = { false },
     heroLibrary: List<HeroLibraryItem> = emptyList(),
     stateKey: String? = null,
     stateLabel: String? = null,
     generationLabel: String? = null,
+    generationSourceLabel: String = "Командный сервер",
     onKnockComplete: () -> Unit,
     onAccept: () -> Unit,
     onSelectHero: (String) -> Unit = {},
@@ -203,7 +211,11 @@ fun KnockHeroScreen(
     onPoll: () -> Unit,
     onRefresh: () -> Unit = {},
     onRefreshHeroes: () -> Unit = {},
+    onGenerationSettings: () -> Unit = {},
     acceptEnabled: Boolean,
+    onStateGesture: ((com.generativemascot.app.state.StateEvent) -> Unit)? = null,
+    onAnimationVisible: ((String) -> Unit)? = null,
+    onOneShotFinished: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val vibrator = remember {
@@ -253,6 +265,7 @@ fun KnockHeroScreen(
     val ripples = remember { mutableStateListOf<KnockRipple>() }
     val pickerHero = heroLibrary.firstOrNull { it.id == pickerSelectedId }
     val visualMascotId = pickerHero?.id ?: mascotId
+    val visualHeroLoading = heroLoading && visualMascotId == mascotId
     val visualPreviewUrl = pickerHero?.baseStill ?: pickerHero?.baseFrames?.firstOrNull() ?: previewUrl
     val visualVideoUrls = if (visualMascotId == mascotId) animationVideoUrls else {
         visualMascotId?.let { HeroLocalStore.current?.actionVideoUrls(it) }.orEmpty()
@@ -267,19 +280,18 @@ fun KnockHeroScreen(
     val mainActionPool = remember(animationVideoUrls.keys) {
         mainScreenActionPool(animationVideoUrls.keys)
     }
-    val showWaiting = generating && visualPreviewUrl.isNullOrBlank()
-    val heroReady = !visualPreviewUrl.isNullOrBlank() && !showWaiting
-    val displayName = pickerHero?.name?.takeIf { it.isNotBlank() }
-        ?: heroName?.takeIf { it.isNotBlank() }
-        ?: "ГЕРОЙ"
+    val showWaiting = !accepted && generating && visualPreviewUrl.isNullOrBlank()
+    val heroReady = visualHeroLoading || (!visualPreviewUrl.isNullOrBlank() && !showWaiting)
+    val displayName = remember(visualMascotId, heroName, pickerHero?.name) {
+        heroHeadingName(
+            visualMascotId?.let { HeroLocalStore.current?.mascotName(it) },
+            heroName.takeIf { visualMascotId == mascotId },
+            pickerHero?.name,
+        )
+    }
     val palette = heroPalette(visualPreviewUrl)
     MascotSystemBars(if (accepted) palette.top else FigmaCanvas, if (accepted) palette.end else FigmaCanvas)
     val currentLine = heroLine(quoteAction, quoteIndex)
-    val quoteBottom by animateDpAsState(
-        targetValue = if (heroPickerExpanded) 222.dp else 128.dp,
-        animationSpec = tween(220, easing = MascotEase),
-        label = "quote lift",
-    )
 
     fun postponeAmbientAction() {
         nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
@@ -299,10 +311,27 @@ fun KnockHeroScreen(
     }
 
     fun playMainAction(action: String) {
-        puppetAction = action
+        val playable = resolveAvailableHomeAction(action, animationVideoUrls.keys)
+        if (playable != "sleeping" && playable != "sleep_loop") sleepLocked = false
+        puppetAction = playable
         puppetActionSerial += 1
-        quoteAction = action
+        quoteAction = playable
         quoteIndex = 0
+    }
+
+    LaunchedEffect(welcomeRequestId, mascotId, accepted, heroReady, heroPickerExpanded, visualHeroLoading) {
+        if (onStateGesture != null) return@LaunchedEffect
+        val request = welcomeRequestId ?: return@LaunchedEffect
+        if (!accepted || !heroReady || visualHeroLoading || heroPickerExpanded || visualMascotId != mascotId) return@LaunchedEffect
+        // Consume even when no greeting is saved: later downloads/recompositions must not
+        // interrupt a user who is already playing. Opening the app never creates a paid job.
+        if (onConsumeWelcome(request)) {
+            entryWelcomeAction(animationVideoUrls.keys)?.let { action ->
+                sleepLocked = false
+                playMainAction(action)
+                postponeAmbientAction()
+            }
+        }
     }
 
     LaunchedEffect(heroReady) {
@@ -371,24 +400,28 @@ fun KnockHeroScreen(
         delay(320)
         navigationReady = true
     }
-    LaunchedEffect(mascotId, stateKey) {
-        quoteAction = HeroLocalStore.normalizeVideoAction(stateKey ?: "idle")
-        quoteIndex = 0
+    LaunchedEffect(mascotId, stateKey, animationVideoUrls.keys) {
+        if (puppetAction == null) {
+            quoteAction = resolveAvailableHomeAction(stateKey ?: "idle", animationVideoUrls.keys)
+            quoteIndex = 0
+        }
     }
     LaunchedEffect(mascotId, accepted, quoteAction) {
         if (!accepted) return@LaunchedEffect
         while (true) {
             delay(if (quoteAction == "idle" || quoteAction == "sleep_loop" || quoteAction == "sleeping") 9_000 else 8_000)
+            if (onStateGesture != null) { quoteIndex += 1; continue }
             if (quoteAction != "idle" && quoteAction != "sleep_loop" && quoteAction != "sleeping") {
-                quoteAction = "idle"
+                quoteAction = defaultHomeVideoAction(animationVideoUrls.keys)
                 quoteIndex = 0
                 return@LaunchedEffect
             }
             quoteIndex += 1
         }
     }
-    LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool) {
-        if (!accepted || heroPickerExpanded || mainActionPool.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool, visualHeroLoading) {
+        if (onStateGesture != null) return@LaunchedEffect
+        if (!accepted || visualHeroLoading || heroPickerExpanded || mainActionPool.isEmpty()) return@LaunchedEffect
         while (true) {
             delay(500)
             val elapsedNow = SystemClock.elapsedRealtime()
@@ -593,6 +626,7 @@ fun KnockHeroScreen(
         }
         if (heroReady) {
             val heroModifier = Modifier
+                .testTag("hero-interaction")
                 .align(if (accepted) Alignment.TopCenter else Alignment.Center)
                 .then(if (accepted) Modifier.padding(top = heroTop) else Modifier)
                 .size(width = contentWidth, height = if (accepted) heroHeight else maxHeight * .52f)
@@ -601,9 +635,12 @@ fun KnockHeroScreen(
                     scaleY = heroPressScale
                 }
                 .pointerInteropFilter { event ->
+                    if (visualHeroLoading) return@pointerInteropFilter true
+                    if (heroPickerExpanded && onStateGesture != null) return@pointerInteropFilter true
                     if (!accepted) return@pointerInteropFilter false
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
+                            welcomeRequestId?.let(onConsumeWelcome)
                             heroPressed = true
                             sleepLocked = false
                             postponeAmbientAction()
@@ -627,16 +664,18 @@ fun KnockHeroScreen(
                             val heldMs = event.eventTime - gestureDownAt
                             when {
                                 heldMs >= 500L && travel < 70f -> {
-                                    sleepLocked = true
-                                    playMainAction("sleeping")
+                                    if (onStateGesture != null) onStateGesture(com.generativemascot.app.state.StateEvent.HOLD)
+                                    else { sleepLocked = true; playMainAction("sleeping") }
                                     buzz(45, 50)
                                 }
                                 -dy > 90f && -dy > kotlin.math.abs(dx) * 1.2f -> {
-                                    playMainAction("joyful")
+                                    if (onStateGesture != null) onStateGesture(com.generativemascot.app.state.StateEvent.JOY)
+                                    else playMainAction("joyful")
                                     buzz(48, 110)
                                 }
                                 else -> {
-                                    playMainAction(takeNextMainAction() ?: "joyful")
+                                    if (onStateGesture != null) onStateGesture(com.generativemascot.app.state.StateEvent.TAP)
+                                    else playMainAction(takeNextMainAction() ?: "joyful")
                                     buzz(24, 85)
                                 }
                             }
@@ -657,7 +696,9 @@ fun KnockHeroScreen(
                 dragX = dragX,
                 dragY = dragY,
             )
-            if (accepted && visualMascotId != mascotId) {
+            if (visualHeroLoading) {
+                HeroAnimationLoader(modifier = heroModifier)
+            } else if (accepted && visualMascotId != mascotId) {
                 // Carousel previews switch immediately, but stay as one still.
                 // Starting a decoder for every item crossed during a swipe made
                 // old and new Android video surfaces overlap and feel stuck.
@@ -690,6 +731,8 @@ fun KnockHeroScreen(
                         SoraMascotVideo(
                             videoUrl = visualAnimationVideoUrl,
                             videoUrls = visualVideoUrls,
+                            onAnimationVisible = onAnimationVisible,
+                            onOneShotFinished = onOneShotFinished,
                             neutralFrameUrl = visualNeutralFrameUrl,
                             action = stateKey ?: "idle",
                             interaction = interaction,
@@ -769,32 +812,35 @@ fun KnockHeroScreen(
             }
         }
         if (accepted) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = quoteBottom)
-                    .size(width = contentWidth, height = 112.dp)
-                    .clip(RoundedCornerShape(32.dp))
-                    .background(Color.White.copy(alpha = .32f))
-                    .border(2.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(32.dp)),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.quote_mark_vector),
-                    contentDescription = null,
-                    tint = palette.top,
-                    modifier = Modifier.size(width = 22.dp, height = 13.dp),
-                )
-                Text(
-                    currentLine,
-                    color = palette.top.copy(alpha = .88f),
-                    fontFamily = SbSansDisplayMedium,
-                    fontSize = 16.sp,
-                    lineHeight = 20.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
-                )
+            if (!heroPickerExpanded) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 128.dp)
+                        .size(width = contentWidth, height = 112.dp)
+                        .testTag("hero-quote")
+                        .clip(RoundedCornerShape(32.dp))
+                        .background(Color.White.copy(alpha = .32f))
+                        .border(2.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(32.dp)),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.quote_mark_vector),
+                        contentDescription = null,
+                        tint = palette.top,
+                        modifier = Modifier.size(width = 22.dp, height = 13.dp),
+                    )
+                    Text(
+                        currentLine,
+                        color = palette.top.copy(alpha = .88f),
+                        fontFamily = SbSansDisplayMedium,
+                        fontSize = 16.sp,
+                        lineHeight = 20.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = heroPickerExpanded,
@@ -809,7 +855,7 @@ fun KnockHeroScreen(
                 val sidePadding = ((contentWidth - itemWidth) / 2).coerceAtLeast(0.dp)
                 LazyRow(
                     state = heroStrip,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().testTag("hero-picker-carousel"),
                     contentPadding = PaddingValues(horizontal = sidePadding, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -877,7 +923,10 @@ fun KnockHeroScreen(
                             .mascotClickable(
                                 enabled = navigationReady,
                                 onClickLabel = "Эмоции героя",
-                                onClick = onAnimations,
+                                onClick = {
+                                    welcomeRequestId?.let(onConsumeWelcome)
+                                    onAnimations()
+                                },
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -897,9 +946,10 @@ fun KnockHeroScreen(
                         )
                         .border(2.dp, Color.White.copy(alpha = .46f), CircleShape)
                         .mascotClickable(
-                            enabled = navigationReady,
+                            enabled = navigationReady && !heroLoading,
                             onClickLabel = if (heroPickerExpanded) "Выбрать героя" else "Мои герои",
                             onClick = {
+                                welcomeRequestId?.let(onConsumeWelcome)
                                 if (heroPickerExpanded) {
                                     pickerSelectedId?.takeIf { it != mascotId }?.let(onSelectHero)
                                     heroPickerExpanded = false
@@ -924,7 +974,7 @@ fun KnockHeroScreen(
                             .background(Color.White.copy(alpha = .30f))
                             .border(2.dp, Color.White.copy(alpha = .46f), CircleShape)
                             .mascotClickable(
-                                enabled = navigationReady,
+                                enabled = navigationReady && !heroLoading,
                                 onClickLabel = "Создать нового героя",
                                 onClick = { confirmNewHero = true },
                             ),
@@ -940,7 +990,7 @@ fun KnockHeroScreen(
                 }
             }
         }
-        if (error != null) {
+        if (error != null && !greetingInterrupted) {
             Text(
                 error,
                 color = KnockInk,
@@ -952,6 +1002,31 @@ fun KnockHeroScreen(
                     .padding(horizontal = 24.dp, vertical = 96.dp),
             )
         }
+        if (!accepted && !showWaiting && !heroReady) {
+            androidx.compose.material3.TextButton(
+                onClick = onGenerationSettings,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+            ) {
+                Text(
+                    "Источник: $generationSourceLabel · изменить",
+                    color = KnockInk.copy(alpha = .58f),
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
+    if (greetingInterrupted) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Приветствие прервалось") },
+            text = { Text(error ?: "Герой и готовые результаты сохранены. Можно продолжить прежнее задание.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = onResumeGreeting) { Text("Продолжить") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = onDeferGreeting) { Text("Пока без приветствия") }
+            },
+        )
     }
     if (confirmNewHero) {
         androidx.compose.material3.AlertDialog(
@@ -959,19 +1034,26 @@ fun KnockHeroScreen(
             title = { Text("Создать нового героя?") },
             text = {
                 Text(
-                    "Это запустит отдельную платную генерацию внешности. Видео-анимации создаются позже и только после отдельного подтверждения.",
+                    "Источник: $generationSourceLabel.\n\nОткроется экран «Постучи». После трёх стуков начнётся платная генерация внешности. «Оставим» затем создаст одну анимацию-приветствие. Остальные анимации можно заказать отдельно.",
                 )
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmNewHero = false }) {
-                    Text("Отмена")
+                Row {
+                    androidx.compose.material3.TextButton(
+                        onClick = { confirmNewHero = false; onGenerationSettings() },
+                    ) {
+                        Text("Источник")
+                    }
+                    androidx.compose.material3.TextButton(onClick = { confirmNewHero = false }) {
+                        Text("Отмена")
+                    }
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
                     onClick = { confirmNewHero = false; onNewHero() },
                 ) {
-                    Text("Создать")
+                    Text("Продолжить")
                 }
             },
         )

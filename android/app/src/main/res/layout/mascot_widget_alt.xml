@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Alternate resource identity forces Samsung Launcher to replace a stale frame adapter. -->
+<ViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_flipper"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:animateFirstView="false"
+    android:autoStart="true"
+    android:background="@android:color/transparent"
+    android:flipInterval="83" />

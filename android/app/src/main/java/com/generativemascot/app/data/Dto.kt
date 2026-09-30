@@ -97,6 +97,8 @@ data class MascotDto(
     @SerialName("reroll_limit") val rerollLimit: Int = 1,
     @SerialName("prompt_version") val promptVersion: String = "",
     val stages: Map<String, String> = emptyMap(),
+    @SerialName("animation_batch_actions") val animationBatchActions: List<String> = emptyList(),
+    @SerialName("animation_batch_id") val animationBatchId: String? = null,
     @SerialName("preview_url") val previewUrl: String? = null,
     @SerialName("preview_animation_url") val previewAnimationUrl: String? = null,
 )

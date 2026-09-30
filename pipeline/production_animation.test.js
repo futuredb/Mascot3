@@ -30,6 +30,7 @@ test("prompt catalog covers every loop state with character-independent prompts"
   const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, "dict", "animation_prompt_catalog.json")));
   validateCatalog(catalog, animations);
   assert.equal(catalog.entries.length, 18);
+  assert.equal(catalog.entries.filter((entry) => entry.availability === "enabled").length, 17);
   assert.match(catalog.suffix, /The camera does not move\.$/);
   for (const entry of catalog.entries) {
     const prompt = resolveTemplate(entry.template);
@@ -54,6 +55,14 @@ test("prompt catalog covers every loop state with character-independent prompts"
     { subject: "a turtle", silhouette_cue: "round shell", proportion_cue: "compact body", neutral_pose: "neutral pose", persistent_prop: "signal_flag", prop_placement: "Orbiting beside the front-right side" },
     { prop_id: "signal_flag", placement: "Orbiting beside the front-right side" },
   ));
+});
+
+test("app entry reuses greeting without a duplicate welcome in the catalog", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, "dict", "animation_prompt_catalog.json")));
+  assert.equal(catalog.entries.find((entry) => entry.id === "welcome"), undefined);
+  const greeting = catalog.entries.find((entry) => entry.id === "greeting");
+  assert.equal(greeting.availability, "enabled");
+  assert.equal(greeting.duration_seconds, 6);
 });
 
 test("WebP disposal patch changes only ANMF flags", () => {

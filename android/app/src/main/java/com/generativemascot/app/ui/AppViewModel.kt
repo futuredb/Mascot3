@@ -1,5 +1,6 @@
 package com.generativemascot.app.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,15 +12,22 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import com.generativemascot.app.BuildConfig
+import com.generativemascot.app.MascotApp
 import com.generativemascot.app.data.CityBody
 import com.generativemascot.app.data.ContextDto
 import com.generativemascot.app.data.MascotApi
 import com.generativemascot.app.data.MascotDto
 import com.generativemascot.app.data.NameBody
 import com.generativemascot.app.data.SessionStore
-import com.generativemascot.app.data.LocalContextResolver
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.GenerationRoute
+import com.generativemascot.app.data.OpenRouterKeyVerifier
+import com.generativemascot.app.data.OpenRouterSettingsStore
+import com.generativemascot.app.data.planAnimationBatch
+import com.generativemascot.app.data.validateAnimationBatch
+import com.generativemascot.app.data.AcceptanceGreetingStore
+import com.generativemascot.app.data.AcceptanceGreetingRequest
+import com.generativemascot.app.worker.AcceptanceGreetingWorker
 import com.generativemascot.app.widget.updateMascotWidgets
 import com.generativemascot.app.worker.MascotGenerationWorker
 import com.generativemascot.app.worker.MediaRefreshWorker
@@ -27,10 +35,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -62,10 +72,12 @@ private val MOSCOW = CityBody(
 
 data class AppUiState(
     val ready: Boolean = false,
+    val welcomeRequestId: Long? = null,
     val route: String = "knock",
     val cityName: String = MOSCOW_NAME,
     val creating: Boolean = false,
     val generationLabel: String? = null,
+    val greetingPending: Boolean = false,
     val error: String? = null,
     val mascot: MascotDto? = null,
     val name: String = "",
@@ -73,9 +85,16 @@ data class AppUiState(
     val busy: Boolean = false,
     val packBusy: Boolean = false,
     val packMessage: String? = null,
+    val animationBatchActions: List<String> = emptyList(),
+    val animationBatchId: String? = null,
     val animationLibrary: Map<String, List<String>> = emptyMap(),
     val animationPackReady: Boolean = false,
     val heroLibrary: List<HeroLibraryItem> = emptyList(),
+    val generationRoute: GenerationRoute = GenerationRoute.TEAM_SERVER,
+    val openRouterKeyPresent: Boolean = false,
+    val openRouterKeyDraft: String = "",
+    val openRouterChecking: Boolean = false,
+    val openRouterMessage: String? = null,
 )
 
 data class HeroLibraryItem(
@@ -90,6 +109,8 @@ class AppViewModel(
     private val api: MascotApi,
     private val session: SessionStore,
     private val heroStore: HeroLocalStore,
+    private val openRouterSettings: OpenRouterSettingsStore,
+    private val openRouterVerifier: OpenRouterKeyVerifier = OpenRouterKeyVerifier(),
 ) : ViewModel() {
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state
@@ -98,20 +119,108 @@ class AppViewModel(
     private var heroSelectionSeq = 0
     private var generationGaveUp = false
     private val workManager = WorkManager.getInstance(session.appContext)
+    private val foregroundWelcome = ForegroundWelcomeGate()
+    private val acceptanceWorkflow = AcceptanceGreetingStore(session.appContext)
+    private var greetingObserver: kotlinx.coroutines.Job? = null
+    private var creationPrevious: MascotDto? = null
+    private val behavior get() = (session.appContext as? com.generativemascot.app.MascotApp)?.behavior
+    private var behaviorObserved = false
+
+    fun observeBehavior() {
+        if (behaviorObserved) return
+        behaviorObserved = true
+        viewModelScope.launch {
+            behavior?.store?.states?.collectLatest { record ->
+                val hero = _state.value.mascot ?: return@collectLatest
+                if (hero.id != record.heroId || hero.status != "READY" || _state.value.greetingPending) return@collectLatest
+                val ctx = contextForRecord(hero.id, record)
+                _state.update { if (it.mascot?.id == hero.id) it.copy(context = ctx) else it }
+            }
+        }
+    }
+
+    fun onAppForegrounded() {
+        if (behavior != null) return // ProcessLifecycleOwner handles real app foreground, not menu/rotation.
+        val request = foregroundWelcome.enter()
+        _state.update { it.copy(welcomeRequestId = request) }
+    }
+
+    fun onAppBackgrounded() {
+        if (behavior != null) return
+        foregroundWelcome.leave()
+        _state.update { it.copy(welcomeRequestId = null) }
+    }
+
+    fun consumeWelcome(requestId: Long): Boolean {
+        if (!foregroundWelcome.consume(requestId)) return false
+        _state.update { if (it.welcomeRequestId == requestId) it.copy(welcomeRequestId = null) else it }
+        return true
+    }
+
+    private fun directMode(): Boolean = openRouterSettings.isDirectModeEnabled()
+
+    private fun savedHeroName(mascotId: String, previous: MascotDto? = null): String? {
+        val current = _state.value
+        return resolveHeroName(
+            mascotId = mascotId,
+            persistedName = heroStore.mascotName(mascotId),
+            currentMascot = current.mascot,
+            libraryName = current.heroLibrary.firstOrNull { it.id == mascotId }?.name,
+            previousMascot = previous,
+        )
+    }
 
     init {
         viewModelScope.launch { bootstrap() }
     }
 
     private suspend fun applyMoscow() {
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION) runCatching { api.saveCity(MOSCOW) }
+        if (!directMode()) runCatching { api.saveCity(MOSCOW) }
         session.saveCityName(MOSCOW_NAME)
         _state.update { it.copy(cityName = MOSCOW_NAME) }
     }
 
     private suspend fun bootstrap() {
+        _state.update {
+            it.copy(
+                generationRoute = if (directMode()) GenerationRoute.OPENROUTER_DIRECT else GenerationRoute.TEAM_SERVER,
+                openRouterKeyPresent = openRouterSettings.hasApiKey(),
+            )
+        }
+        val bundledImportError = try {
+            // Await the IO import before reading the library; never block Application/widget startup.
+            (session.appContext as? MascotApp)?.ensureBundledHeroes()
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("BundledHeroes", "Cannot import bundled heroes; existing library is retained", error)
+            "Не удалось добавить встроенных героев. Проверьте свободное место и откройте приложение снова."
+        }
         runCatching { applyMoscow() }
-        if (BuildConfig.DIRECT_OPENAI_GENERATION) {
+        acceptanceWorkflow.pending()?.let { request ->
+            restoreGreeting(request)
+            return
+        }
+        if (directMode()) {
+            val draftId = acceptanceWorkflow.draftId()
+            if (draftId != null) {
+                val active = withContext(Dispatchers.IO) {
+                    workManager.getWorkInfosByTag("draft-base:$draftId").get().firstOrNull { !it.state.isFinished }
+                }
+                val base = heroStore.baseFile(draftId)
+                if (active != null || base != null) {
+                    val draft = MascotDto(id = draftId, name = savedHeroName(draftId),
+                        status = if (base == null) "BASE_GENERATING" else "AWAITING_ACCEPTANCE",
+                        previewUrl = base?.toURI()?.toString())
+                    _state.update { it.copy(ready = true, mascot = draft, creating = active != null,
+                        busy = active != null, route = "knock", context = null,
+                        generationLabel = if (active != null) "Создаём внешность героя…" else null) }
+                    if (active != null) observeGeneration(active.id, null, animationsOnly = false)
+                    return
+                }
+                acceptanceWorkflow.clearDraft(draftId)
+            }
             val currentMascotId = session.mascotId()
             val savedId = session.acceptedMascotId() ?: currentMascotId
             val localId = savedId?.takeIf { heroStore.baseFile(it) != null }
@@ -144,26 +253,48 @@ class AppViewModel(
                 activeWork?.let { workManager.cancelWorkById(it.id) }
                 activeWork = null
             }
+            val activeInfo = activeWork
+            val batchId = activeInfo?.id?.toString() ?: localId?.let(heroStore::latestAnimationBatchId)
+            val batchActions = batchId?.let(heroStore::animationBatchActions)
+                ?: if (activeInfo != null) HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS else emptyList()
+            val activeAnimations = activeInfo != null && localId != null && heroStore.baseFile(localId) != null &&
+                activeInfo.progress.getString(MascotGenerationWorker.KEY_STAGE) != MascotGenerationWorker.STAGE_BASE
             _state.update {
                 it.copy(
                     ready = true,
-                    route = "knock",
+                    route = if (activeAnimations) "animations" else "knock",
                     cityName = MOSCOW_NAME,
-                    mascot = if (activeWork == null) shown else shown?.copy(
+                    mascot = if (activeInfo == null || activeAnimations) shown else shown?.copy(
                         previewUrl = null,
                         previewAnimationUrl = null,
                         status = "BASE_GENERATING",
                     ),
-                    creating = activeWork != null,
-                    generationLabel = activeWork?.progress?.getString(MascotGenerationWorker.KEY_STAGE)
+                    creating = activeInfo != null,
+                    packBusy = activeAnimations,
+                    packMessage = if (activeAnimations) {
+                        "Создаём: ${activeInfo!!.progress.getInt(MascotGenerationWorker.KEY_COMPLETED, 0)} из " +
+                            "${activeInfo.progress.getInt(MascotGenerationWorker.KEY_TOTAL, ANIMATION_PACK_SIZE)} готовы"
+                    } else {
+                        null
+                    },
+                    generationLabel = activeInfo?.progress?.getString(MascotGenerationWorker.KEY_STAGE)
                         ?.let(::generationStageLabel),
                     busy = false,
-                    error = null,
+                    error = bundledImportError,
                     context = null,
+                    name = shown?.name.orEmpty(),
                     animationPackReady = localPackReady,
+                    animationBatchId = batchId,
+                    animationBatchActions = batchActions,
                 )
             }
-            if (activeWork != null) observeGeneration(activeWork.id, shown)
+            if (activeInfo != null) {
+                observeGeneration(
+                    activeInfo.id,
+                    shown,
+                    animationsOnly = activeAnimations,
+                )
+            }
             else if (shown != null) loadContext(interact = false)
             return
         }
@@ -204,7 +335,7 @@ class AppViewModel(
                 mascot = if (waiting || shown?.status == "READY" || shown?.status == "AWAITING_ACCEPTANCE") shown else null,
                 creating = waiting,
                 busy = false,
-                error = if (shown?.status == "FAILED_FINAL") "Не удалось сгенерировать нового героя" else null,
+                error = bundledImportError ?: if (shown?.status == "FAILED_FINAL") "Не удалось сгенерировать нового героя" else null,
                 context = null,
                 name = shown?.name.orEmpty(),
             )
@@ -228,9 +359,28 @@ class AppViewModel(
 
     fun replaceHero() = summonHero()
 
+    /** Opening the creation screen is free; the three knocks are the explicit request. */
+    fun startHeroCreation() {
+        if (_state.value.creating || _state.value.busy || _state.value.greetingPending) return
+        creationPrevious = _state.value.mascot
+        _state.update { it.copy(route = "create", mascot = null, context = null, error = null, name = "") }
+    }
+
+    fun cancelHeroCreation() {
+        if (_state.value.creating || _state.value.greetingPending) return
+        viewModelScope.launch {
+            val id = session.acceptedMascotId() ?: return@launch
+            val previous = creationPrevious?.takeIf { it.id == id }
+                ?: MascotDto(id = id, name = savedHeroName(id), status = "READY",
+                    previewUrl = heroStore.baseFile(id)?.toURI()?.toString())
+            val ctx = localContext(id)
+            _state.update { it.copy(mascot = previous, route = "knock", context = ctx, error = null) }
+        }
+    }
+
     fun summonHero() {
-        if (_state.value.creating) return
-        val existing = _state.value.mascot
+        if (_state.value.creating || _state.value.busy || _state.value.greetingPending) return
+        val existing = _state.value.mascot ?: creationPrevious
         val token = ++generateSeq
         generateStartedAt = System.currentTimeMillis()
         generationGaveUp = false
@@ -249,7 +399,7 @@ class AppViewModel(
                 ),
             )
         }
-        if (BuildConfig.DIRECT_OPENAI_GENERATION) {
+        if (directMode()) {
             enqueueOnDeviceGeneration(existing, animationsOnly = false)
             return
         }
@@ -290,7 +440,7 @@ class AppViewModel(
                             busy = false,
                             route = "knock",
                             mascot = existing,
-                            error = if (!BuildConfig.DIRECT_OPENAI_GENERATION && network && existing?.status == "READY") {
+                            error = if (!directMode() && network && existing?.status == "READY") {
                                 null
                             } else if (network) {
                                 "Нового героя можно создать только при доступном сервисе."
@@ -303,29 +453,39 @@ class AppViewModel(
         }
     }
 
-    private fun enqueueOnDeviceGeneration(previous: MascotDto?, animationsOnly: Boolean) {
+    private fun enqueueOnDeviceGeneration(previous: MascotDto?, animationsOnly: Boolean, actions: List<String>? = null) {
         val mascotId = if (animationsOnly) previous?.id ?: return else UUID.randomUUID().toString()
+        val selected = if (animationsOnly) validateAnimationBatch(actions) else null
+        val input = androidx.work.Data.Builder()
+            .putString(MascotGenerationWorker.KEY_REQUEST_TOKEN, UUID.randomUUID().toString())
+            .putString(MascotGenerationWorker.KEY_MASCOT_ID, mascotId)
+            .putBoolean(MascotGenerationWorker.KEY_ANIMATIONS_ONLY, animationsOnly)
+        selected?.let { input.putStringArray(MascotGenerationWorker.KEY_ACTIONS, it.toTypedArray()) }
         val request = OneTimeWorkRequestBuilder<MascotGenerationWorker>()
-            .setInputData(
-                workDataOf(
-                    MascotGenerationWorker.KEY_REQUEST_TOKEN to UUID.randomUUID().toString(),
-                    MascotGenerationWorker.KEY_MASCOT_ID to mascotId,
-                    MascotGenerationWorker.KEY_ANIMATIONS_ONLY to animationsOnly,
-                ),
-            )
+            .addTag(if (animationsOnly) "animation-pack:$mascotId" else "draft-base:$mascotId")
+            .setInputData(input.build())
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
+        if (!animationsOnly) acceptanceWorkflow.saveDraft(mascotId)
+        selected?.let {
+            // Persist before enqueueing, so process death cannot expand a chosen paid batch.
+            heroStore.saveAnimationBatch(mascotId, request.id.toString(), it)
+            _state.update { state -> state.copy(animationBatchActions = it, animationBatchId = request.id.toString()) }
+        }
         workManager.enqueueUniqueWork(
             MascotGenerationWorker.UNIQUE_WORK_NAME,
             ExistingWorkPolicy.KEEP,
             request,
         )
-        observeGeneration(request.id, previous)
+        observeGeneration(request.id, previous, animationsOnly)
     }
 
-    private fun observeGeneration(workId: UUID, previous: MascotDto?) {
+    private fun observeGeneration(workId: UUID, previous: MascotDto?, animationsOnly: Boolean) {
         viewModelScope.launch {
+            val batchActions = if (animationsOnly) {
+                heroStore.animationBatchActions(workId.toString()) ?: HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS
+            } else emptyList()
             workManager.getWorkInfoByIdFlow(workId).filterNotNull().collectLatest { info ->
                 when (info.state) {
                     WorkInfo.State.ENQUEUED,
@@ -333,12 +493,21 @@ class AppViewModel(
                     WorkInfo.State.RUNNING -> _state.update {
                         it.copy(
                             creating = true,
-                            busy = true,
+                            busy = !animationsOnly,
+                            packBusy = animationsOnly,
+                            animationBatchActions = batchActions,
+                            animationBatchId = if (animationsOnly) workId.toString() else null,
+                            packMessage = if (animationsOnly) {
+                                "Создаём: ${info.progress.getInt(MascotGenerationWorker.KEY_COMPLETED, 0)} из " +
+                                    "${info.progress.getInt(MascotGenerationWorker.KEY_TOTAL, batchActions.size)} готовы"
+                            } else {
+                                it.packMessage
+                            },
                             generationLabel = generationStageLabel(
                                 info.progress.getString(MascotGenerationWorker.KEY_STAGE),
                             ),
                             error = null,
-                            route = "knock",
+                            route = if (animationsOnly) "animations" else "knock",
                         )
                     }
                     WorkInfo.State.SUCCEEDED -> {
@@ -348,16 +517,23 @@ class AppViewModel(
                             restoreAfterGenerationFailure(previous, "Герой сгенерирован, но файл не сохранился")
                             return@collectLatest
                         }
-                        session.saveAcceptedMascot(mascotId)
+                        if (animationsOnly) session.saveAcceptedMascot(mascotId)
+                        else {
+                            acceptanceWorkflow.saveDraft(mascotId)
+                            session.saveMascot(mascotId)
+                        }
                         val mascot = MascotDto(
                             id = mascotId,
-                            status = "READY",
+                            name = savedHeroName(mascotId, previous),
+                            status = if (animationsOnly) "READY" else "AWAITING_ACCEPTANCE",
                             promptVersion = if (heroStore.animationPackReady(mascotId)) {
                                 "pet-generation-v2.5-seedance-2.0-mini-budget"
                             } else {
                                 "on-device-gpt-image-2-character-contract-v5"
                             },
                             previewUrl = file.toURI().toString(),
+                            stages = if (animationsOnly) mapOf("animations" to
+                                if (heroStore.animationPackReady(mascotId)) "ready" else "partial") else emptyMap(),
                         )
                         val ctx = localContext(mascotId)
                         _state.update {
@@ -366,15 +542,19 @@ class AppViewModel(
                                 busy = false,
                                 generationLabel = null,
                                 mascot = mascot,
-                                name = "",
-                                context = ctx,
-                                route = "knock",
+                                name = mascot.name.orEmpty(),
+                                context = if (animationsOnly) ctx else null,
+                                route = if (animationsOnly) "animations" else "knock",
                                 error = null,
                                 animationPackReady = heroStore.animationPackReady(mascotId),
+                                packBusy = false,
+                                packMessage = if (animationsOnly) "Выбранные ${batchActions.size} анимаций готовы" else it.packMessage,
+                                animationBatchActions = batchActions,
+                                animationBatchId = if (animationsOnly) workId.toString() else null,
                             )
                         }
                         publishAnimationLibrary(mascotId)
-                        pushWidget(ctx)
+                        if (animationsOnly) pushWidget(ctx)
                         return@collectLatest
                     }
                     WorkInfo.State.FAILED,
@@ -384,18 +564,34 @@ class AppViewModel(
                             heroStore.baseFile(id)?.let { file ->
                                 MascotDto(
                                     id = id,
-                                    status = "READY",
+                                    name = savedHeroName(id, previous),
+                                    status = if (animationsOnly) "READY" else "AWAITING_ACCEPTANCE",
                                     promptVersion = "on-device-gpt-image-2-character-contract-v5",
                                     previewUrl = file.toURI().toString(),
                                 )
                             }
                         }
-                        if (partial != null) session.saveAcceptedMascot(partial.id)
+                        if (partial != null) {
+                            if (animationsOnly) session.saveAcceptedMascot(partial.id)
+                            else acceptanceWorkflow.saveDraft(partial.id)
+                        }
                         restoreAfterGenerationFailure(
                             partial ?: previous,
                             info.outputData.getString(MascotGenerationWorker.KEY_ERROR)
                                 ?: "Генерация была прервана",
                         )
+                        if (animationsOnly) {
+                            _state.update {
+                                it.copy(
+                                    route = "animations",
+                                    packBusy = false,
+                                    packMessage = "Генерация остановилась. Готовое сохранено — можно продолжить.",
+                                    mascot = it.mascot?.let { hero ->
+                                        hero.copy(stages = hero.stages + ("animations" to "failed"))
+                                    },
+                                )
+                            }
+                        }
                         return@collectLatest
                     }
                 }
@@ -404,12 +600,14 @@ class AppViewModel(
     }
 
     private fun restoreAfterGenerationFailure(previous: MascotDto?, message: String) {
+        val restored = previous?.copy(name = savedHeroName(previous.id, previous))
         _state.update {
             it.copy(
                 creating = false,
                 busy = false,
                 generationLabel = null,
-                mascot = previous,
+                mascot = restored,
+                name = restored?.name.orEmpty(),
                 animationPackReady = previous?.id?.let(heroStore::animationPackReady) == true,
                 route = "knock",
                 error = message,
@@ -424,6 +622,7 @@ class AppViewModel(
     fun generateVideoPack(pack: Int) = requestPack("video", pack)
 
     private fun requestPack(kind: String, pack: Int) {
+        if (directMode()) return
         val mascot = _state.value.mascot ?: return
         if (mascot.status != "READY" || _state.value.packBusy) return
         viewModelScope.launch {
@@ -448,32 +647,116 @@ class AppViewModel(
     }
 
     fun accept() {
-        val mascot = _state.value.mascot ?: return
+        val current = _state.value
+        val mascot = current.mascot ?: return
+        if (current.busy || current.creating || current.packBusy) return
+        if (!current.greetingPending && mascot.status != "AWAITING_ACCEPTANCE") return
+        // Lock before starting a coroutine: two rapid taps cannot authorize two jobs.
+        _state.update { it.withGreetingStarted() }
         viewModelScope.launch {
-            _state.update { it.copy(busy = true) }
             runCatching {
-                if (_state.value.name.isNotBlank()) api.rename(mascot.id, NameBody(_state.value.name))
-                api.accept(mascot.id)
-            }.onSuccess { ready ->
-                session.saveAcceptedMascot(ready.id)
-                persistAcceptedHero(ready)
-            }.onFailure {
-                val current = runCatching { api.getMascot(mascot.id) }.getOrNull()
-                if (current?.status == "READY") {
-                    session.saveAcceptedMascot(current.id)
-                    persistAcceptedHero(current)
-                } else {
-                    _state.update { it.copy(busy = false, route = "knock", error = "Не удалось собрать пакет") }
-                }
+                val pending = acceptanceWorkflow.pending() ?: acceptanceWorkflow.request(mascot.id)?.takeUnless { it.completed }
+                val request = if (pending != null) {
+                    val work = withContext(Dispatchers.IO) { workManager.getWorkInfoById(pending.workId).get() }
+                    if (work != null && work.state.isFinished && work.state != WorkInfo.State.SUCCEEDED) {
+                        acceptanceWorkflow.resume(mascot.id)
+                    } else pending
+                } else acceptanceWorkflow.begin(mascot.id, current.generationRoute)
+                if (current.name.isNotBlank()) heroStore.saveMascotName(mascot.id, current.name)
+                restoreGreeting(request)
+            }.onFailure { error ->
+                val persisted = acceptanceWorkflow.pending() != null
+                _state.update { it.copy(busy = false, creating = false,
+                    mascot = if (persisted) it.mascot else current.mascot,
+                    greetingPending = persisted, route = "knock", error = error.message) }
             }
         }
     }
 
+    private suspend fun restoreGreeting(request: AcceptanceGreetingRequest) {
+        val id = request.mascotId
+        val base = heroStore.baseFile(id)
+        val previousPreview = _state.value.mascot?.takeIf { it.id == id }?.previewUrl
+        val preview = base?.toURI()?.toString() ?: previousPreview ?: if (request.route == GenerationRoute.TEAM_SERVER) {
+            runCatching { api.getMascot(id).previewUrl }.getOrNull()
+        } else null
+        val mascot = MascotDto(id = id, name = savedHeroName(id), status = "READY",
+            previewUrl = preview)
+        _state.update { it.copy(ready = true, route = "knock", mascot = mascot,
+            name = mascot.name.orEmpty(), context = null, greetingPending = true,
+            creating = true, busy = true, packBusy = false, error = null,
+            animationBatchActions = listOf("greeting"), animationBatchId = request.workId.toString(),
+            animationPackReady = heroStore.animationPackReady(id),
+            generationLabel = "Готовим приветствие — одну анимацию…") }
+        if (heroStore.actionVideoFile(id, "greeting") != null) {
+            finishGreeting(mascot)
+            return
+        }
+        val existing = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.workId).get() }
+        if (existing == null) {
+            heroStore.saveAnimationBatch(id, request.workId.toString(), listOf("greeting"))
+            val work = OneTimeWorkRequestBuilder<AcceptanceGreetingWorker>()
+                .setId(request.workId)
+                .setInputData(workDataOf(AcceptanceGreetingWorker.KEY_ID to id))
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
+            workManager.enqueueUniqueWork(AcceptanceGreetingWorker.uniqueName(id), ExistingWorkPolicy.KEEP, work)
+        }
+        greetingObserver?.cancel()
+        greetingObserver = viewModelScope.launch {
+            val info = workManager.getWorkInfoByIdFlow(request.workId).filterNotNull().first { it.state.isFinished }
+            val failure = if (info.state == WorkInfo.State.SUCCEEDED) {
+                runCatching { finishGreeting(mascot) }.exceptionOrNull()?.message
+            } else info.outputData.getString(AcceptanceGreetingWorker.KEY_ERROR)
+                ?: "Приветствие прервалось. Герой сохранён; можно продолжить прежнее задание."
+            if (failure != null) _state.update {
+                it.copy(creating = false, busy = false, greetingPending = true, error = failure)
+            }
+        }
+    }
+
+    fun deferGreeting() {
+        if (_state.value.creating || _state.value.busy || !_state.value.greetingPending) return
+        viewModelScope.launch {
+            val pending = acceptanceWorkflow.pending() ?: return@launch
+            val id = pending.mascotId
+            val file = heroStore.baseFile(id) ?: return@launch
+            acceptanceWorkflow.defer(pending.mascotId)
+            session.saveAcceptedMascot(id)
+            acceptanceWorkflow.clearDraft(id)
+            greetingObserver?.cancel()
+            val ctx = localContext(id)
+            _state.update { it.copy(mascot = MascotDto(id = id, name = savedHeroName(id), status = "READY",
+                previewUrl = file.toURI().toString()), context = ctx, name = savedHeroName(id).orEmpty(),
+                greetingPending = false, creating = false, busy = false, error = null,
+                generationLabel = null, route = "knock") }
+        }
+    }
+
+    private suspend fun finishGreeting(mascot: MascotDto) {
+        check(heroStore.actionVideoFile(mascot.id, "greeting") != null) { "Приветствие ещё не сохранено" }
+        session.saveAcceptedMascot(mascot.id)
+        acceptanceWorkflow.complete(mascot.id)
+        val record = behavior?.refresh(com.generativemascot.app.state.StateEvent.CREATED, fetchExternal = false)
+        val ctx = if (record != null) contextForRecord(mascot.id, record) else localContext(mascot.id)
+        val welcome = if (behavior == null) foregroundWelcome.requestGreeting() else null
+        val name = savedHeroName(mascot.id, mascot)
+        _state.update { it.copy(mascot = mascot.copy(status = "READY", name = name), name = name.orEmpty(), context = ctx,
+            creating = false, busy = false, greetingPending = false, generationLabel = null,
+            error = null, route = if (it.route == "animations" || it.route == "settings") it.route else "knock",
+            welcomeRequestId = welcome,
+            animationBatchActions = listOf("greeting"), animationPackReady = heroStore.animationPackReady(mascot.id)) }
+        publishAnimationLibrary(mascot.id)
+        pushWidget(ctx)
+    }
+
     fun onOpenedFromWidget() {
+        if (_state.value.greetingPending) return
         viewModelScope.launch { loadContext(interact = true) }
     }
 
     fun pollProgress() {
+        if (directMode() || _state.value.greetingPending) return
         val mascot = _state.value.mascot ?: return
         val token = generateSeq
         val mascotId = mascot.id
@@ -549,12 +832,13 @@ class AppViewModel(
 
     private fun cacheHero(mascotId: String) {
         viewModelScope.launch {
-            if (!BuildConfig.DIRECT_OPENAI_GENERATION) runCatching { heroStore.sync(api, mascotId) }
+            if (!directMode()) runCatching { heroStore.sync(api, mascotId) }
             runCatching { updateMascotWidgets(session.appContext) }
         }
     }
 
     fun refreshQuietly() {
+        if (_state.value.greetingPending) return
         viewModelScope.launch { loadContext(interact = false) }
     }
 
@@ -563,21 +847,38 @@ class AppViewModel(
         refreshAnimationLibrary()
     }
 
-    fun completeAnimations() {
+    fun completeAnimations(requestedCount: Int) {
         val mascot = _state.value.mascot ?: return
         val animationStage = mascot.stages["animations"]
         if (
             _state.value.creating ||
+            _state.value.greetingPending ||
             _state.value.packBusy ||
             animationStage == "running" ||
             heroStore.animationPackReady(mascot.id)
         ) return
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION) {
+        val actions = runCatching {
+            planAnimationBatch(
+                heroStore.actionVideoUrls(mascot.id).keys,
+                HeroLocalStore.LIBRARY_VIDEO_ACTIONS.filter {
+                    heroStore.openRouterVideoJobId(mascot.id, it) != null
+                }.toSet(),
+                requestedCount,
+            )
+        }.getOrElse { error ->
+            _state.update { it.copy(error = error.message) }
+            return
+        }
+        if (actions.isEmpty()) { refreshAnimationLibrary(); return }
+        if (!directMode()) {
+            val batchId = UUID.randomUUID().toString()
             _state.update {
                 it.copy(
                     route = "animations",
                     packBusy = true,
-                    packMessage = "Запускаем 17 анимаций…",
+                    packMessage = "Запускаем ${actions.size} анимаций…",
+                    animationBatchActions = actions,
+                    animationBatchId = batchId,
                     error = null,
                     mascot = mascot.copy(
                         stages = mascot.stages + ("animations" to "running"),
@@ -585,8 +886,9 @@ class AppViewModel(
                 )
             }
             viewModelScope.launch {
-                runCatching { api.generateVideos(mascot.id, ANIMATION_PACK_SIZE) }
+                runCatching { api.generateVideos(mascot.id, actions.size) }
                     .onSuccess { result ->
+                        val selected = result.requested.ifEmpty { actions }
                         MediaRefreshWorker.enqueue(
                             session.appContext,
                             mascot.id,
@@ -594,15 +896,21 @@ class AppViewModel(
                             (result.requested + result.queued).distinct(),
                         )
                         val ready = result.ready.distinct().size
-                        val stage = if (result.queued.isEmpty() && result.blocked.isEmpty()) "ready" else "running"
+                        val stage = when {
+                            result.blocked.isNotEmpty() -> "failed"
+                            result.queued.isNotEmpty() -> "running"
+                            ready >= ANIMATION_PACK_SIZE -> "ready"
+                            else -> "partial"
+                        }
                         _state.update {
                             it.copy(
                                 route = "animations",
                                 packBusy = false,
-                                packMessage = if (stage == "ready") {
-                                    "Все $ANIMATION_PACK_SIZE анимаций готовы"
+                                animationBatchActions = selected,
+                                packMessage = if (stage == "ready" || stage == "partial") {
+                                    "Выбранные ${selected.size} анимаций готовы"
                                 } else {
-                                    "Генерация идёт: готово $ready из $ANIMATION_PACK_SIZE"
+                                    "Создаём партию из ${selected.size} · всего готово $ready из $ANIMATION_PACK_SIZE"
                                 },
                                 mascot = mascot.copy(
                                     status = "READY",
@@ -614,11 +922,19 @@ class AppViewModel(
                         refreshAnimationLibrary()
                     }
                     .onFailure { error ->
+                        val rejected = error is retrofit2.HttpException && error.code() in listOf(400, 401, 403, 404, 409, 429)
                         _state.update {
                             it.copy(
                                 route = "animations",
                                 packBusy = false,
-                                packMessage = "Не удалось проверить запуск: ${error.message ?: "нет связи с сервером"}",
+                                mascot = if (rejected) mascot else it.mascot,
+                                error = if (error is retrofit2.HttpException && error.code() == 400) {
+                                    "Сервер ещё не поддерживает эту партию — нужен его апдейт. Другие анимации вместо выбранных не запускались."
+                                } else "Не удалось проверить запуск: ${error.message ?: "нет связи с сервером"}",
+                                animationBatchActions = if (rejected) emptyList() else it.animationBatchActions,
+                                packMessage = if (error is retrofit2.HttpException && error.code() == 400) {
+                                    "Сервер ещё не поддерживает эту партию — нужен его апдейт. Другие анимации вместо выбранных не запускались."
+                                } else "Не удалось проверить запуск: ${error.message ?: "нет связи с сервером"}",
                             )
                         }
                         // The request may have reached the server even if the response was lost.
@@ -631,20 +947,25 @@ class AppViewModel(
         }
         _state.update {
             it.copy(
-                route = "knock",
+                route = "animations",
                 creating = true,
-                busy = true,
-                generationLabel = "Seedance Mini создаёт 17 живых анимаций…",
+                busy = false,
+                packBusy = true,
+                packMessage = "Создаём ${actions.size} анимаций; готовое сохраняется после каждого ролика",
+                generationLabel = "Seedance Mini создаёт ${actions.size} анимаций…",
                 error = null,
                 mascot = mascot.copy(
-                    previewUrl = null,
-                    previewAnimationUrl = null,
-                    status = "BASE_GENERATING",
+                    status = "READY",
+                    stages = mascot.stages + ("animations" to "running"),
                 ),
             )
         }
-        if (BuildConfig.DIRECT_OPENAI_GENERATION) {
-            enqueueOnDeviceGeneration(mascot, animationsOnly = true)
+        if (directMode()) {
+            runCatching { enqueueOnDeviceGeneration(mascot, animationsOnly = true, actions = actions) }
+                .onFailure { error ->
+                    restoreAfterGenerationFailure(mascot, error.message ?: "Не удалось сохранить партию")
+                    _state.update { it.copy(packBusy = false) }
+                }
             return
         }
     }
@@ -653,13 +974,14 @@ class AppViewModel(
         viewModelScope.launch {
             val activeId = session.acceptedMascotId() ?: session.mascotId()
             fun localItems(ids: List<String>, names: Map<String, MascotDto>): List<HeroLibraryItem> =
-                ids.distinct().mapNotNull { id ->
+                ids.distinct().filter { it !in acceptanceWorkflow.unacceptedIds() }.mapNotNull { id ->
                     val base = heroStore.baseFile(id)
                     val frames = heroStore.sequenceFiles(id, "base")
                     if (base == null && frames.isEmpty()) return@mapNotNull null
                     HeroLibraryItem(
                         id = id,
-                        name = names[id]?.name ?: heroStore.mascotName(id),
+                        name = resolveHeroName(id, heroStore.mascotName(id),
+                            currentMascot = _state.value.mascot, libraryName = names[id]?.name),
                         baseFrames = frames.map { it.toURI().toString() },
                         baseStill = base?.toURI()?.toString(),
                         active = id == activeId,
@@ -669,7 +991,7 @@ class AppViewModel(
             // Show cached heroes instantly; remote refresh must never leave the
             // picker on an empty loading screen.
             _state.update { it.copy(heroLibrary = localItems(heroStore.localMascotIds(), emptyMap())) }
-            if (BuildConfig.DIRECT_OPENAI_GENERATION) return@launch
+            if (directMode()) return@launch
             val remote = runCatching { api.mascotLibrary() }.getOrDefault(emptyList())
             val remoteById = remote.associateBy { it.id }
             val ids = (remote.map { it.id } + heroStore.localMascotIds()).distinct()
@@ -682,6 +1004,7 @@ class AppViewModel(
     }
 
     fun selectLibraryHero(mascotId: String) {
+        if (_state.value.greetingPending) return
         if (_state.value.mascot?.id == mascotId) return
         val selectionToken = ++heroSelectionSeq
         val libraryItem = _state.value.heroLibrary.firstOrNull { it.id == mascotId }
@@ -691,7 +1014,7 @@ class AppViewModel(
             if (selectionToken != heroSelectionSeq) return@launch
             val localSelected = MascotDto(
                 id = mascotId,
-                name = libraryItem?.name,
+                name = savedHeroName(mascotId),
                 status = "READY",
                 promptVersion = "local-library",
                 previewUrl = libraryItem?.baseStill
@@ -704,6 +1027,10 @@ class AppViewModel(
                 it.copy(
                     mascot = localSelected,
                     name = localSelected.name.orEmpty(),
+                    packMessage = null,
+                    animationBatchId = heroStore.latestAnimationBatchId(mascotId),
+                    animationBatchActions = heroStore.latestAnimationBatchId(mascotId)
+                        ?.let(heroStore::animationBatchActions).orEmpty(),
                     context = ctx,
                     animationPackReady = heroStore.animationPackReady(mascotId),
                     route = "knock",
@@ -711,16 +1038,17 @@ class AppViewModel(
                 )
             }
             publishAnimationLibrary(mascotId)
-            if (BuildConfig.DIRECT_OPENAI_GENERATION) return@launch
+            if (directMode()) return@launch
 
             val remoteSelected = runCatching { api.activate(mascotId) }.getOrNull()
                 ?: runCatching { api.getMascot(mascotId) }.getOrNull()
             if (selectionToken != heroSelectionSeq) return@launch
             remoteSelected?.let { selected ->
+                val resolvedName = savedHeroName(mascotId, selected)
                 _state.update {
                     it.copy(
-                        mascot = selected.copy(status = "READY"),
-                        name = selected.name ?: it.name,
+                        mascot = selected.copy(status = "READY", name = resolvedName),
+                        name = resolvedName.orEmpty(),
                     )
                 }
             }
@@ -732,12 +1060,15 @@ class AppViewModel(
 
     fun refreshAnimationLibrary() {
         viewModelScope.launch {
-            val mascotId = session.acceptedMascotId() ?: session.mascotId() ?: return@launch
+            val pendingId = _state.value.mascot?.id?.takeIf { _state.value.greetingPending }
+            val mascotId = pendingId ?: session.acceptedMascotId() ?: session.mascotId() ?: return@launch
             publishAnimationLibrary(mascotId)
-            if (!BuildConfig.DIRECT_OPENAI_GENERATION) {
+            if (pendingId != null) return@launch // The greeting worker owns this job's sync and acceptance.
+            if (!directMode()) {
                 runCatching { api.getMascot(mascotId) }.getOrNull()?.let { remote ->
+                    val resolvedName = savedHeroName(mascotId, remote)
                     _state.update { current ->
-                        if (current.mascot?.id == mascotId) current.copy(mascot = remote) else current
+                        if (current.mascot?.id == mascotId) current.copy(mascot = remote.copy(name = resolvedName)) else current
                     }
                 }
                 runCatching { heroStore.sync(api, mascotId) }
@@ -747,11 +1078,15 @@ class AppViewModel(
     }
 
     private fun publishAnimationLibrary(mascotId: String) {
+        val resolvedName = savedHeroName(mascotId)
         val library = ANIMATION_STATE_KEYS.associateWith { stateKey ->
-            heroStore.playbackSequenceFiles(mascotId, stateKey).map { it.toURI().toString() }
+            heroStore.librarySequenceFiles(mascotId, stateKey).map { it.toURI().toString() }
         }
         _state.update {
             it.copy(
+                mascot = it.mascot?.let { hero ->
+                    if (hero.id == mascotId) hero.copy(name = resolvedName) else hero
+                },
                 animationLibrary = library,
                 animationPackReady = heroStore.animationPackReady(mascotId),
             )
@@ -759,14 +1094,10 @@ class AppViewModel(
     }
 
     private suspend fun loadContext(interact: Boolean): ContextDto? {
-        val remote = if (BuildConfig.DIRECT_OPENAI_GENERATION) null
-            else runCatching { api.context(interact) }.getOrNull()
-        val rawContext = remote ?: run {
-            val mascotId = session.acceptedMascotId() ?: return null
-            localContext(mascotId)
-        }
+        val selectedId = session.acceptedMascotId() ?: return null
+        val rawContext = localContext(selectedId)
         val mascotId = session.acceptedMascotId() ?: session.mascotId()
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION && mascotId != null) {
+        if (!directMode() && mascotId != null) {
             runCatching { heroStore.sync(api, mascotId) }
         }
         val frames = mascotId?.let { heroStore.playbackSequenceFiles(it, rawContext.stateKey) }.orEmpty()
@@ -779,24 +1110,17 @@ class AppViewModel(
             animationFrames = if (frames.isEmpty()) rawContext.animationFrames else frames.map { it.toURI().toString() },
             animationFps = if (frames.isEmpty()) rawContext.animationFps else HeroLocalStore.FULL_FRAME_FPS,
         )
-        session.saveCurrentState(ctx.stateKey)
         return ctx.also {
         _state.update { it.copy(context = ctx) }
         pushWidget(ctx)
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION && ctx.playbackMode == "clip") {
-            viewModelScope.launch {
-                delay(ctx.motionMs.toLong() + 400)
-                runCatching { api.context(false) }.getOrNull()?.let { next ->
-                    _state.update { it.copy(context = next) }
-                    pushWidget(next)
-                }
-            }
-        }
     }
     }
 
     private suspend fun localContext(mascotId: String): ContextDto {
-        val stateKey = LocalContextResolver().resolve()
+        behavior?.let { coordinator ->
+            return contextForRecord(mascotId, coordinator.refresh(fetchExternal = false))
+        }
+        val stateKey = "idle" // Test/preview contexts without MascotApp do not choose states.
         val still = heroStore.stateFile(mascotId, stateKey) ?: heroStore.baseFile(mascotId)
         val frames = heroStore.playbackSequenceFiles(mascotId, stateKey)
         return ContextDto(
@@ -812,19 +1136,101 @@ class AppViewModel(
         )
     }
 
+    private fun contextForRecord(mascotId: String, record: com.generativemascot.app.state.StateRecord): ContextDto {
+        val action = com.generativemascot.app.state.renderedAction(record, heroStore.actionVideoUrls(mascotId).keys)
+        return ContextDto(stateKey = action, reasonCode = record.triggerReason,
+            reasonText = "${record.currentStateId.name}: ${record.triggerReason}", cityName = MOSCOW_NAME,
+            stillUrl = (heroStore.stateFile(mascotId, action) ?: heroStore.baseFile(mascotId))?.toURI()?.toString(),
+            animationUrl = heroStore.actionVideoFile(mascotId, action)?.toURI()?.toString()
+                ?: heroStore.performanceVideoFile(mascotId)?.toURI()?.toString(),
+            animationFrames = heroStore.playbackSequenceFiles(mascotId, action).map { it.toURI().toString() },
+            animationFps = HeroLocalStore.FULL_FRAME_FPS)
+    }
+
     private suspend fun pushWidget(ctx: ContextDto) {
-        session.saveCurrentState(ctx.stateKey)
         val mascotId = session.acceptedMascotId() ?: session.mascotId()
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION && mascotId != null) {
+        if (!directMode() && mascotId != null) {
             runCatching { heroStore.sync(api, mascotId) }
         }
-        val key = "${ctx.stateKey}|${ctx.stillUrl}|${ctx.animationFrames.size}"
+        val key = "${behavior?.store?.current?.revision}|${ctx.stateKey}|${ctx.stillUrl}|${ctx.animationFrames.size}"
         if (key == lastWidgetPush) return
         lastWidgetPush = key
         runCatching { updateMascotWidgets(session.appContext) }
     }
-    fun openSettings() = _state.update { it.copy(route = "settings") }
+    fun openSettings() = _state.update {
+        it.copy(
+            route = "settings",
+            openRouterKeyDraft = "",
+            openRouterMessage = null,
+            generationRoute = if (directMode()) GenerationRoute.OPENROUTER_DIRECT else GenerationRoute.TEAM_SERVER,
+            openRouterKeyPresent = openRouterSettings.hasApiKey(),
+        )
+    }
     fun backToHero() = _state.update { it.copy(route = "knock") }
+
+    fun onOpenRouterKey(value: String) = _state.update {
+        it.copy(openRouterKeyDraft = value.trim().take(256), openRouterMessage = null)
+    }
+
+    fun useTeamServer() {
+        if (_state.value.creating || _state.value.packBusy) return
+        openRouterSettings.setRoute(GenerationRoute.TEAM_SERVER)
+        _state.update {
+            it.copy(
+                generationRoute = GenerationRoute.TEAM_SERVER,
+                openRouterMessage = "Новые генерации пойдут через командный сервер",
+            )
+        }
+    }
+
+    fun saveAndUseOpenRouterKey() {
+        if (_state.value.creating || _state.value.packBusy || _state.value.openRouterChecking) return
+        val draft = _state.value.openRouterKeyDraft
+        val candidate = draft.takeIf { it.isNotBlank() } ?: openRouterSettings.apiKey()
+        if (candidate == null) {
+            _state.update { it.copy(openRouterMessage = "Вставьте ключ OpenRouter") }
+            return
+        }
+        _state.update { it.copy(openRouterChecking = true, openRouterMessage = "Проверяем ключ без платной генерации…") }
+        viewModelScope.launch {
+            runCatching { openRouterVerifier.verify(candidate) }
+                .onSuccess { check ->
+                    if (draft.isNotBlank()) openRouterSettings.saveApiKey(candidate)
+                    openRouterSettings.setRoute(GenerationRoute.OPENROUTER_DIRECT)
+                    val balance = check.remainingUsd?.let { " · доступно $%.2f".format(it) }.orEmpty()
+                    _state.update {
+                        it.copy(
+                            generationRoute = GenerationRoute.OPENROUTER_DIRECT,
+                            openRouterKeyPresent = true,
+                            openRouterKeyDraft = "",
+                            openRouterChecking = false,
+                            openRouterMessage = "Ключ подключён$balance. Новые генерации идут напрямую в OpenRouter.",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            openRouterChecking = false,
+                            openRouterMessage = error.message ?: "Не удалось проверить ключ",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun removeOpenRouterKey() {
+        if (_state.value.creating || _state.value.packBusy) return
+        openRouterSettings.removeApiKey()
+        _state.update {
+            it.copy(
+                generationRoute = GenerationRoute.TEAM_SERVER,
+                openRouterKeyPresent = false,
+                openRouterKeyDraft = "",
+                openRouterMessage = "Ключ удалён с телефона",
+            )
+        }
+    }
 
     fun saveName() {
         saveName(returnHome = true)
@@ -836,14 +1242,29 @@ class AppViewModel(
 
     private fun saveName(returnHome: Boolean) {
         val mascot = _state.value.mascot ?: return
+        val requestedName = _state.value.name
         viewModelScope.launch {
-            runCatching { api.rename(mascot.id, NameBody(_state.value.name)) }
+            if (directMode()) {
+                runCatching { heroStore.saveMascotName(mascot.id, requestedName) }
+                    .onSuccess { savedName ->
+                        _state.update {
+                            it.withSavedHeroName(mascot.id, savedName).copy(
+                                route = if (returnHome && it.mascot?.id == mascot.id) "knock" else it.route,
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        _state.update { it.copy(error = error.message ?: "Не удалось сохранить имя") }
+                    }
+                return@launch
+            }
+            runCatching { api.rename(mascot.id, NameBody(requestedName)) }
                 .onSuccess { updated ->
+                    val savedName = updated.name?.takeIf { it.isNotBlank() } ?: requestedName.trim()
+                    runCatching { heroStore.saveMascotName(mascot.id, savedName) }
                     _state.update {
-                        it.copy(
-                            mascot = updated,
-                            name = updated.name.orEmpty(),
-                            route = if (returnHome) "knock" else it.route,
+                        it.withSavedHeroName(mascot.id, savedName).copy(
+                            route = if (returnHome && it.mascot?.id == mascot.id) "knock" else it.route,
                         )
                     }
                 }
@@ -855,9 +1276,16 @@ class AppViewModel(
 
     fun deleteAccount() {
         viewModelScope.launch {
-            runCatching { api.deleteAccount() }
+            if (!directMode()) runCatching { api.deleteAccount() }
             session.clear()
-            _state.update { AppUiState(ready = true, route = "knock") }
+            _state.update {
+                AppUiState(
+                    ready = true,
+                    route = "knock",
+                    generationRoute = if (directMode()) GenerationRoute.OPENROUTER_DIRECT else GenerationRoute.TEAM_SERVER,
+                    openRouterKeyPresent = openRouterSettings.hasApiKey(),
+                )
+            }
         }
     }
 
@@ -869,9 +1297,15 @@ class AppViewModel(
             else -> "knock"
         }
 
-        fun factory(api: MascotApi, session: SessionStore, heroStore: HeroLocalStore) = object : ViewModelProvider.Factory {
+        fun factory(
+            api: MascotApi,
+            session: SessionStore,
+            heroStore: HeroLocalStore,
+            openRouterSettings: OpenRouterSettingsStore,
+        ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = AppViewModel(api, session, heroStore) as T
+            override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                AppViewModel(api, session, heroStore, openRouterSettings) as T
         }
     }
 }

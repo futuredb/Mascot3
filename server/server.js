@@ -4,6 +4,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
+const { chooseAnimationBatch, chooseGreetingBatch } = require("./animation_batch");
 const { loadEnvFileDefaults } = require("../extensions/02_tools_and_apps/_shared/env_file.js");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -71,6 +72,7 @@ const mascots = new Map();
 const idempotencyKeys = new Map();
 const budgetLedger = [];
 const animationWorkers = new Map();
+const animationStartLocks = new Map();
 let mascotSaveQueue = Promise.resolve();
 let idempotencySaveQueue = Promise.resolve();
 let budgetSaveQueue = Promise.resolve();
@@ -240,6 +242,9 @@ function mascotDto(mascot) {
     reroll_limit: 1,
     prompt_version: PROFILE.id,
     stages,
+    animation_batch_actions: PROFILE.uiStates.filter((state) =>
+      (mascot.animationBatchRequestedIds || mascot.animationBatchIds || []).includes(UI_TO_PIPELINE_ANIMATION[state])),
+    animation_batch_id: mascot.animationBatchDir || null,
     preview_url: mascot.previewPath ? `/assets/${mascot.id}/base.png` : null,
     preview_animation_url: null,
   };
@@ -368,6 +373,7 @@ function animationSource(mascot, pipelineId) {
   if (!mascot.characterDir) return null;
   const batchDirs = [
     mascot.animationBatchDir,
+    ...(mascot.animationBatchHistory || []).filter((dir) => typeof dir === "string" && /^mascot3-mini-[a-z0-9-]+$/i.test(dir)),
     `mascot3-mini-full-v${ANIMATION_CATALOG.version}`,
     `mascot3-mini-completion-v${ANIMATION_CATALOG.version}`,
     "mascot3-core",
@@ -455,11 +461,13 @@ function presentationVideoPath(mascot, state) {
 
 function animationPackDto(mascot) {
   const ready = PROFILE.uiStates.filter((state) => Boolean(animationSource(mascot, UI_TO_PIPELINE_ANIMATION[state])));
+  const requested = PROFILE.uiStates.filter((state) =>
+    (mascot.animationBatchRequestedIds || mascot.animationBatchIds || []).includes(UI_TO_PIPELINE_ANIMATION[state]));
   const blocked = mascot.animationStatus === "failed"
-    ? PROFILE.uiStates.filter((state) => !ready.includes(state))
+    ? requested.filter((state) => !ready.includes(state))
     : [];
-  const queued = blocked.length ? [] : PROFILE.uiStates.filter((state) => !ready.includes(state));
-  return { mascot_id: mascot.id, kind: "video", pack: PROFILE.uiStates.length, requested: PROFILE.uiStates, ready, queued, blocked };
+  const queued = blocked.length ? [] : requested.filter((state) => !ready.includes(state));
+  return { mascot_id: mascot.id, kind: "video", pack: requested.length, requested, ready, queued, blocked };
 }
 
 function videoAsset(mascot, state) {
@@ -504,9 +512,10 @@ async function runAnimationBatch(mascot) {
       if (result.estimated_total_usd > PROFILE.maxAnimationCostUsd) {
         throw new Error("animation_budget_exceeded");
       }
-      if (PROFILE.pipelineAnimations.every((id) => Boolean(animationSource(mascot, id)))) {
-        mascot.animationStatus = "ready";
-        mascot.stages = { ...mascot.stages, animations: "ready" };
+      if (batchIds.every((id) => Boolean(animationSource(mascot, id)))) {
+        const status = PROFILE.pipelineAnimations.every((id) => Boolean(animationSource(mascot, id))) ? "ready" : "partial";
+        mascot.animationStatus = status;
+        mascot.stages = { ...mascot.stages, animations: status };
         await saveMascots();
         return;
       }
@@ -523,7 +532,25 @@ async function runAnimationBatch(mascot) {
   }
 }
 
-async function startAnimationBatch(mascot) {
+async function startAnimationBatch(mascot, requestedCount, greetingKey = null) {
+  if (greetingKey && mascot.greetingRequestKey && mascot.greetingRequestKey !== greetingKey) {
+    throw Object.assign(new Error("greeting_request_key_mismatch"), { status: 409 });
+  }
+  if (greetingKey && animationStartLocks.has(mascot.id)) {
+    throw Object.assign(new Error("animation_batch_start_in_progress_retry_same_key"), { status: 409 });
+  }
+  if (greetingKey && animationWorkers.has(mascot.id) &&
+      (mascot.animationBatchIds?.length !== 1 || mascot.animationBatchIds[0] !== "greeting")) {
+    throw Object.assign(new Error("another_animation_batch_is_running"), { status: 409 });
+  }
+  if (animationStartLocks.has(mascot.id)) return animationStartLocks.get(mascot.id);
+  const pendingStart = prepareAnimationBatch(mascot, requestedCount, greetingKey);
+  animationStartLocks.set(mascot.id, pendingStart);
+  try { return await pendingStart; }
+  finally { animationStartLocks.delete(mascot.id); }
+}
+
+async function prepareAnimationBatch(mascot, requestedCount, greetingKey = null) {
   if (mascot.status !== "READY" || !mascot.characterDir) {
     throw Object.assign(new Error("canonical_not_approved"), { status: 409 });
   }
@@ -537,19 +564,35 @@ async function startAnimationBatch(mascot) {
   if (!animationWorkers.has(mascot.id) && animationPackDto(mascot).ready.length < PROFILE.uiStates.length) {
     const persistedPlanIsValid = Array.isArray(mascot.animationBatchIds)
       && mascot.animationBatchIds.length > 0
+      && new Set(mascot.animationBatchIds).size === mascot.animationBatchIds.length
       && mascot.animationBatchIds.every((id) => PROFILE.pipelineAnimations.includes(id))
       && typeof mascot.animationBatchDir === "string"
       && /^mascot3-mini-[a-z0-9-]+$/i.test(mascot.animationBatchDir);
-    if (!persistedPlanIsValid) {
-      const missing = PROFILE.pipelineAnimations.filter((id) => !animationSource(mascot, id));
-      mascot.animationBatchIds = missing;
-      mascot.animationBatchDir = missing.length === PROFILE.pipelineAnimations.length
-        ? `mascot3-mini-full-v${ANIMATION_CATALOG.version}`
-        : `mascot3-mini-completion-v${ANIMATION_CATALOG.version}`;
+    if ((mascot.animationBatchIds || mascot.animationBatchDir) && !persistedPlanIsValid) {
+      throw Object.assign(new Error("saved_animation_batch_is_invalid_no_paid_requests_started"), { status: 409 });
+    }
+    const ready = PROFILE.pipelineAnimations.filter((id) => animationSource(mascot, id));
+    const plan = greetingKey
+      ? chooseGreetingBatch(PROFILE.pipelineAnimations, ready, persistedPlanIsValid ? mascot.animationBatchIds : null)
+      : chooseAnimationBatch(PROFILE.pipelineAnimations, ready,
+          persistedPlanIsValid ? mascot.animationBatchIds : null, requestedCount);
+    if (greetingKey) mascot.greetingRequestKey = greetingKey;
+    if (greetingKey && !plan.ids.length) {
+      await saveMascots();
+      return animationPackDto(mascot);
+    }
+    mascot.animationBatchRequestedIds = plan.ids.filter((id) => !ready.includes(id));
+    if (!plan.resume) {
+      if (mascot.animationBatchDir) {
+        mascot.animationBatchHistory = [...new Set([...(mascot.animationBatchHistory || []), mascot.animationBatchDir])];
+      }
+      mascot.animationBatchIds = plan.ids;
+      mascot.animationBatchDir = `mascot3-mini-batch-v${ANIMATION_CATALOG.version}-${crypto.randomUUID()}`;
       // Persist the exact paid set before the worker starts. After a process or
       // network interruption, the same batch.json and provider job IDs resume.
       await saveMascots();
     }
+    if (plan.resume) await saveMascots();
     const worker = runAnimationBatch(mascot);
     animationWorkers.set(mascot.id, worker);
   }
@@ -713,14 +756,23 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "POST" && action === "replace") return send(res, 202, await createNativeMascot(idempotencyKey(req)));
       if (req.method === "GET" && action === "manifest") return send(res, 200, nativeManifest(mascot));
     }
+    const greetingMatch = url.pathname.match(/^\/v1\/mascots\/([^/]+)\/greeting$/);
+    if (req.method === "POST" && greetingMatch) {
+      const mascot = mascots.get(greetingMatch[1]);
+      if (!mascot) return send(res, 404, { detail: "mascot_not_found" });
+      const key = idempotencyKey(req);
+      if (!key) return send(res, 400, { detail: "greeting_idempotency_key_required" });
+      return send(res, 202, await startAnimationBatch(mascot, 1, key));
+    }
     const videosMatch = url.pathname.match(/^\/v1\/mascots\/([^/]+)\/videos\/(\d+)$/);
     if (req.method === "POST" && videosMatch) {
       const mascot = mascots.get(videosMatch[1]);
       if (!mascot) return send(res, 404, { detail: "mascot_not_found" });
-      if (Number(videosMatch[2]) !== PROFILE.uiStates.length) {
-        return send(res, 400, { detail: `video_pack_must_be_${PROFILE.uiStates.length}` });
+      const count = Number(videosMatch[2]);
+      if (!Number.isInteger(count) || count < 1 || count > PROFILE.uiStates.length) {
+        return send(res, 400, { detail: `animation_count_must_be_1_to_${PROFILE.uiStates.length}` });
       }
-      return send(res, 202, await startAnimationBatch(mascot));
+      return send(res, 202, await startAnimationBatch(mascot, count));
     }
     if (req.method === "GET" && url.pathname === "/v1/context/current") {
       const current = [...mascots.values()].find((item) => item.active && item.status === "READY");
@@ -783,7 +835,7 @@ server.listen(port, "0.0.0.0", () => {
       && Array.isArray(mascot.animationBatchIds)
       && mascot.animationBatchIds.length > 0
       && mascot.animationBatchDir
-      && !PROFILE.pipelineAnimations.every((id) => Boolean(animationSource(mascot, id)));
+      && !mascot.animationBatchIds.every((id) => Boolean(animationSource(mascot, id)));
     if (!shouldResume || animationWorkers.has(mascot.id)) continue;
     const worker = runAnimationBatch(mascot);
     animationWorkers.set(mascot.id, worker);

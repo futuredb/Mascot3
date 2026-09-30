@@ -78,7 +78,7 @@ test("character CLI plans exactly the requested animation IDs without submitting
   assert.ok(!fs.existsSync(path.join(directory, "animation", batchFolder)), "dry-run must not create animation output");
 });
 
-test("Mascot 3 Mini profile plans all 17 enabled animations below the hard cap", (t) => {
+test("Mascot 3 Mini profile plans all 17 enabled animations below the unchanged hard cap", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mascot3-mini-budget-"));
   fs.mkdirSync(path.join(directory, "canonical"), { recursive: true });
   fs.writeFileSync(path.join(directory, "canonical", "manifest.json"), JSON.stringify({ status: "approved", anchors: ["anchor.png"] }));

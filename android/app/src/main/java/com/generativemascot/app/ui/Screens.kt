@@ -4,9 +4,13 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOutSine
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,7 +24,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Widgets
@@ -33,7 +39,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,12 +55,14 @@ import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.generativemascot.app.data.ContextDto
+import com.generativemascot.app.data.GenerationRoute
 import com.generativemascot.app.data.MascotDto
 import com.generativemascot.app.data.resolveMediaUrl
 import kotlinx.coroutines.coroutineScope
@@ -377,24 +389,120 @@ fun HeroScreen(
 
 @Composable
 fun SettingsScreen(
-    name: String,
-    onName: (String) -> Unit,
-    onSaveName: () -> Unit,
-    onDelete: () -> Unit,
+    generationRoute: GenerationRoute,
+    openRouterKeyPresent: Boolean,
+    openRouterKeyDraft: String,
+    openRouterChecking: Boolean,
+    openRouterMessage: String?,
+    generationLocked: Boolean,
+    onOpenRouterKey: (String) -> Unit,
+    onUseTeamServer: () -> Unit,
+    onUseOpenRouter: () -> Unit,
+    onBack: () -> Unit,
+    onBehaviorSettings: () -> Unit = {},
 ) {
+    var openRouterChosen by rememberSaveable {
+        mutableStateOf(generationRoute == GenerationRoute.OPENROUTER_DIRECT)
+    }
     Screen {
-        Column {
-            Text("Настройки", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(16.dp))
-            Text("Город для погоды: Москва")
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(value = name, onValueChange = onName, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Имя героя") })
-            Spacer(Modifier.height(12.dp))
-            PrimaryButton("Сохранить имя", onClick = onSaveName)
-            Spacer(Modifier.height(24.dp))
-            Text("Удаление убирает город, связи и локальный профиль.", color = Ink.copy(0.6f))
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Назад")
+                }
+                Text("Оплата генерации", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("Удалить данные") }
+            Text("Выберите один вариант", color = Ink.copy(alpha = .62f))
+            TextButton(onClick = onBehaviorSettings) { Text("Поведение героя") }
+            Spacer(Modifier.height(20.dp))
+            GenerationOption(
+                title = "Наш сервер",
+                description = "Всё уже настроено. Генерацию оплачивает команда.",
+                selected = !openRouterChosen,
+                enabled = !generationLocked && !openRouterChecking,
+                onClick = {
+                    openRouterChosen = false
+                    onUseTeamServer()
+                },
+            )
+            Spacer(Modifier.height(12.dp))
+            GenerationOption(
+                title = "Свой OpenRouter",
+                description = "Вставьте свой ключ — оплата пойдёт с вашего баланса.",
+                selected = openRouterChosen,
+                enabled = !generationLocked && !openRouterChecking,
+                onClick = { openRouterChosen = true },
+            )
+
+            if (openRouterChosen) {
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = openRouterKeyDraft,
+                    onValueChange = onOpenRouterKey,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(if (openRouterKeyPresent) "Новый ключ, если хотите заменить" else "Ключ OpenRouter") },
+                    placeholder = { Text("sk-or-v1-…") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !generationLocked && !openRouterChecking,
+                )
+                Spacer(Modifier.height(12.dp))
+                PrimaryButton(
+                    text = when {
+                        openRouterChecking -> "Проверяем ключ…"
+                        generationRoute == GenerationRoute.OPENROUTER_DIRECT && openRouterKeyDraft.isBlank() ->
+                            "OpenRouter подключён"
+                        openRouterKeyPresent && openRouterKeyDraft.isBlank() -> "Использовать сохранённый ключ"
+                        else -> "Подключить OpenRouter"
+                    },
+                    enabled = !generationLocked && !openRouterChecking &&
+                        (openRouterKeyDraft.isNotBlank() ||
+                            openRouterKeyPresent && generationRoute != GenerationRoute.OPENROUTER_DIRECT),
+                    onClick = onUseOpenRouter,
+                )
+                openRouterMessage?.let { message ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(message, color = Ink.copy(alpha = .68f), fontSize = 14.sp)
+                }
+            }
+            if (generationLocked) {
+                Spacer(Modifier.height(16.dp))
+                Text("Сейчас идёт генерация. Выбор можно поменять после её завершения.", color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun GenerationOption(
+    title: String,
+    description: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) Lilac else Ink.copy(alpha = .14f)),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) Lilac.copy(alpha = .10f) else Color.White,
+            contentColor = Ink,
+        ),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                if (selected) Text("✓", color = Lilac, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(description, color = Ink.copy(alpha = .62f), fontSize = 14.sp, textAlign = TextAlign.Start)
         }
     }
 }

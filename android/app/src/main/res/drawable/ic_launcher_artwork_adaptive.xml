@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The handoff is flattened artwork. Compensate for the adaptive icon's
+     extra layer bounds so the launcher retains the original composition. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_artwork"
+    android:inset="16.666667%" />

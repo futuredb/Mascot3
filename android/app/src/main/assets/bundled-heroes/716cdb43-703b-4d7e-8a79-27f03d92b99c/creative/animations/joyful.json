@@ -1,0 +1,31 @@
+{
+    "action": "joyful",
+    "actionGoal": "Acknowledge the viewer's touch with one unmistakable personal expression of delight.",
+    "beats": [
+        "Hold the home pose long enough to notice the viewer through the eyes first.",
+        "Compress or shift weight in one clear anticipation without changing body topology.",
+        "It recognizes attention, listens closely, answers with one bright physical accent and remains curious after settling.",
+        "Let secondary motion finish and recover through a calm readable path to the exact home pose."
+    ],
+    "tempo": "one clear emotional rise and one unhurried recovery; never repeat the peak gesture",
+    "gaze": "notice the viewer, remain emotionally engaged through the peak, then return to the canonical gaze",
+    "secondaryMotion": "existing ears, tail, wings or gills may overlap the torso action and must settle last",
+    "protectedInvariants": [
+        "Exactly one same character: a small original samurai guardian in historically respectful lamellar-inspired armor, empty-handed and without a weapon or real clan symbol.",
+        "Body topology never changes: one head, one torso, exactly two arms, two hands, two legs and two feet; one compact helmet, two short helmet cords and every armor plate form an attached, coherent costume.",
+        "Identity cues remain unchanged: a low wide silhouette that can compress and unfurl without losing identity; one small crescent chest marking offset from center.",
+        "Palette, face, material, markings, scale, orientation and on-canvas position remain locked to the source image.",
+        "At least twenty percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything integrated into it stay inside the central sixty percent of the image.",
+        "Every pixel outside the silhouette remains the same perfectly uniform matte with no additional visible element."
+    ],
+    "performanceFreedom": [
+        "Natural movement is allowed only through torso, neck, arms, hands, legs, helmet cords and attached armor plates.",
+        "Gaze, eyelids, mouth and restrained torso compression may support the performance without redesigning the face.",
+        "Secondary overlap may follow this plasticity: soft compression with delayed secondary settling while facial topology remains stable."
+    ],
+    "closure": "The final frame must restore the supplied first frame's pose, expression, breathing phase, orientation, scale, coordinates, silhouette and appendage placement without a cut or crossfade.",
+    "enterSeconds": 0.7,
+    "loopStartSeconds": 0.7,
+    "loopEndSeconds": 7.2,
+    "exitSeconds": 0.8
+}

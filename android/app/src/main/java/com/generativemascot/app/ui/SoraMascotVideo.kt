@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +48,9 @@ private const val PREPARE_BEFORE_END_MS = 500L
 private const val TRANSITION_BEFORE_END_MS = 220L
 private const val SEAMLESS_SWAP_BEFORE_END_MS = 35L
 private const val SLEEP_ANCHOR_MS = 6_000L
+private const val DERIVED_SLEEP_ANCHOR_MS = 2_100L
+private const val DERIVED_SLEEP_START_MS = 1_600L
+private const val DERIVED_SLEEP_END_MS = 4_400L
 private const val SLEEP_HANDOFF_PRELOAD_MS = 700L
 private const val SLEEP_HANDOFF_CROSSFADE_MS = 360L
 private const val SLEEP_LOOP_MARKER = "sleep-loop-ready"
@@ -105,14 +109,27 @@ fun SoraMascotVideo(
     action: String?,
     interaction: PuppetInteraction = PuppetInteraction(),
     modifier: Modifier = Modifier,
+    onAnimationVisible: ((String) -> Unit)? = null,
+    onOneShotFinished: ((String) -> Unit)? = null,
 ) {
     if (videoUrls.isEmpty()) {
         if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier)
         return
     }
 
-    val normalizedUrls = remember(videoUrls) {
-        videoUrls.entries.associate { (key, value) -> HeroLocalStore.normalizeVideoAction(key) to value }
+    val derivedSleepLoop = remember(videoUrls) {
+        videoUrls.keys.none { HeroLocalStore.normalizeVideoAction(it) == "sleep_loop" } &&
+            videoUrls.keys.any { HeroLocalStore.normalizeVideoAction(it) == "sleeping" }
+    }
+    val normalizedUrls = remember(videoUrls, derivedSleepLoop) {
+        val normalized = videoUrls.entries.associate { (key, value) ->
+            HeroLocalStore.normalizeVideoAction(key) to value
+        }
+        if (derivedSleepLoop) {
+            normalized + ("sleep_loop" to normalized.getValue("sleeping"))
+        } else {
+            normalized
+        }
     }
     val backgroundKeys by produceState<Map<String, Int>>(
         initialValue = emptyMap(),
@@ -130,8 +147,11 @@ fun SoraMascotVideo(
             neutralFrameUrl?.let(::detectBackgroundColor) ?: Color.rgb(232, 244, 252)
         }
     }
-    val idleAction = if (normalizedUrls.containsKey("idle")) "idle" else normalizedUrls.keys.first()
-    var requestedAction by remember(normalizedUrls) { mutableStateOf(idleAction) }
+    val idleAction = defaultHomeVideoAction(normalizedUrls.keys)
+    val greetingOnly = greetingIsOnlyVideo(normalizedUrls.keys)
+    var requestedAction by remember(normalizedUrls) {
+        mutableStateOf(resolveAvailableHomeAction(action ?: "idle", normalizedUrls.keys))
+    }
     var requestSerial by remember(normalizedUrls) { mutableIntStateOf(0) }
 
     fun queue(actionName: String) {
@@ -143,7 +163,7 @@ fun SoraMascotVideo(
 
     LaunchedEffect(action) {
         val normalized = HeroLocalStore.normalizeVideoAction(action ?: "idle")
-        if (normalized != "idle") queue(normalized)
+        queue(normalized)
     }
     LaunchedEffect(interaction.actionSerial) {
         if (interaction.actionSerial > 0) interaction.actionName?.let(::queue)
@@ -156,6 +176,8 @@ fun SoraMascotVideo(
     LaunchedEffect(interaction.danceSerial) { if (interaction.danceSerial > 0) queue("dancing") }
 
     val context = LocalContext.current
+    val visibleCallback by rememberUpdatedState(onAnimationVisible)
+    val finishedCallback by rememberUpdatedState(onOneShotFinished)
     val firstFrameRendered = remember(normalizedUrls) { BooleanArray(2) }
     val players = remember(normalizedUrls) {
         List(2) { index ->
@@ -232,7 +254,8 @@ fun SoraMascotVideo(
             anchor.alpha = 1f
         }
         var activeIndex = 0
-        var currentAction = idleAction
+        var currentAction = requestedAction
+        var oneShotBoundaryReportedAt: Long? = null
         // Start at zero instead of copying requestSerial: a detail screen can
         // request its action before the players finish initializing.
         var consumedSerial = 0
@@ -255,11 +278,24 @@ fun SoraMascotVideo(
                 playerViews[index],
                 backgroundKeys[actionName] ?: Color.rgb(232, 244, 252),
             )
+            val item = MediaItem.Builder()
+                .setUri(mediaUri(url))
+                .apply {
+                    if (actionName == "sleep_loop" && derivedSleepLoop) {
+                        setClippingConfiguration(
+                            MediaItem.ClippingConfiguration.Builder()
+                                .setStartPositionMs(DERIVED_SLEEP_START_MS)
+                                .setEndPositionMs(DERIVED_SLEEP_END_MS)
+                                .build(),
+                        )
+                    }
+                }
+                .build()
             players[index].apply {
                 stop()
                 clearMediaItems()
-                repeatMode = Player.REPEAT_MODE_OFF
-                setMediaItem(MediaItem.fromUri(mediaUri(url)))
+                repeatMode = if (greetingOnly) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                setMediaItem(item)
                 prepare()
             }
         }
@@ -305,6 +341,8 @@ fun SoraMascotVideo(
             outgoing.seekTo(0)
             activeIndex = incomingIndex
             currentAction = actionName
+            oneShotBoundaryReportedAt = null
+            visibleCallback?.invoke(currentAction)
             if (queuedAction == currentAction) queuedAction = null
             preparedAction = null
             Log.i("MascotPlayback", "immediate transition current=$currentAction")
@@ -317,6 +355,7 @@ fun SoraMascotVideo(
         waitForFirstFrame(activeIndex)
         if (!isActive) return@LaunchedEffect
         playerViews[activeIndex].alpha = 1f
+        visibleCallback?.invoke(currentAction)
         neutralView?.let { anchor ->
             val steps = 9
             repeat(steps) { step ->
@@ -336,7 +375,24 @@ fun SoraMascotVideo(
 
             val active = players[activeIndex]
             val inactiveIndex = 1 - activeIndex
-            val desiredNext = queuedAction ?: idleAction
+            // Until other clips are ready, the saved greeting is the baseline.
+            // Repeat in the active player, without neutral-frame freezes or decoder swaps.
+            if (greetingOnly) {
+                queuedAction = null
+                delay(32)
+                continue
+            }
+            // Direct-key packs contain the paid catalog clips. In
+            // that mode `sleeping` itself is the closed breathing loop, so keep
+            // repeating it until the user interacts instead of buying an
+            // additional `sleep_loop` video.
+            val desiredNext = queuedAction ?: if (
+                currentAction == "sleeping" && !normalizedUrls.containsKey("sleep_loop")
+            ) {
+                "sleeping"
+            } else {
+                requestedAction
+            }
 
             // Idle is ambient, not a user-authored action. Never make a tap
             // wait up to six seconds for its loop boundary. Sleep must also be
@@ -344,18 +400,13 @@ fun SoraMascotVideo(
             // dance still play to completion once they have begun.
             if (
                 queuedAction != null &&
-                desiredNext != currentAction &&
-                (
-                    currentAction == idleAction ||
-                    currentAction == "sleeping" ||
-                    currentAction == "sleep_loop"
-                )
+                shouldInterruptHomeClip(currentAction, desiredNext, idleAction)
             ) {
                 handOffNow(desiredNext)
                 continue
             }
             val sleepAnchor = minOf(
-                SLEEP_ANCHOR_MS,
+                if (derivedSleepLoop) DERIVED_SLEEP_ANCHOR_MS else SLEEP_ANCHOR_MS,
                 (active.duration - 750L).coerceAtLeast(500L),
             )
 
@@ -444,6 +495,15 @@ fun SoraMascotVideo(
                         val outgoingView = playerViews[activeIndex]
                         val incomingView = playerViews[inactiveIndex]
                         active.pause()
+                        if (derivedSleepLoop) {
+                            val steps = 9
+                            repeat(steps) { step ->
+                                val mix = (step + 1f) / steps
+                                outgoingView.alpha = 1f - mix
+                                incomingView.alpha = mix
+                                delay(CROSSFADE_MS / steps)
+                            }
+                        }
                         active.seekTo(0)
                         outgoingView.alpha = 0f
                         incomingView.alpha = 1f
@@ -480,6 +540,20 @@ fun SoraMascotVideo(
             }
             val atBoundary = remaining <= boundaryWindow || active.playbackState == Player.STATE_ENDED
             if (atBoundary) {
+                // Report the actual first clip boundary rather than relying on the
+                // resolver's one-second safety timer. Do not begin a second greeting
+                // or signature while its shared-state transition is being published.
+                // A bounded wait also keeps last-ready-video fallback packs playable.
+                if (finishedCallback != null && currentAction in setOf("greeting", "signature_move") && desiredNext == currentAction) {
+                    if (oneShotBoundaryReportedAt == null) {
+                        oneShotBoundaryReportedAt = SystemClock.uptimeMillis()
+                        finishedCallback?.invoke(currentAction)
+                    }
+                    if (SystemClock.uptimeMillis() - (oneShotBoundaryReportedAt ?: 0L) < 750L) {
+                        delay(16)
+                        continue
+                    }
+                }
                 if (preparedAction != desiredNext) {
                     prepare(inactiveIndex, desiredNext)
                     preparedAction = desiredNext
@@ -530,6 +604,8 @@ fun SoraMascotVideo(
                 incomingView.alpha = 1f
                 activeIndex = inactiveIndex
                 currentAction = desiredNext
+                if (currentAction !in setOf("greeting", "signature_move")) oneShotBoundaryReportedAt = null
+                visibleCallback?.invoke(currentAction)
                 Log.i("MascotPlayback", "transition complete current=$currentAction")
                 if (queuedAction == currentAction) queuedAction = null
                 preparedAction = null

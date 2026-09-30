@@ -4,7 +4,7 @@ import java.security.MessageDigest
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-internal const val VIDEO_PROMPT_CATALOG_VERSION = 2
+internal const val VIDEO_PROMPT_CATALOG_VERSION = 4
 internal const val VIDEO_PACK_MANIFEST_VERSION = 1
 
 @Serializable
@@ -99,12 +99,13 @@ internal fun validateResolvedVideoPrompt(prompt: String, matteHex: String) {
 }
 
 internal fun defaultVideoTransitions(): List<VideoTransitionManifest> = listOf(
+    VideoTransitionManifest("idle", "greeting", "app_foreground", "play_once_if_saved_interruptible"),
+    VideoTransitionManifest("greeting", "idle", "clip_finished", "crossfade_at_canonical_anchor"),
     VideoTransitionManifest("idle", "joyful", "tap_or_pet", "finish_current_then_crossfade_at_anchor"),
     VideoTransitionManifest("idle", "dancing", "swipe_up", "finish_current_then_crossfade_at_anchor"),
-    VideoTransitionManifest("idle", "sleeping", "sleep_gesture", "play_authored_enter_to_sleep_anchor"),
-    VideoTransitionManifest("sleeping", "sleep_loop", "sleep_anchor_reached", "crossfade_matching_anchor"),
-    VideoTransitionManifest("sleep_loop", "sleep_loop", "no_interaction", "repeat_closed_cycle"),
-    VideoTransitionManifest("sleep_loop", "sleeping", "any_interaction", "resume_authored_wake_tail_from_sleep_anchor"),
+    VideoTransitionManifest("idle", "sleeping", "sleep_gesture", "crossfade_at_canonical_anchor"),
+    VideoTransitionManifest("sleeping", "sleeping", "no_interaction", "repeat_closed_cycle"),
+    VideoTransitionManifest("sleeping", "joyful", "any_interaction", "crossfade_at_canonical_anchor"),
     VideoTransitionManifest("joyful", "idle", "clip_finished", "crossfade_at_canonical_anchor"),
     VideoTransitionManifest("dancing", "idle", "clip_finished", "crossfade_at_canonical_anchor"),
 )

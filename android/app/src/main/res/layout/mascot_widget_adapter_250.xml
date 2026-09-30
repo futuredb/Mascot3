@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AdapterViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_flipper"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:animateFirstView="false"
+    android:autoStart="true"
+    android:background="@android:color/transparent"
+    android:flipInterval="250"
+    android:inAnimation="@animator/widget_frame_in"
+    android:outAnimation="@animator/widget_frame_out"
+    android:loopViews="true" />

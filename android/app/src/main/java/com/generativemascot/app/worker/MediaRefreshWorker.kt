@@ -35,8 +35,7 @@ class MediaRefreshWorker(
             return Result.retry()
         }
         runCatching {
-            val currentState = app.api.context(interact = false).stateKey
-            app.session.saveCurrentState(currentState)
+            app.behavior.refresh()
             updateMascotWidgets(applicationContext)
         }.getOrElse {
             return Result.retry()

@@ -4,6 +4,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { loadEnvFileDefaults } = require("../../extensions/02_tools_and_apps/_shared/env_file.js");
 const { resolveProductionAnimation, runProductionAnimation } = require("../lib/production_animation.js");
+const { canResumeAdditiveWelcomeUpdate } = require("../lib/animation_batch_compatibility.js");
 
 const ROOT = path.resolve(__dirname, "..");
 const DATA_ROOT = process.env.PET_V2_DATA_DIR ? path.resolve(process.env.PET_V2_DATA_DIR) : ROOT;
@@ -167,7 +168,8 @@ async function animate(options) {
   let existing = null;
   if (submit && fs.existsSync(existingPath)) {
     existing = JSON.parse(fs.readFileSync(existingPath, "utf8"));
-    if (existing.contract !== ANIMATION_BATCH_CONTRACT || existing.character_dir !== characterDir || existing.catalog_version !== catalog.version) {
+    if (existing.contract !== ANIMATION_BATCH_CONTRACT || existing.character_dir !== characterDir ||
+        (existing.catalog_version !== catalog.version && !canResumeAdditiveWelcomeUpdate(existing, catalog))) {
       throw new Error("Existing batch.json belongs to a different character or catalog version; choose a new --batch-dir");
     }
     const existingIds = existing.states.map((state) => state.id).join(",");
@@ -177,7 +179,7 @@ async function animate(options) {
   const batch = {
     contract: ANIMATION_BATCH_CONTRACT,
     character_dir: characterDir,
-    catalog_version: catalog.version,
+    catalog_version: existing?.catalog_version ?? catalog.version,
     created_at: existing?.created_at || new Date().toISOString(),
     submitted: submit,
     output_directory: batchDir,

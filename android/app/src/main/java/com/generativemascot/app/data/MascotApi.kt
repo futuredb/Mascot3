@@ -54,6 +54,9 @@ interface MascotApi {
     @POST("/v1/mascots/{id}/videos/{pack}")
     suspend fun generateVideos(@Path("id") id: String, @Path("pack") pack: Int): GenerationPackDto
 
+    @POST("/v1/mascots/{id}/greeting")
+    suspend fun generateGreeting(@Path("id") id: String, @Header("Idempotency-Key") key: String): GenerationPackDto
+
     @POST("/v1/mascots/{id}/replace")
     suspend fun replace(@Path("id") id: String, @Header("Idempotency-Key") key: String): MascotDto
 
@@ -92,7 +95,9 @@ fun createApi(deviceIdProvider: () -> String): MascotApi {
     }
     val client = OkHttpClient.Builder()
         .addInterceptor(auth)
-        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+        .addInterceptor(HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
+        })
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(180, TimeUnit.SECONDS)

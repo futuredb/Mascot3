@@ -9,19 +9,31 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import com.generativemascot.app.data.BundledHeroImporter
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.OpenRouterSettingsStore
 import com.generativemascot.app.data.SessionStore
 import com.generativemascot.app.data.createApi
 import com.generativemascot.app.worker.ContextRefreshWorker
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MascotApp : Application(), ImageLoaderFactory {
     lateinit var session: SessionStore
         private set
     val api by lazy { createApi { runBlocking { session.deviceId() } } }
     lateinit var heroStore: HeroLocalStore
+        private set
+    lateinit var openRouterSettings: OpenRouterSettingsStore
+        private set
+    private val bundledHeroesMutex = Mutex()
+    private var bundledHeroesImported = false
+    lateinit var behavior: com.generativemascot.app.state.BehaviorCoordinator
         private set
 
     override fun newImageLoader(): ImageLoader {
@@ -38,20 +50,18 @@ class MascotApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
-        seedBundledHeroes()
         session = SessionStore(this)
         heroStore = HeroLocalStore(this)
+        openRouterSettings = OpenRouterSettingsStore(this)
         HeroLocalStore.attach(heroStore)
-        if (!BuildConfig.DIRECT_OPENAI_GENERATION) {
-            val work = PeriodicWorkRequestBuilder<ContextRefreshWorker>(15, TimeUnit.MINUTES).build()
-            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                "mascot-context-refresh",
-                ExistingPeriodicWorkPolicy.UPDATE,
-                work,
-            )
-        } else {
-            WorkManager.getInstance(this).cancelUniqueWork("mascot-context-refresh")
-        }
+        behavior = com.generativemascot.app.state.BehaviorCoordinator(this)
+        behavior.start()
+        val work = PeriodicWorkRequestBuilder<ContextRefreshWorker>(behavior.config.get().refreshMinutes.toLong(), TimeUnit.MINUTES).build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "mascot-context-refresh",
+            ExistingPeriodicWorkPolicy.UPDATE,
+            work,
+        )
     }
 
     /**
@@ -59,29 +69,16 @@ class MascotApp : Application(), ImageLoaderFactory {
      * library under assets/bundled-heroes. Copy missing files only so app
      * updates never overwrite characters or animations created on the device.
      */
-    private fun seedBundledHeroes() {
-        val assetRoot = "bundled-heroes"
-        val heroIds = assets.list(assetRoot).orEmpty()
-        if (heroIds.isEmpty()) return
-        val destinationRoot = File(filesDir, "hero").apply { mkdirs() }
-        heroIds.forEach { heroId ->
-            copyAssetTree("$assetRoot/$heroId", File(destinationRoot, heroId))
-        }
-    }
-
-    private fun copyAssetTree(assetPath: String, destination: File) {
-        val children = assets.list(assetPath).orEmpty()
-        if (children.isNotEmpty()) {
-            destination.mkdirs()
-            children.forEach { child ->
-                copyAssetTree("$assetPath/$child", File(destination, child))
+    internal suspend fun ensureBundledHeroes() = withContext(Dispatchers.IO) {
+        bundledHeroesMutex.withLock {
+            if (!bundledHeroesImported) {
+                BundledHeroImporter(
+                    listAssets = { path -> assets.list(path).orEmpty() },
+                    openAsset = { path -> assets.open(path) },
+                    destinationRoot = File(filesDir, "hero"),
+                ).importAll()
+                bundledHeroesImported = true
             }
-            return
-        }
-        if (destination.isFile) return
-        destination.parentFile?.mkdirs()
-        assets.open(assetPath).use { input ->
-            destination.outputStream().use(input::copyTo)
         }
     }
 }

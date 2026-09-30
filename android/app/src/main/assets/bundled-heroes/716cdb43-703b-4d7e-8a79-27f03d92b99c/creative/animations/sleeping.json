@@ -1,0 +1,31 @@
+{
+    "action": "sleeping",
+    "actionGoal": "It falls fast asleep; only slow breathing moves it during the quiet middle of the clip.",
+    "beats": [
+        "Grow drowsy from the exact home pose and settle without an abrupt pose swap.",
+        "Become fully asleep with closed eyes and stable body contacts.",
+        "Complete one slow whole-body breath while remaining deeply asleep.",
+        "Wake softly and recover along the same weight path to the exact home pose."
+    ],
+    "tempo": "slow enter, long quiet breathing plateau, then a soft deliberate exit",
+    "gaze": "eyes close during enter, remain closed for the entire loop, and reopen only during exit",
+    "secondaryMotion": "only breathing-scale motion during the loop; no spontaneous waking, sitting or standing",
+    "protectedInvariants": [
+        "Exactly one same character: a small original samurai guardian in historically respectful lamellar-inspired armor, empty-handed and without a weapon or real clan symbol.",
+        "Body topology never changes: one head, one torso, exactly two arms, two hands, two legs and two feet; one compact helmet, two short helmet cords and every armor plate form an attached, coherent costume.",
+        "Identity cues remain unchanged: a low wide silhouette that can compress and unfurl without losing identity; one small crescent chest marking offset from center.",
+        "Palette, face, material, markings, scale, orientation and on-canvas position remain locked to the source image.",
+        "At least twenty percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything integrated into it stay inside the central sixty percent of the image.",
+        "Every pixel outside the silhouette remains the same perfectly uniform matte with no additional visible element."
+    ],
+    "performanceFreedom": [
+        "Natural movement is allowed only through torso, neck, arms, hands, legs, helmet cords and attached armor plates.",
+        "Gaze, eyelids, mouth and restrained torso compression may support the performance without redesigning the face.",
+        "Secondary overlap may follow this plasticity: soft compression with delayed secondary settling while facial topology remains stable."
+    ],
+    "closure": "The final frame must restore the supplied first frame's pose, expression, breathing phase, orientation, scale, coordinates, silhouette and appendage placement without a cut or crossfade.",
+    "enterSeconds": 1.25,
+    "loopStartSeconds": 1.25,
+    "loopEndSeconds": 4.75,
+    "exitSeconds": 1.25
+}

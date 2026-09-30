@@ -70,6 +70,7 @@ test("animation catalog contains all migrated state families", async () => {
   assert.ok(animations.entries.find((entry) => entry.id === "signature_move"));
   assert.equal(animations.contract, 4);
   assert.ok(animations.entries.every((entry) => entry.duration.max_seconds === 10));
+  assert.equal(animations.entries.find((entry) => entry.id === "welcome"), undefined);
   assert.equal(animations.entries.find((entry) => entry.id === "greeting").group, "active_motion");
   assert.equal(animations.entries.find((entry) => entry.id === "stretch").group, "active_motion");
   assert.ok(!animations.entries.some((entry) => entry.id === "spin" || entry.id === "spark"));

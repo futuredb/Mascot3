@@ -1,6 +1,7 @@
 package com.generativemascot.app.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,7 +27,9 @@ class CreativePromptContractsTest {
         assertTrue(prompt.contains("CANONICAL ANCHOR"))
         assertTrue(prompt.contains(character.body.visibleParts))
         assertTrue(prompt.contains(character.visualSignature.primarySilhouetteCue))
-        assertTrue(prompt.contains("genuine transparent PNG"))
+        assertTrue(prompt.contains("solid #00FF00 chroma-key green background"))
+        assertTrue(prompt.contains("removed"))
+        assertTrue(prompt.contains("locally"))
         assertTrue(prompt.contains("every documented body part"))
     }
 
@@ -89,10 +92,10 @@ class CreativePromptContractsTest {
         val direction = animationContract("sleeping", seed = 17)
         val prompt = buildCharacterAnimationPrompt("sleeping", seed = 17)
 
-        assertEquals(3.8, direction.loopStartSeconds, 0.0)
-        assertEquals(8.4, direction.loopEndSeconds, 0.0)
+        assertEquals(1.25, direction.loopStartSeconds, 0.0)
+        assertEquals(4.75, direction.loopEndSeconds, 0.0)
         assertTrue(prompt.contains("remain closed for the entire loop"))
-        assertTrue(prompt.contains("Exit only after 8.4s"))
+        assertTrue(prompt.contains("wake and recover during the final 1.25s"))
         assertTrue(prompt.contains("no spontaneous waking"))
     }
 
@@ -148,9 +151,33 @@ class CreativePromptContractsTest {
     fun videoManifestDeclaresPersistentSleepTransitions() {
         val transitions = defaultVideoTransitions()
 
-        assertTrue(transitions.any { it.from == "sleeping" && it.to == "sleep_loop" })
-        assertTrue(transitions.any { it.from == "sleep_loop" && it.to == "sleep_loop" })
-        assertTrue(transitions.any { it.from == "sleep_loop" && it.to == "sleeping" })
+        assertTrue(transitions.any { it.from == "idle" && it.to == "sleeping" })
+        assertTrue(transitions.any { it.from == "sleeping" && it.to == "sleeping" })
+        assertTrue(transitions.any { it.from == "sleeping" && it.to == "joyful" })
+    }
+
+    @Test
+    fun providerPackHasSeventeenCatalogActionsAndOneHundredTwelveSeconds() {
+        assertEquals(17, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size)
+        assertEquals(112, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.sumOf(::videoDurationSeconds))
+        assertEquals(
+            HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size,
+            HeroLocalStore.LIBRARY_VIDEO_ACTIONS.map { animationContract(it, seed = 19).actionGoal }.toSet().size,
+        )
+    }
+
+    @Test fun appEntryReusesTheExistingGreetingPrompt() {
+        val prompt = buildCharacterAnimationPrompt("greeting", seed = 19)
+        assertEquals(6, videoDurationSeconds("greeting"))
+        assertFalse("welcome" in HeroLocalStore.LIBRARY_VIDEO_ACTIONS)
+        assertTrue("greeting" in HeroLocalStore.LIBRARY_VIDEO_ACTIONS)
+        validateResolvedVideoPrompt(prompt, "#00FF00")
+    }
+
+    @Test fun greetingPromptRemainsValidAcrossDifferentCharacterBodyProfiles() {
+        repeat(96) { seed ->
+            validateResolvedVideoPrompt(buildCharacterAnimationPrompt("greeting", seed = seed), "#00FF00")
+        }
     }
 
     @Test

@@ -4,13 +4,27 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
+import android.os.Build
+import android.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.security.MessageDigest
+import java.util.UUID
+
+data class WidgetAnimationFrames(
+    val files: List<File>,
+    val frameIntervalMs: Int,
+    val fromVideoCache: Boolean = false,
+)
 
 class HeroLocalStore(context: Context) {
     private val appContext = context.applicationContext
@@ -42,12 +56,49 @@ class HeroLocalStore(context: Context) {
     fun baseFile(mascotId: String): File? =
         File(root, "$mascotId/base.png").takeIf { it.isFile }
 
-    fun mascotName(mascotId: String): String? =
-        File(root, "$mascotId/name.txt")
-            .takeIf { it.isFile }
-            ?.readText()
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
+    fun mascotName(mascotId: String): String? = synchronized(nameFileLock) {
+        val file = File(root, "$mascotId/name.txt")
+        if (!file.isFile && !File(file.path + ".bak").isFile) return@synchronized null
+        AtomicFile(file).openRead().bufferedReader().use { it.readText() }
+            .trim().takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveMascotName(mascotId: String, name: String): String = withContext(Dispatchers.IO) {
+        synchronized(nameFileLock) { persistMascotName(mascotId, name) }
+    }
+
+    internal suspend fun saveGeneratedNameIfAbsent(mascotId: String, name: String): String = withContext(Dispatchers.IO) {
+        synchronized(nameFileLock) { mascotName(mascotId) ?: persistMascotName(mascotId, name) }
+    }
+
+    private fun persistMascotName(mascotId: String, name: String): String {
+        val clean = name.trim().take(50)
+        require(clean.isNotBlank()) { "Имя героя не может быть пустым" }
+        val destination = File(root, "$mascotId/name.txt")
+        destination.parentFile?.mkdirs()
+        val atomic = AtomicFile(destination)
+        val output = atomic.startWrite()
+        try {
+            output.write(clean.toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+        } catch (error: Exception) {
+            atomic.failWrite(output)
+            throw error
+        }
+        return clean
+    }
+
+    internal fun prepareNameWriter(mascotId: String) {
+        val marker = File(root, "$mascotId/creative/name-writer.enabled")
+        marker.parentFile?.mkdirs()
+        marker.createNewFile()
+    }
+
+    internal fun nameWriterDirectory(mascotId: String): File? =
+        File(root, "$mascotId/creative").takeIf { File(it, "name-writer.enabled").isFile }
+
+    internal fun occupiedHeroNames(): Set<String> = root.listFiles { file -> file.isDirectory }
+        .orEmpty().mapNotNull { mascotName(it.name) }.toSet()
 
     fun expressionPackReady(mascotId: String): Boolean = EXPRESSION_STATES.all { state ->
         File(root, "$mascotId/states/$state.png").isFile
@@ -56,7 +107,7 @@ class HeroLocalStore(context: Context) {
     fun puppetPackReady(mascotId: String): Boolean =
         puppetPartFiles(mascotId).keys.containsAll(PUPPET_ROLES)
 
-    fun animationPackReady(mascotId: String): Boolean = VIDEO_ACTIONS.all { action ->
+    fun animationPackReady(mascotId: String): Boolean = LIBRARY_VIDEO_ACTIONS.all { action ->
         actionVideoFile(mascotId, action) != null
     }
 
@@ -126,9 +177,27 @@ class HeroLocalStore(context: Context) {
         File(root, "$mascotId/videos/${normalizeVideoAction(action)}.job-id.txt").delete()
     }
 
-    fun hasOpenRouterVideoProgress(mascotId: String): Boolean = VIDEO_ACTIONS.any { action ->
+    fun hasOpenRouterVideoProgress(mascotId: String): Boolean = LIBRARY_VIDEO_ACTIONS.any { action ->
         actionVideoFile(mascotId, action) != null || openRouterVideoJobId(mascotId, action) != null
     }
+
+    internal suspend fun claimVideoSubmission(requestToken: String, action: String) = withContext(Dispatchers.IO) {
+        claimVideoSubmission(File(appContext.filesDir, "generation-requests"), requestToken, action)
+    }
+
+    internal fun saveAnimationBatch(mascotId: String, batchId: String, actions: List<String>) {
+        val selected = validateAnimationBatch(actions)
+        check(appContext.getSharedPreferences("animation_batches", Context.MODE_PRIVATE).edit()
+            .putString("actions:$batchId", selected.joinToString(","))
+            .putString("latest:$mascotId", batchId).commit()) { "Не удалось сохранить выбранную партию" }
+    }
+
+    internal fun latestAnimationBatchId(mascotId: String): String? =
+        appContext.getSharedPreferences("animation_batches", Context.MODE_PRIVATE).getString("latest:$mascotId", null)
+
+    internal fun animationBatchActions(batchId: String): List<String>? =
+        appContext.getSharedPreferences("animation_batches", Context.MODE_PRIVATE)
+            .getString("actions:$batchId", null)?.split(",")?.let(::validateAnimationBatch)
 
     suspend fun saveCreativeContract(mascotId: String, json: String): File = withContext(Dispatchers.IO) {
         val destination = File(root, "$mascotId/creative/character-contract.json")
@@ -213,9 +282,9 @@ class HeroLocalStore(context: Context) {
     }
 
     suspend fun saveVideoPackManifest(mascotId: String): File = withContext(Dispatchers.IO) {
-        val clips = VIDEO_ACTIONS.map { action ->
+        val clips = LIBRARY_VIDEO_ACTIONS.mapNotNull { action ->
             val video = actionVideoFile(mascotId, action)
-                ?: error("Нет принятой анимации $action")
+                ?: return@mapNotNull null
             val qaFile = File(root, "$mascotId/videos/$action.qa.json")
             val qa = qaFile.takeIf { it.isFile }
                 ?.readText()
@@ -232,8 +301,11 @@ class HeroLocalStore(context: Context) {
         }
         val manifest = VideoPackManifest(
             mascotId = mascotId,
+            defaultAction = clips.firstOrNull { it.id == "idle" }?.id ?: clips.firstOrNull()?.id ?: "idle",
             clips = clips,
-            transitions = defaultVideoTransitions(),
+            transitions = defaultVideoTransitions().filter { transition ->
+                clips.any { it.id == transition.from } && clips.any { it.id == transition.to }
+            },
         )
         val destination = File(root, "$mascotId/videos/manifest.json")
         destination.writeText(json.encodeToString(manifest))
@@ -262,7 +334,7 @@ class HeroLocalStore(context: Context) {
         destination
     }
 
-    fun animationPackCostUsd(mascotId: String): Double = VIDEO_ACTIONS.sumOf { action ->
+    fun animationPackCostUsd(mascotId: String): Double = LIBRARY_VIDEO_ACTIONS.sumOf { action ->
         File(root, "$mascotId/videos/${normalizeVideoAction(action)}.cost-usd.txt")
             .takeIf { it.isFile }
             ?.readText()
@@ -305,63 +377,75 @@ class HeroLocalStore(context: Context) {
         require(png.size > 8 && png[0] == 0x89.toByte() && png[1] == 0x50.toByte()) {
             "Генератор вернул повреждённый PNG"
         }
-        val bitmap = BitmapFactory.decodeByteArray(png, 0, png.size)
+        val sourceBitmap = BitmapFactory.decodeByteArray(png, 0, png.size)
             ?: error("Генератор вернул нечитаемое изображение")
-        val step = 2
-        var samples = 0
-        var transparent = 0
-        var left = bitmap.width
-        var top = bitmap.height
-        var right = -1
-        var bottom = -1
-        for (y in 0 until bitmap.height step step) for (x in 0 until bitmap.width step step) {
-            val alpha = Color.alpha(bitmap.getPixel(x, y))
-            samples += 1
-            if (alpha <= 16) transparent += 1
-            if (alpha > 32) {
-                left = minOf(left, x)
-                top = minOf(top, y)
-                right = maxOf(right, x)
-                bottom = maxOf(bottom, y)
+        val bitmap = if (transparentPixelRatio(sourceBitmap) < 0.01) {
+            removeGreenScreen(sourceBitmap).also { sourceBitmap.recycle() }
+        } else {
+            sourceBitmap
+        }
+        try {
+            val step = 2
+            var samples = 0
+            var transparent = 0
+            var left = bitmap.width
+            var top = bitmap.height
+            var right = -1
+            var bottom = -1
+            for (y in 0 until bitmap.height step step) for (x in 0 until bitmap.width step step) {
+                val alpha = Color.alpha(bitmap.getPixel(x, y))
+                samples += 1
+                if (alpha <= 16) transparent += 1
+                if (alpha > 32) {
+                    left = minOf(left, x)
+                    top = minOf(top, y)
+                    right = maxOf(right, x)
+                    bottom = maxOf(bottom, y)
+                }
             }
-        }
-        val hasSubject = right >= left && bottom >= top
-        val subjectWidthRatio = if (hasSubject) (right - left + 1).toDouble() / bitmap.width else 0.0
-        val subjectHeightRatio = if (hasSubject) (bottom - top + 1).toDouble() / bitmap.height else 0.0
-        val minimumMarginRatio = if (hasSubject) minOf(
-            left.toDouble() / bitmap.width,
-            top.toDouble() / bitmap.height,
-            (bitmap.width - 1 - right).toDouble() / bitmap.width,
-            (bitmap.height - 1 - bottom).toDouble() / bitmap.height,
-        ) else 0.0
-        val qa = evaluateCanonicalImageQa(
-            width = bitmap.width,
-            height = bitmap.height,
-            transparentRatio = transparent.toDouble() / samples.coerceAtLeast(1),
-            subjectWidthRatio = subjectWidthRatio,
-            subjectHeightRatio = subjectHeightRatio,
-            minimumMarginRatio = minimumMarginRatio,
-        )
-        bitmap.recycle()
-        val qaFile = File(root, "$mascotId/creative/base.qa.json")
-        qaFile.parentFile?.mkdirs()
-        qaFile.writeText(json.encodeToString(qa))
-        if (!qa.hardPass) {
-            val rejected = File(root, "$mascotId/rejected/base.png")
-            rejected.parentFile?.mkdirs()
-            rejected.writeBytes(png)
-            error(
-                "Герой создан, но не прошёл проверку: ${qa.blockingIssues.joinToString("; ")}. " +
-                    "Повторная платная генерация не запускалась.",
+            val hasSubject = right >= left && bottom >= top
+            val subjectWidthRatio = if (hasSubject) (right - left + 1).toDouble() / bitmap.width else 0.0
+            val subjectHeightRatio = if (hasSubject) (bottom - top + 1).toDouble() / bitmap.height else 0.0
+            val minimumMarginRatio = if (hasSubject) minOf(
+                left.toDouble() / bitmap.width,
+                top.toDouble() / bitmap.height,
+                (bitmap.width - 1 - right).toDouble() / bitmap.width,
+                (bitmap.height - 1 - bottom).toDouble() / bitmap.height,
+            ) else 0.0
+            val qa = evaluateCanonicalImageQa(
+                width = bitmap.width,
+                height = bitmap.height,
+                transparentRatio = transparent.toDouble() / samples.coerceAtLeast(1),
+                subjectWidthRatio = subjectWidthRatio,
+                subjectHeightRatio = subjectHeightRatio,
+                minimumMarginRatio = minimumMarginRatio,
             )
+            val qaFile = File(root, "$mascotId/creative/base.qa.json")
+            qaFile.parentFile?.mkdirs()
+            qaFile.writeText(json.encodeToString(qa))
+            if (!qa.hardPass) {
+                val rejected = File(root, "$mascotId/rejected/base.png")
+                rejected.parentFile?.mkdirs()
+                rejected.writeBytes(png)
+                error(
+                    "Герой создан, но не прошёл проверку: ${qa.blockingIssues.joinToString("; ")}. " +
+                        "Повторная платная генерация не запускалась.",
+                )
+            }
+            val destination = File(root, "$mascotId/base.png")
+            destination.parentFile?.mkdirs()
+            val staging = File(destination.parentFile, "base.pending.png")
+            staging.outputStream().use { output ->
+                require(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                    "Не удалось сохранить героя"
+                }
+            }
+            if (destination.exists()) destination.delete()
+            require(staging.renameTo(destination)) { "Не удалось сохранить героя" }
+            destination
+        } finally {
+            bitmap.recycle()
         }
-        val destination = File(root, "$mascotId/base.png")
-        destination.parentFile?.mkdirs()
-        val staging = File(destination.parentFile, "base.pending.png")
-        staging.writeBytes(png)
-        if (destination.exists()) destination.delete()
-        require(staging.renameTo(destination)) { "Не удалось сохранить героя" }
-        destination
     }
 
     suspend fun saveExpressionSheet(mascotId: String, png: ByteArray) = withContext(Dispatchers.IO) {
@@ -567,33 +651,16 @@ class HeroLocalStore(context: Context) {
             }
         }
 
-    private fun removeGreenScreen(source: Bitmap): Bitmap {
-        val width = source.width
-        val height = source.height
-        val pixels = IntArray(width * height)
-        source.getPixels(pixels, 0, width, 0, 0, width, height)
-        for (index in pixels.indices) {
-            val color = pixels[index]
-            val sourceAlpha = Color.alpha(color)
-            val red = Color.red(color)
-            val green = Color.green(color)
-            val blue = Color.blue(color)
-            val dominance = minOf(green - red, green - blue)
-            val alpha = when {
-                sourceAlpha < 8 -> 0
-                green > 105 && dominance >= 78 -> 0
-                green > 85 && dominance > 28 ->
-                    (sourceAlpha * (78 - dominance).coerceIn(0, 50) / 50f).toInt()
-                else -> sourceAlpha
-            }
-            if (alpha == 0) {
-                pixels[index] = Color.TRANSPARENT
-            } else {
-                val cleanGreen = if (dominance > 12) minOf(green, maxOf(red, blue) + 12) else green
-                pixels[index] = Color.argb(alpha, red, cleanGreen, blue)
-            }
+    private fun removeGreenScreen(source: Bitmap): Bitmap = removeChromaBackground(source)
+
+    private fun transparentPixelRatio(source: Bitmap, step: Int = 2): Double {
+        var samples = 0
+        var transparent = 0
+        for (y in 0 until source.height step step) for (x in 0 until source.width step step) {
+            samples += 1
+            if (Color.alpha(source.getPixel(x, y)) <= 16) transparent += 1
         }
-        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+        return transparent.toDouble() / samples.coerceAtLeast(1)
     }
 
     /** Keeps the complete main silhouette and discards tiny/grid-edge artifacts. */
@@ -714,10 +781,195 @@ class HeroLocalStore(context: Context) {
 
     /** Prefer complete generated animation frames, then approved legacy assets. */
     fun playbackSequenceFiles(mascotId: String, stateKey: String): List<File> =
-        sequenceFiles(mascotId, normalizeFullFrameAction(stateKey))
+        animationFramesWithoutZero(sequenceFiles(mascotId, normalizeFullFrameAction(stateKey))
             .ifEmpty { spriteSequenceFiles(mascotId, stateKey) }
             .ifEmpty { sequenceFiles(mascotId, stateKey) }
-            .ifEmpty { sequenceFiles(mascotId, "base") }
+            .ifEmpty { sequenceFiles(mascotId, "base") }, File::getName)
+
+    /** Library readiness must never count an idle/base fallback as another authored action. */
+    fun librarySequenceFiles(mascotId: String, stateKey: String): List<File> =
+        animationFramesWithoutZero(sequenceFiles(mascotId, stateKey)
+            .ifEmpty { spriteSequenceFiles(mascotId, stateKey) }
+            .ifEmpty { if (stateKey == "thinking") sequenceFiles(mascotId, "working") else emptyList() }, File::getName)
+
+    /**
+     * Home-screen widgets cannot play our MP4 files or run the real-time chroma-key shader used by
+     * the app. Build a tiny transparent frame cache from an already downloaded video instead. The
+     * cache is keyed by the source file fingerprint, so this never starts or repeats a paid job.
+     */
+    fun cachedWidgetAnimation(mascotId: String, stateKey: String): WidgetAnimationFrames {
+        val video = widgetVideoForState(mascotId, stateKey)
+        if (video != null) {
+            readWidgetVideoCache(mascotId, video)?.let { return it }
+            // Retain published v3 frames while the quality upgrade is prepared locally.
+            readWidgetVideoCache(mascotId, video, 160, 3)?.let { return it }
+        }
+        return WidgetAnimationFrames(playbackSequenceFiles(mascotId, stateKey), 1_000 / FULL_FRAME_FPS)
+    }
+
+    private fun readWidgetVideoCache(mascotId: String, video: File,
+        maxSide: Int = WIDGET_FRAME_MAX_SIDE, version: Int = WIDGET_CACHE_VERSION): WidgetAnimationFrames? {
+            val cacheRoot = widgetCacheRoot(mascotId, video, maxSide, version)
+            val sourcePrefix = "${video.length()}:${video.lastModified()}:"
+            val cacheMatchesSource = File(cacheRoot, WIDGET_FRAME_SOURCE)
+                .takeIf(File::isFile)
+                ?.readText()
+                ?.let { fingerprint ->
+                    fingerprint.startsWith(sourcePrefix) &&
+                        fingerprint.endsWith(":$maxSide:$WIDGET_TARGET_FPS:v$version")
+                } == true
+            val cached = if (cacheMatchesSource) widgetFrameFiles(cacheRoot) else emptyList()
+            val expectedCount = File(cacheRoot, WIDGET_FRAME_SOURCE).takeIf(File::isFile)
+                ?.readText()?.split(':')?.getOrNull(2)?.toIntOrNull()
+            if (expectedCount in 1..96 && cached.isNotEmpty() && cached.size == expectedCount && cached.all { it.length() > 100L }) {
+                val interval = File(cacheRoot, WIDGET_FRAME_INTERVAL)
+                    .takeIf(File::isFile)
+                    ?.readText()
+                    ?.trim()
+                    ?.toIntOrNull()
+                    ?.coerceIn(WIDGET_MIN_FRAME_INTERVAL_MS, WIDGET_MAX_FRAME_INTERVAL_MS)
+                    // Keep the legacy eight-frame cache visibly animated until the worker replaces it.
+                    ?: if (cached.size <= 8) WIDGET_MAX_FRAME_INTERVAL_MS else 1_000 / WIDGET_TARGET_FPS
+                return WidgetAnimationFrames(animationFramesWithoutZero(cached, File::getName), interval, fromVideoCache = true)
+            }
+        return null
+    }
+
+    suspend fun widgetAnimation(mascotId: String, stateKey: String): WidgetAnimationFrames =
+        widgetCacheLock.withLock { withContext(Dispatchers.IO) {
+            val publishedFrames = playbackSequenceFiles(mascotId, stateKey)
+            val video = widgetVideoForState(mascotId, stateKey)
+                ?: return@withContext WidgetAnimationFrames(
+                    files = publishedFrames,
+                    frameIntervalMs = 1_000 / FULL_FRAME_FPS,
+                )
+            readWidgetVideoCache(mascotId, video)?.let { return@withContext it }
+            val action = video.nameWithoutExtension
+            val cacheRoot = widgetCacheRoot(mascotId, video)
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(video.absolutePath)
+                val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                    ?.takeIf { it > 0L }
+                    ?: return@withContext WidgetAnimationFrames(
+                        files = publishedFrames,
+                        frameIntervalMs = 1_000 / FULL_FRAME_FPS,
+                    )
+                val frameCount = widgetFrameCountForDuration(durationMs)
+                val frameIntervalMs = widgetFrameIntervalForDuration(durationMs, frameCount)
+                    .coerceIn(WIDGET_MIN_FRAME_INTERVAL_MS, WIDGET_MAX_FRAME_INTERVAL_MS)
+                val fingerprint =
+                    "${video.length()}:${video.lastModified()}:$frameCount:$WIDGET_FRAME_MAX_SIDE:$WIDGET_TARGET_FPS:v$WIDGET_CACHE_VERSION"
+                val existing = widgetFrameFiles(cacheRoot)
+                if (existing.size == frameCount && existing.all { it.length() > 100L } &&
+                    File(cacheRoot, WIDGET_FRAME_SOURCE).takeIf(File::isFile)?.readText() == fingerprint
+                ) {
+                    return@withContext WidgetAnimationFrames(animationFramesWithoutZero(existing, File::getName), frameIntervalMs, fromVideoCache = true)
+                }
+
+                val sourceWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    ?.toIntOrNull().orZero()
+                val sourceHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    ?.toIntOrNull().orZero()
+                val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull() ?: 0
+                val displayWidth = if (rotation == 90 || rotation == 270) sourceHeight else sourceWidth
+                val displayHeight = if (rotation == 90 || rotation == 270) sourceWidth else sourceHeight
+                fun decodeSource(timeUs: Long): Bitmap = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 &&
+                        maxOf(displayWidth, displayHeight) > WIDGET_KEY_PROCESSING_MAX_SIDE) {
+                    val (width, height) = scaledWidgetSize(displayWidth, displayHeight, WIDGET_KEY_PROCESSING_MAX_SIDE)
+                    retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST, width, height)
+                } else retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST))
+                    ?: error("Не удалось извлечь кадр для виджета")
+                val cacheSide = widgetCacheFrameSide(frameCount)
+                val cropTracker = WidgetCropTracker()
+                repeat(frameCount) { index ->
+                    coroutineContext.ensureActive()
+                    val timeUs = durationMs * 1_000L * index / frameCount
+                    val sample = decodeSource(timeUs)
+                    try {
+                        val cutout = removeGreenScreen(sample)
+                        try { cropTracker.include(cutout) } finally { cutout.recycle() }
+                    } finally { sample.recycle() }
+                }
+                val crop = cropTracker.finish()
+                val parent = cacheRoot.parentFile ?: return@withContext WidgetAnimationFrames(
+                    files = publishedFrames,
+                    frameIntervalMs = 1_000 / FULL_FRAME_FPS,
+                )
+                parent.mkdirs()
+                val staging = File(parent, "${cacheRoot.name}-pending-${UUID.randomUUID()}").apply {
+                    mkdirs()
+                }
+                try {
+                    repeat(frameCount) { index ->
+                        coroutineContext.ensureActive()
+                        // Do not sample the duplicated last frame of a seamless clip.
+                        val timeUs = durationMs * 1_000L * index / frameCount
+                        val decoded = decodeSource(timeUs)
+                        val transparent = try { prepareWidgetFrame(decoded, crop, cacheSide) }
+                            finally { decoded.recycle() }
+                        try {
+                            File(staging, "frame_%02d.png".format(index)).outputStream().use { output ->
+                                require(transparent.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                                    "Не удалось сохранить кадр ${index + 1} для виджета"
+                                }
+                            }
+                        } finally {
+                            transparent.recycle()
+                        }
+                    }
+                    File(staging, WIDGET_FRAME_SOURCE).writeText(fingerprint)
+                    File(staging, WIDGET_FRAME_INTERVAL).writeText(frameIntervalMs.toString())
+
+                    val previous = File(parent, "${cacheRoot.name}-previous-${UUID.randomUUID()}")
+                    if (cacheRoot.exists()) require(cacheRoot.renameTo(previous)) {
+                        "Не удалось обновить кадры виджета"
+                    }
+                    if (!staging.renameTo(cacheRoot)) {
+                        if (previous.exists()) previous.renameTo(cacheRoot)
+                        error("Не удалось установить кадры виджета")
+                    }
+                    previous.deleteRecursively()
+                    WidgetAnimationFrames(animationFramesWithoutZero(widgetFrameFiles(cacheRoot), File::getName), frameIntervalMs, fromVideoCache = true)
+                } finally {
+                    staging.deleteRecursively()
+                }
+            } finally {
+                retriever.release()
+            }
+        } }
+
+    /** Published paths are immutable across source/version changes; launchers may still read them. */
+    private fun widgetCacheRoot(mascotId: String, video: File,
+        maxSide: Int = WIDGET_FRAME_MAX_SIDE, version: Int = WIDGET_CACHE_VERSION): File {
+        val key = "${video.length()}:${video.lastModified()}:$maxSide:$WIDGET_TARGET_FPS:v$version"
+        return File(root, "$mascotId/widget-frames/${video.nameWithoutExtension}/cache-${promptSha256(key).take(16)}")
+    }
+
+    internal fun needsWidgetPreparation(mascotId: String, stateKey: String): Boolean =
+        widgetVideoForState(mascotId, stateKey)
+            ?.let { readWidgetVideoCache(mascotId, it) == null } ?: false
+
+    private fun widgetVideoForState(mascotId: String, stateKey: String): File? =
+        widgetVideoCandidates(stateKey).firstNotNullOfOrNull { actionVideoFile(mascotId, it) }
+            ?: LIBRARY_VIDEO_ACTIONS.mapNotNull { actionVideoFile(mascotId, it) }
+                .singleOrNull()?.takeIf { it.nameWithoutExtension == "greeting" }
+
+    private fun widgetFrameFiles(directory: File): List<File> =
+        directory.listFiles { file ->
+            file.isFile && file.name.startsWith("frame_") && file.extension == "png"
+        }?.sortedBy(File::getName).orEmpty()
+
+    private fun scaledWidgetSize(width: Int, height: Int, maxSide: Int = WIDGET_FRAME_MAX_SIDE): Pair<Int, Int> {
+        if (width <= 0 || height <= 0) return maxSide to maxSide
+        val scale = minOf(1f, maxSide.toFloat() / maxOf(width, height))
+        return ((width * scale).toInt().coerceAtLeast(1)) to
+            ((height * scale).toInt().coerceAtLeast(1))
+    }
+
+    private fun Int?.orZero(): Int = this ?: 0
 
     fun puppetPartFiles(mascotId: String): Map<String, File> {
         val metadata = File(root, "$mascotId/puppet/manifest-client.json")
@@ -803,6 +1055,7 @@ class HeroLocalStore(context: Context) {
     }
 
     companion object {
+        private val nameFileLock = Any()
         val EXPRESSION_STATES = listOf(
             "acquaintance", "working", "sleeping", "thinking", "bored", "rainy",
         )
@@ -815,15 +1068,26 @@ class HeroLocalStore(context: Context) {
         // `sleep_loop` is generated separately from a frame inside that transition,
         // so it can remain asleep indefinitely without replaying the lie-down motion.
         val CORE_VIDEO_ACTIONS = listOf("idle", "joyful", "sleeping", "dancing")
-        val LIBRARY_VIDEO_ACTIONS = listOf(
+        val LEGACY_LIBRARY_VIDEO_ACTIONS = listOf(
             "idle", "resting", "sleeping", "thinking", "at_glass", "watching", "joyful", "sad", "angry",
             "refusal", "frightened", "curious", "tender", "stretching", "greeting", "signature_move", "dancing",
         )
+        val LIBRARY_VIDEO_ACTIONS = LEGACY_LIBRARY_VIDEO_ACTIONS
         // `sleep_loop` is a free playback derivative of `sleeping`, not an
-        // eighteenth provider generation.
+        // additional provider generation.
         val VIDEO_ACTIONS = LIBRARY_VIDEO_ACTIONS + "sleep_loop"
         const val FULL_FRAME_FPS = 12
         const val FULL_FRAME_COUNT = 12
+        const val WIDGET_TARGET_FPS = 12
+        const val WIDGET_MIN_FRAME_COUNT = 1
+        const val WIDGET_MAX_FRAME_COUNT = 96
+        const val WIDGET_FRAME_MAX_SIDE = WIDGET_CACHE_MAX_SIDE
+        private const val WIDGET_MIN_FRAME_INTERVAL_MS = 1
+        private const val WIDGET_MAX_FRAME_INTERVAL_MS = 10_000
+        private const val WIDGET_CACHE_VERSION = 4
+        private val widgetCacheLock = Mutex()
+        private const val WIDGET_FRAME_SOURCE = "source.txt"
+        private const val WIDGET_FRAME_INTERVAL = "interval-ms.txt"
         private const val MIN_FULL_FRAME_COUNT = FULL_FRAME_COUNT
         private const val MIN_DISTINCT_FRAME_COUNT = 8
         private const val SHEET_COLUMNS = 3
@@ -846,8 +1110,26 @@ class HeroLocalStore(context: Context) {
             "stretch", "stretching" -> "stretching"
             "playful", "dancing", "working" -> "dancing"
             "thinking", "at_glass", "watching", "sad", "angry", "refusal", "frightened", "curious",
-            "tender", "greeting", "signature_move" -> stateKey
+            "tender", "greeting", "signature_move", "welcome" -> stateKey
             else -> "idle"
+        }
+
+        internal fun widgetVideoCandidates(stateKey: String): List<String> = when (stateKey) {
+            "sleep", "sleeping" -> listOf("sleep_loop", "sleeping", "idle")
+            // A partially generated hero may not have `thinking` yet. Falling back to `dancing`
+            // made the home-screen widget spin continuously during working hours, which looked
+            // like broken/jumpy playback. Keep the automatic state calm until its own clip exists.
+            "working" -> listOf("thinking", "idle")
+            "thinking" -> listOf("thinking", "idle")
+            "bored", "rainy", "sad" -> listOf("sad", "idle")
+            "content", "acquaintance", "base" -> listOf("idle", "joyful")
+            else -> listOf(normalizeVideoAction(stateKey), "idle").distinct()
+        }
+
+        internal fun widgetFrameCountForDuration(durationMs: Long): Int = widgetFrameTiming(durationMs).count
+        internal fun widgetFrameIntervalForDuration(durationMs: Long, frameCount: Int): Int {
+            require(durationMs > 0 && frameCount > 0)
+            return widgetFrameTiming(durationMs).intervalMs
         }
         @Volatile
         var current: HeroLocalStore? = null

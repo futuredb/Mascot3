@@ -5,7 +5,6 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.generativemascot.app.widget.updateMascotWidgets
 import com.generativemascot.app.MascotApp
-import com.generativemascot.app.data.LocalContextResolver
 
 class ContextRefreshWorker(
     context: Context,
@@ -13,11 +12,9 @@ class ContextRefreshWorker(
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as MascotApp
-        val remoteState = runCatching { app.api.context(interact = false).stateKey }.getOrNull()
-        val state = remoteState ?: LocalContextResolver().resolve()
-        app.session.saveCurrentState(state)
+        app.behavior.refresh()
         val mascotId = app.session.acceptedMascotId() ?: app.session.mascotId()
-        if (mascotId != null) {
+        if (!app.openRouterSettings.isDirectModeEnabled() && mascotId != null) {
             runCatching { app.heroStore.sync(app.api, mascotId) }
         }
         updateMascotWidgets(applicationContext)

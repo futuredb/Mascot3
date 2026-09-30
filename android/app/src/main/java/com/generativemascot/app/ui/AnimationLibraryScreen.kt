@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
@@ -22,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -32,13 +32,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.GenerationRoute
+import com.generativemascot.app.data.defaultAnimationBatchSize
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
-val ANIMATION_STATE_KEYS = listOf(
-    "idle", "resting", "sleeping", "thinking", "at_glass", "watching", "joyful", "sad", "angry",
-    "refusal", "frightened", "curious", "tender", "stretching", "greeting", "signature_move", "dancing",
-)
-const val ANIMATION_PACK_SIZE = 17
+val ANIMATION_STATE_KEYS = HeroLocalStore.LIBRARY_VIDEO_ACTIONS
+val ANIMATION_PACK_SIZE = ANIMATION_STATE_KEYS.size
 private val actionDescriptions = mapOf(
     "idle" to "Тихо осматривается и ждёт, когда ты снова окажешься рядом",
     "resting" to "Отпускает напряжение и спокойно отдыхает, оставаясь рядом",
@@ -67,17 +67,26 @@ fun AnimationLibraryScreen(
     legacyVideoUrl: String?,
     neutralFrameUrl: String?,
     heroName: String?,
+    generationRoute: GenerationRoute,
     packReady: Boolean,
     packBusy: Boolean,
     packStatus: String?,
     packMessage: String?,
+    generationError: String?,
+    batchActions: List<String>,
+    batchId: String?,
     editableName: String,
     onNameChange: (String) -> Unit,
     onSaveName: () -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onComplete: () -> Unit,
+    onComplete: (Int) -> Unit,
+    greetingRequiresResume: Boolean = false,
+    onResumeGreeting: () -> Unit = {},
 ) {
+    val displayName = remember(mascotId, heroName) {
+        heroHeadingName(mascotId?.let { HeroLocalStore.current?.mascotName(it) }, heroName)
+    }
     var confirmPack by remember { mutableStateOf(false) }
     var selectedAction by remember { mutableStateOf<String?>(null) }
     var editingName by rememberSaveable(mascotId) { mutableStateOf(false) }
@@ -86,29 +95,39 @@ fun AnimationLibraryScreen(
         context.getSharedPreferences("mascot_ui_receipts", Context.MODE_PRIVATE)
     }
     LaunchedEffect(Unit) { onRefresh() }
-    val readyCount = ANIMATION_STATE_KEYS.count { stateKey ->
-        videoUrls[stateKey] != null || animations[stateKey].orEmpty().isNotEmpty()
+    val progress = animationPackProgress(videoUrls)
+    val playableActions = animationPlayableActions(videoUrls, animations, !legacyVideoUrl.isNullOrBlank())
+    val readyCount = progress.readyCount
+    var selectedCount by rememberSaveable(mascotId) {
+        mutableIntStateOf(defaultAnimationBatchSize(progress.remainingCount))
+    }
+    LaunchedEffect(progress.remainingCount) {
+        selectedCount = if (progress.remainingCount == 0) 0 else selectedCount.coerceIn(1, progress.remainingCount)
+        if (progress.remainingCount == 0) confirmPack = false
     }
     val inProgress = !packReady && (packBusy || packStatus == "running")
     val syncing = !packReady && packStatus == "ready"
-    val interrupted = !packReady && (
-        packStatus == "failed" || (readyCount > 0 && !inProgress && !syncing)
-    )
-    val bannerSignature = "$mascotId:$packReady:$packStatus:$readyCount"
-    val readyReceiptKey = "animations_ready_seen:$mascotId"
-    val readyWasSeen = remember(mascotId, packReady) {
-        packReady && mascotId != null && receiptPrefs.getBoolean(readyReceiptKey, false)
+    val sequential = generationRoute == GenerationRoute.OPENROUTER_DIRECT
+    val selectedBatch = batchActions.ifEmpty { if (inProgress || syncing) ANIMATION_STATE_KEYS else emptyList() }
+    val batchReadyCount = selectedBatch.count { it in progress.readyActions }
+    val batchComplete = selectedBatch.isNotEmpty() && batchReadyCount == selectedBatch.size && !inProgress && !syncing
+    val activeAction = progress.activeAction(inProgress, sequential, selectedBatch)
+    val interrupted = !packReady && packStatus == "failed"
+    val bannerSignature = "$mascotId:$batchId:$packReady:$inProgress:$syncing:$interrupted:$batchComplete"
+    val readyReceiptKey = if (packReady) "animations_ready_seen:$mascotId" else "animation_batch_seen:$batchId"
+    val readyWasSeen = remember(mascotId, packReady, batchId, batchComplete) {
+        (packReady || batchComplete) && mascotId != null && receiptPrefs.getBoolean(readyReceiptKey, false)
     }
     var dismissedBanner by rememberSaveable(mascotId, packReady) {
         mutableStateOf(if (readyWasSeen) bannerSignature else null)
     }
     val showStatusBanner = when {
         packReady -> dismissedBanner != bannerSignature
-        inProgress || syncing || interrupted -> dismissedBanner != bannerSignature
+        inProgress || syncing || interrupted || (batchComplete && !readyWasSeen) -> dismissedBanner != bannerSignature
         else -> false
     }
-    LaunchedEffect(showStatusBanner, packReady, bannerSignature) {
-        if (showStatusBanner && packReady && mascotId != null) {
+    LaunchedEffect(showStatusBanner, packReady, batchComplete, bannerSignature) {
+        if (showStatusBanner && (packReady || batchComplete) && mascotId != null) {
             // A completed-pack receipt is useful once, immediately after the
             // result arrives. Persist it before the delay so returning to this
             // screen can never show the same message again.
@@ -131,7 +150,7 @@ fun AnimationLibraryScreen(
     MascotTransition(selectedAction, Modifier.fillMaxSize()) { action ->
         if (action != null) {
             ActionDetail(
-                mascotId, action, heroName, animations[action].orEmpty(),
+                mascotId, action, displayName, animations[action].orEmpty(),
                 videoUrls, legacyVideoUrl, neutralFrameUrl, baseStill, palette,
                 onSelect = { selectedAction = it },
                 onClose = { selectedAction = null },
@@ -143,28 +162,11 @@ fun AnimationLibraryScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (editingName) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = editableName,
-                            onValueChange = onNameChange,
-                            singleLine = true,
-                            label = { Text("Имя героя") },
-                            shape = CircleShape,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(
-                            onClick = { onSaveName(); editingName = false },
-                            enabled = editableName.isNotBlank(),
-                            modifier = Modifier.size(48.dp).clip(CircleShape)
-                                .background(FigmaInk),
-                        ) {
-                            Icon(Icons.Rounded.Check, "Сохранить имя", tint = Color.White)
-                        }
-                    }
+                    HeroNameInput(
+                        value = editableName,
+                        onValueChange = onNameChange,
+                        onSave = { onSaveName(); editingName = false },
+                    )
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
@@ -172,7 +174,7 @@ fun AnimationLibraryScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            heroName?.takeIf { it.isNotBlank() }?.uppercase() ?: "ДЕЙСТВИЯ",
+                            displayName.uppercase(),
                             color = FigmaInk,
                             fontSize = 28.sp,
                             fontFamily = RubikOne,
@@ -190,24 +192,32 @@ fun AnimationLibraryScreen(
                         }
                     }
                 }
-                Text("Выбери настроение", color = FigmaInk.copy(alpha = .48f),
-                    fontSize = 13.sp, fontFamily = SbSansDisplayMedium)
                 if (showStatusBanner) {
                     Spacer(Modifier.height(16.dp))
                     AnimationPackStatus(
                         readyCount = readyCount,
+                        batchReadyCount = batchReadyCount,
+                        batchTotal = selectedBatch.size,
+                        batchComplete = batchComplete,
                         packReady = packReady,
                         inProgress = inProgress,
                         syncing = syncing,
                         interrupted = interrupted,
+                        activeAction = activeAction,
+                        generationRoute = generationRoute,
                         message = packMessage,
                         onDismiss = {
                             dismissedBanner = bannerSignature
-                            if (packReady && mascotId != null) {
+                            if ((packReady || batchComplete) && mascotId != null) {
                                 receiptPrefs.edit().putBoolean(readyReceiptKey, true).apply()
                             }
                         },
                     )
+                }
+                if (!generationError.isNullOrBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(generationError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
+                        maxLines = 5, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -218,8 +228,9 @@ fun AnimationLibraryScreen(
                 ) {
                     items(ANIMATION_STATE_KEYS, key = { it }) { stateKey ->
                         val frames = animations[stateKey].orEmpty()
-                        val video = videoUrls[stateKey] ?: legacyVideoUrl
-                        val available = video != null || frames.isNotEmpty()
+                        val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS }
+                        val cardStatus = progress.cardStatus(stateKey, inProgress, syncing, interrupted, sequential, selectedBatch)
+                        val available = stateKey in playableActions
                         Column(
                             modifier = Modifier.fillMaxWidth()
                                 .mascotClickable(enabled = available, onClickLabel = "Посмотреть анимацию") {
@@ -233,12 +244,18 @@ fun AnimationLibraryScreen(
                                     .border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp)),
                             ) {
                                 ActionThumbnail(video, frames.getOrNull(frames.size / 2) ?: baseStill,
-                                    stateTitle(stateKey), Modifier.fillMaxSize().padding(8.dp))
+                                    stateTitle(stateKey), Modifier.fillMaxSize().padding(8.dp)
+                                        .alpha(if (available) 1f else if (cardStatus == AnimationCardStatus.WORKING) .65f else .35f))
                                 if (available) {
                                     Icon(
                                         Icons.Rounded.PlayArrow, null, tint = FigmaInk.copy(alpha = .70f),
                                         modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
                                             .size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp),
+                                    )
+                                } else if (cardStatus == AnimationCardStatus.WORKING) {
+                                    CircularProgressIndicator(
+                                        color = FigmaInk.copy(alpha = .65f), strokeWidth = 2.dp,
+                                        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(20.dp),
                                     )
                                 }
                             }
@@ -247,10 +264,13 @@ fun AnimationLibraryScreen(
                                 color = FigmaInk, textAlign = TextAlign.Center)
                             Text(
                                 when {
-                                    available -> "Готово · нажми посмотреть"
-                                    inProgress -> "Создаётся…"
-                                    syncing -> "Сохраняется…"
-                                    interrupted -> "Ожидает продолжения"
+                                    cardStatus == AnimationCardStatus.READY -> "Готово · можно смотреть"
+                                    cardStatus == AnimationCardStatus.WORKING -> "В работе…"
+                                    cardStatus == AnimationCardStatus.QUEUED -> "В очереди"
+                                    cardStatus == AnimationCardStatus.PROCESSING -> "Ожидаем результат"
+                                    cardStatus == AnimationCardStatus.SAVING -> "Сохраняется…"
+                                    cardStatus == AnimationCardStatus.PAUSED -> "Ожидает продолжения"
+                                    available -> "Превью · видео ещё не создано"
                                     else -> "Ещё не создано"
                                 },
                                 color = FigmaInk.copy(alpha = if (available) .58f else .40f),
@@ -261,18 +281,34 @@ fun AnimationLibraryScreen(
                     }
                 }
                 if (!packReady && mascotId != null) {
+                    Text(
+                        when {
+                            (inProgress || syncing) && readyCount > 0 -> "Готовые анимации уже можно смотреть"
+                            inProgress -> "Первый ролик ещё в работе — он появится здесь"
+                            syncing -> "Получаем первые готовые ролики на телефон"
+                            else -> "Готово $readyCount из $ANIMATION_PACK_SIZE · осталось ${progress.remainingCount}"
+                        },
+                        color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Button(
-                        onClick = { confirmPack = true }, enabled = !inProgress && !syncing,
+                        onClick = {
+                            if (greetingRequiresResume) onResumeGreeting() else {
+                                selectedCount = defaultAnimationBatchSize(progress.remainingCount)
+                                confirmPack = true
+                            }
+                        }, enabled = !inProgress && !syncing && progress.remainingCount > 0,
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                     ) {
                         Text(
                             when {
-                                inProgress -> "Создаём: $readyCount из $ANIMATION_PACK_SIZE готовы"
+                                greetingRequiresResume -> "Продолжить приветствие"
+                                inProgress -> "Создаём: $batchReadyCount из ${selectedBatch.size} готовы"
                                 syncing -> "Сохраняем: $readyCount из $ANIMATION_PACK_SIZE"
-                                interrupted -> "Продолжить анимацию"
-                                else -> "Оживить героя"
+                                interrupted -> "Продолжить · осталось ${progress.remainingCount}"
+                                else -> "Оживить персонажа"
                             },
                             fontFamily = SbSansDisplayMedium,
                         )
@@ -283,23 +319,38 @@ fun AnimationLibraryScreen(
             }
         }
     }
-    if (confirmPack) {
+    if (confirmPack && progress.remainingCount > 0) {
         AlertDialog(
             onDismissRequest = { confirmPack = false },
-            title = { Text(if (interrupted) "Продолжить анимацию?" else "Оживить героя?") },
+            title = { Text("Сколько анимаций создать?") },
             text = {
-                Text(
-                    if (interrupted) {
-                        "Уже готово $readyCount из $ANIMATION_PACK_SIZE. Сохранённые результаты используются повторно; приложение продолжит с незавершённых этапов."
-                    } else {
-                        "Сервер создаст 17 отдельных действий на Seedance 2 Mini. Это 112 секунд платной генерации с лимитом до $9 за анимации. Уже готовые результаты и незавершённые задания сохраняются, платных автоматических повторов нет."
-                    },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Готово $readyCount из $ANIMATION_PACK_SIZE · можно добавить ${progress.remainingCount}")
+                    Text("$selectedCount", style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    if (progress.remainingCount > 1) {
+                        Slider(value = selectedCount.toFloat(),
+                            onValueChange = { selectedCount = it.roundToInt().coerceIn(1, progress.remainingCount) },
+                            valueRange = 1f..progress.remainingCount.toFloat(),
+                            steps = (progress.remainingCount - 2).coerceAtLeast(0))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(onClick = { selectedCount = defaultAnimationBatchSize(progress.remainingCount) }) {
+                                Text("По умолчанию · ${defaultAnimationBatchSize(progress.remainingCount)}")
+                            }
+                            TextButton(onClick = { selectedCount = progress.remainingCount }) {
+                                Text("Все · ${progress.remainingCount}")
+                            }
+                        }
+                    }
+                    Text("Seedance 2 Mini · каждый ролик — 6–8 секунд платной генерации. " +
+                        "Готовые ролики пропустим, сохранённые задания продолжим. " +
+                        "После выбранного количества остановимся. Результаты сохраняются по одному.")
+                }
             },
             dismissButton = { TextButton(onClick = { confirmPack = false }) { Text("Отмена") } },
             confirmButton = {
-                TextButton(onClick = { confirmPack = false; onComplete() }) {
-                    Text(if (interrupted) "Продолжить" else "Оживить")
+                TextButton(onClick = { confirmPack = false; onComplete(selectedCount) }, enabled = !inProgress && !syncing) {
+                    Text("${if (interrupted) "Продолжить" else "Создать"} · $selectedCount")
                 }
             },
         )
@@ -309,23 +360,38 @@ fun AnimationLibraryScreen(
 @Composable
 private fun AnimationPackStatus(
     readyCount: Int,
+    batchReadyCount: Int,
+    batchTotal: Int,
+    batchComplete: Boolean,
     packReady: Boolean,
     inProgress: Boolean,
     syncing: Boolean,
     interrupted: Boolean,
+    activeAction: String?,
+    generationRoute: GenerationRoute,
     message: String?,
     onDismiss: () -> Unit,
 ) {
     val title = when {
         packReady -> "Все $ANIMATION_PACK_SIZE анимаций готовы"
-        inProgress -> "Создаём анимации: $readyCount из $ANIMATION_PACK_SIZE готовы"
+        inProgress -> "Выбранная партия: $batchReadyCount из $batchTotal готовы"
+        batchComplete -> "Выбранные $batchTotal анимаций готовы"
         syncing -> "Сохраняем анимации: $readyCount из $ANIMATION_PACK_SIZE"
         interrupted -> "Готово $readyCount из $ANIMATION_PACK_SIZE — можно продолжить"
         else -> "Анимации пока не созданы"
     }
     val detail = when {
         packReady -> "Нажми на карточку, чтобы посмотреть действие"
-        inProgress -> "Можно закрыть этот экран: готовое сохранится, процесс продолжится на сервере"
+        batchComplete -> "Всего готово $readyCount из $ANIMATION_PACK_SIZE. Остальные можно добавить позже."
+        inProgress -> {
+            val current = activeAction?.let { "В работе: ${stateTitle(it).lowercase()}. " }.orEmpty()
+            val background = if (generationRoute == GenerationRoute.OPENROUTER_DIRECT) {
+                "Можно выйти с экрана: генерацией занимается фоновое задание на телефоне. Нужен интернет."
+            } else {
+                "Можно выйти с экрана — работа продолжится на сервере."
+            }
+            "${current}Всего готово $readyCount из $ANIMATION_PACK_SIZE. Каждый ролик сохраняется сразу. $background"
+        }
         syncing -> "Генерация закончилась; переносим готовые видео на телефон"
         interrupted -> "Готовые видео сохранены и повторно генерироваться не будут"
         else -> "После подтверждения прогресс будет виден прямо здесь"
@@ -359,14 +425,17 @@ private fun AnimationPackStatus(
         }
         Spacer(Modifier.height(8.dp))
         LinearProgressIndicator(
-            progress = { readyCount.toFloat() / ANIMATION_PACK_SIZE },
+            progress = {
+                if ((inProgress || batchComplete) && batchTotal > 0) batchReadyCount.toFloat() / batchTotal
+                else readyCount.toFloat() / ANIMATION_PACK_SIZE
+            },
             modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
             color = FigmaInk.copy(alpha = .82f),
             trackColor = FigmaInk.copy(alpha = .12f),
         )
         Spacer(Modifier.height(8.dp))
         Text(detail, color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, lineHeight = 15.sp)
-        if (!packReady && !message.isNullOrBlank() && message != title) {
+        if (!packReady && !inProgress && !message.isNullOrBlank() && message != title) {
             Spacer(Modifier.height(4.dp))
             Text(message, color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -397,7 +466,7 @@ private fun ActionDetail(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            heroName?.takeIf { it.isNotBlank() }?.uppercase() ?: stateTitle(action).uppercase(),
+            heroName?.takeIf { it.isNotBlank() }?.uppercase() ?: "ГЕРОЙ",
             fontFamily = RubikBubbles, fontSize = 40.sp,
             color = Color.White.copy(alpha = .64f), textAlign = TextAlign.Center,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
