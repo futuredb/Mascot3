@@ -22,11 +22,15 @@ import kotlinx.serialization.Serializable
     val width: Int, val height: Int,
     @SerialName("max_tilt_degrees") val maxTiltDegrees: Float,
     val layers: List<PhysicsLayer>, val assets: Map<String, PhysicsAsset>, val qa: PhysicsQa,
+    @SerialName("max_body_offset") val maxBodyOffset: Float = .00524f,
+    @SerialName("max_lean_degrees") val maxLeanDegrees: Float = 0f,
 ) {
     fun validate() {
         require(format == "mascot-physics-2.5d" && version == 1) { "Неподдерживаемый физический пакет" }
         require(qa.approved && qa.neutralError.isFinite() && qa.neutralError in 0f.. .025f) { "Пакет не прошёл проверку качества" }
         require(width in 64..2048 && height in 64..2048 && maxTiltDegrees == 12f)
+        require(maxBodyOffset.isFinite() && maxBodyOffset in 0f.. .05f)
+        require(maxLeanDegrees.isFinite() && maxLeanDegrees in 0f..12f)
         val hash = Regex("[a-f0-9]{64}")
         require(hash.matches(sourceSha256) && hash.matches(anchorSha256))
         require(layers.size in 2..17 && layers.sumOf { it.vertices.size } <= 12000)
@@ -73,13 +77,22 @@ class PhysicsSolver(val pack: PhysicsPack) {
     private var clock = 0.0
     var angleX = 0f; private set
     var angleY = 0f; private set
+    var bodyX = 0f; private set
+    var bodyY = 0f; private set
+    val leanAngle get() = angleX * pack.maxLeanDegrees / pack.maxTiltDegrees
+    val supportY = pack.layers.first { it.id == "body" }.vertices.maxOf { it[1] } - pack.height.toFloat()/pack.width/2f
     private var velocityX = 0f
     private var velocityY = 0f
+    private var bodyVelocityX = 0f
+    private var bodyVelocityY = 0f
     var neutral = false
     val settled: Boolean get() = kotlin.math.abs(angleX) + kotlin.math.abs(angleY) < .0008f &&
-        kotlin.math.abs(velocityX) + kotlin.math.abs(velocityY) < .005f && states.all { s -> s.x.indices.all { i -> kotlin.math.abs(s.x[i] - s.layer.vertices[i][0]) + kotlin.math.abs(s.y[i] - s.layer.vertices[i][1]) < .0008f } }
+        kotlin.math.abs(velocityX) + kotlin.math.abs(velocityY) < .005f &&
+        kotlin.math.abs(bodyX) + kotlin.math.abs(bodyY) < .0004f &&
+        kotlin.math.abs(bodyVelocityX) + kotlin.math.abs(bodyVelocityY) < .002f && states.all { s -> s.x.indices.all { i -> kotlin.math.abs(s.x[i] - s.layer.vertices[i][0]) + kotlin.math.abs(s.y[i] - s.layer.vertices[i][1]) < .0008f } }
     fun reset() {
         accumulator = 0.0; clock = 0.0; angleX = 0f; angleY = 0f; velocityX = 0f; velocityY = 0f
+        bodyX = 0f; bodyY = 0f; bodyVelocityX = 0f; bodyVelocityY = 0f
         states.forEach { s -> s.x.indices.forEach { i -> s.x[i] = s.layer.vertices[i][0]; s.y[i] = s.layer.vertices[i][1]; s.previousX[i] = s.x[i]; s.previousY[i] = s.y[i] } }
     }
     fun advance(seconds: Double, tiltX: Float, tiltY: Float, accelerationX: Float = 0f, accelerationY: Float = 0f, gravityX: Float = 0f, gravityY: Float = 0f) {
@@ -96,8 +109,14 @@ class PhysicsSolver(val pack: PhysicsPack) {
     private fun step(dt: Float, tiltX: Float, tiltY: Float, ax: Float, ay: Float, gx: Float, gy: Float) {
         clock += dt
         val limit = Math.toRadians(pack.maxTiltDegrees.toDouble()).toFloat()
-        val targetX = if (neutral) 0f else tiltX.coerceIn(-limit, limit)
-        val targetY = if (neutral) 0f else tiltY.coerceIn(-limit, limit)
+        // Rolling an upright phone is mainly rotation around screen Z. Its
+        // projected gravity changes even when quaternion X/Y stay near zero.
+        val targetX = if (neutral) 0f else (tiltX + gx * .7f).coerceIn(-limit, limit)
+        val targetY = if (neutral) 0f else (tiltY + gy * .7f).coerceIn(-limit, limit)
+        bodyVelocityX += (65f * (targetX / limit * pack.maxBodyOffset - bodyX) - 13f * bodyVelocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.025f) * dt
+        bodyVelocityY += (65f * (targetY / limit * pack.maxBodyOffset - bodyY) - 13f * bodyVelocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.025f) * dt
+        bodyX = (bodyX + bodyVelocityX * dt).coerceIn(-pack.maxBodyOffset,pack.maxBodyOffset)
+        bodyY = (bodyY + bodyVelocityY * dt).coerceIn(-pack.maxBodyOffset,pack.maxBodyOffset)
         velocityX += (110f * (targetX - angleX) - 20f * velocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.18f) * dt
         velocityY += (110f * (targetY - angleY) - 20f * velocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.18f) * dt
         angleX = (angleX + velocityX * dt).coerceIn(-limit, limit)
@@ -124,8 +143,10 @@ class PhysicsSolver(val pack: PhysicsPack) {
                 val rest = l.vertices[i]; val mobility = rest[5]
                 if (mobility == 0f) continue
                 val x = s.x[i]; val y = s.y[i]
-                val fx = if (neutral) 0f else (kotlin.math.sin(angleX) * .35f + gx * .12f - ax.coerceIn(-12f, 12f) * .018f) * mobility
-                val fy = if (neutral) 0f else (kotlin.math.sin(angleY) * .2f + gy * .12f - ay.coerceIn(-12f, 12f) * .018f) * mobility
+                // Forces use the part's permitted excursion, not canvas-sized
+                // constants that made short cords effectively immobile.
+                val fx = if (neutral) 0f else (l.stiffness * l.maxDisplacement * (angleX / limit * 1.2f + gx * .5f) - ax.coerceIn(-12f,12f) * l.maxDisplacement * 2f) * mobility
+                val fy = if (neutral) 0f else (l.stiffness * l.maxDisplacement * (angleY / limit * .7f + gy * .5f) - ay.coerceIn(-12f,12f) * l.maxDisplacement * 2f) * mobility
                 s.x[i] += (x - s.previousX[i]) * damping + (fx + l.stiffness * (rest[0] + parentX - x)) * dt * dt
                 s.y[i] += (y - s.previousY[i]) * damping + (fy + l.stiffness * (rest[1] + parentY - y)) * dt * dt
                 s.previousX[i] = x; s.previousY[i] = y
@@ -142,7 +163,12 @@ class PhysicsSolver(val pack: PhysicsPack) {
                     if (ma + mb > 0f) {
                         val dx = s.x[b] - s.x[a]; val dy = s.y[b] - s.y[a]; val length = kotlin.math.sqrt(dx * dx + dy * dy)
                         if (length > 1e-7f) {
-                            val correction = (length - e[2]) / length * .8f / (ma + mb)
+                            // A fully triangulated 2D sheet with exact distance
+                            // constraints is rigid. Permit bounded material strain
+                            // instead of projecting every edge back to rest each step.
+                            val strain = if (l.material == "cloth") .08f else .05f
+                            val excess = length - length.coerceIn(e[2]*(1f-strain),e[2]*(1f+strain))
+                            val correction = excess / length * .8f / (ma + mb)
                             s.x[a] += dx * correction * ma; s.y[a] += dy * correction * ma
                             s.x[b] -= dx * correction * mb; s.y[b] -= dy * correction * mb
                         }
@@ -152,7 +178,8 @@ class PhysicsSolver(val pack: PhysicsPack) {
                     val a = e[0].toInt(); val b = e[1].toInt(); val ma = l.vertices[a][5]; val mb = l.vertices[b][5]
                     val dx = s.x[b] - s.x[a]; val dy = s.y[b] - s.y[a]; val length = kotlin.math.sqrt(dx * dx + dy * dy)
                     if (ma + mb > 0f && length > 1e-7f) {
-                        val correction = (length - e[2]) / length * .15f / (ma + mb)
+                        val excess = length - length.coerceIn(e[2]*.88f,e[2]*1.12f)
+                        val correction = excess / length * .15f / (ma + mb)
                         s.x[a] += dx * correction * ma; s.y[a] += dy * correction * ma
                         s.x[b] -= dx * correction * mb; s.y[b] -= dy * correction * mb
                     }

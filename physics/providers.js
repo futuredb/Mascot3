@@ -23,8 +23,19 @@ class Providers {
   constructor({ env, directory, fetchImpl = fetch }) { this.env = env; this.directory = directory; this.fetch = fetchImpl; }
   async request(url, options = {}) {
     const response = await this.fetch(url, { ...options, signal: AbortSignal.timeout(240000) });
-    if (!response.ok) throw new Error(`provider_http_${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(`provider_http_${response.status}`), { httpStatus: response.status });
     return response.json();
+  }
+  async submissionFailure(file, record, stage, error) {
+    // A received 4xx (except timeout) explicitly rejected creation. A transport
+    // failure or 5xx can conceal an accepted request and must never be retried.
+    const rejected = error.httpStatus >= 400 && error.httpStatus < 500 && error.httpStatus !== 408;
+    record.state = rejected ? 'rejected' : 'submission_unknown';
+    record.error = error.httpStatus ? `provider_http_${error.httpStatus}` : String(error.cause?.code || error.name || 'transport_error');
+    if (error.httpStatus === 429) record.retry_at = Date.now() + 60000;
+    if (rejected) record.cost_usd = 0;
+    await atomicJson(file, record);
+    throw new Error(rejected ? `provider_rejected:${stage}:${error.httpStatus}` : `submission_unknown:${stage}`, { cause: error });
   }
   async download(url) {
     if (url.startsWith('data:image/')) {
@@ -46,14 +57,32 @@ class Providers {
     const requestHash = sha256(JSON.stringify({ model, input }));
     let record = await readJson(file);
     requireValue(!record || record.request_hash === requestHash, 'provider_request_changed');
+    if (!record) {
+      // A revised segmentation strategy may use a different stage name for the
+      // exact same paid request. Reuse its output/ID, including uncertain sends.
+      for (const name of (await fs.readdir(this.directory).catch(() => [])).filter(n => n.endsWith('.json'))) {
+        const prior = await readJson(path.join(this.directory, name));
+        if (prior?.request_hash !== requestHash || prior.state === 'rejected') continue;
+        if (prior.state === 'complete') {
+          record = { ...prior, cost_usd: 0, metrics: undefined, reused_from: name };
+          await atomicJson(file, record); return record.output;
+        }
+        if (!prior.provider_id) throw new Error(`submission_unknown:${name.slice(0,-5)}`);
+        // Poll the original stage so billing/progress remain recorded only once.
+        return this.replicate(name.slice(0,-5), model, input);
+      }
+    }
     if (record?.state === 'complete') return record.output;
+    if (record?.state === 'rejected' && record.retry_at > Date.now()) throw new Error(`rate_limited:${stage}`);
+    const attempts = record?.attempts || [];
+    if (record?.state === 'rejected') { attempts.push({ submitted_at: record.submitted_at, error: record.error, cost_usd: 0 }); record = null; }
     if (record && !record.provider_id) throw new Error(`submission_unknown:${stage}`);
     if (!record) {
-      record = { state: 'submitting', model, request_hash: requestHash, submitted_at: new Date().toISOString() };
+      record = { state: 'submitting', model, request_hash: requestHash, submitted_at: new Date().toISOString(), attempts };
       await atomicJson(file, record);
       let prediction;
       try { prediction = await this.request('https://api.replicate.com/v1/predictions', { method: 'POST', headers: { Authorization: `Bearer ${this.env.REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ version: model.split(':')[1], input }) }); }
-      catch (error) { throw new Error(`submission_unknown:${stage}`, {cause:error}); }
+      catch (error) { return this.submissionFailure(file, record, stage, error); }
       requireValue(typeof prediction.id === 'string' && /^[a-z0-9]+$/.test(prediction.id), 'missing_prediction_id');
       record.provider_id = prediction.id;
       record.state = 'submitted';
@@ -88,13 +117,17 @@ class Providers {
     let previous = await readJson(file);
     requireValue(!previous || previous.request_hash === requestHash, 'provider_request_changed');
     if (previous?.state === 'complete') return previous.result;
+    if (previous?.state === 'rejected' && previous.retry_at > Date.now()) throw new Error(`rate_limited:${stage}`);
+    const attempts = previous?.attempts || [];
+    if (previous?.state === 'rejected') { attempts.push({ submitted_at: previous.submitted_at, error: previous.error, cost_usd: 0 }); previous = null; }
     if (previous && !previous.response) throw new Error(`submission_unknown:${stage}`);
     if (!previous) {
-      await atomicJson(file, { state: 'submitting', model, request_hash: requestHash, submitted_at: new Date().toISOString() });
+      const submission = { state: 'submitting', model, request_hash: requestHash, submitted_at: new Date().toISOString(), attempts };
+      await atomicJson(file, submission);
       let response;
       try { response = await this.request('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); }
-      catch (error) { throw new Error(`submission_unknown:${stage}`, {cause:error}); }
-      previous = { state: 'received', model, request_hash: requestHash, provider_id: response.id, cost_usd: response.usage?.cost ?? null, response };
+      catch (error) { return this.submissionFailure(file, submission, stage, error); }
+      previous = { ...submission, state: 'received', provider_id: response.id, cost_usd: response.usage?.cost ?? null, response };
       await atomicJson(file, previous); // Invalid structured output still retains its request ID and cost.
     }
     const response = previous.response;
@@ -107,7 +140,7 @@ class Providers {
       const content = Array.isArray(message?.content) ? message.content.map(p => p.text || '').join('') : message?.content;
       result = JSON.parse(String(content).replace(/^```(?:json)?\s*|\s*```$/g, ''));
     }
-    await atomicJson(file, { state: 'complete', model, request_hash: requestHash, provider_id: response.id, cost_usd: response.usage?.cost ?? null, result });
+    await atomicJson(file, { state: 'complete', model, request_hash: requestHash, provider_id: response.id, cost_usd: response.usage?.cost ?? null, attempts: previous.attempts || [], result });
     return result;
   }
 }

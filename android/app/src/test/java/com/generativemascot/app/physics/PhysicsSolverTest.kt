@@ -4,6 +4,8 @@ import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.hypot
+import java.io.File
+import kotlinx.serialization.json.Json
 
 class PhysicsSolverTest {
     private fun pack(): PhysicsPack {
@@ -24,7 +26,52 @@ class PhysicsSolverTest {
         return PhysicsPack("mascot-physics-2.5d",1,"0".repeat(64),"0".repeat(64),width=128,height=128,maxTiltDegrees=12f,
             layers=listOf(base,ribbon,plate),assets=mapOf("color" to PhysicsAsset("color.png","0".repeat(64),100),"depth" to PhysicsAsset("depth.png","0".repeat(64),100)),qa=PhysicsQa(true,0f))
     }
-    private fun snapshot(solver: PhysicsSolver) = listOf(solver.angleX,solver.angleY) + solver.states.flatMap { it.x.toList() + it.y.toList() }
+    private fun snapshot(solver: PhysicsSolver) = listOf(solver.angleX,solver.angleY,solver.bodyX,solver.bodyY) + solver.states.flatMap { it.x.toList() + it.y.toList() }
+
+    @Test fun approvedPackShowsSecondaryMovementAtModerateTilt() {
+        val root=File("src/main/assets/bundled-heroes/${PhysicsStore.PILOT_ID}/physics")
+        val pack=Json { ignoreUnknownKeys=true }.decodeFromString<PhysicsPack>(File(root,"${File(root,"active").readText().trim()}/manifest.json").readText())
+        val solver=PhysicsSolver(pack)
+        repeat(360) { solver.advance(1.0/120,.15f,0f,gravityX=.15f) }
+        solver.states.filter { it.layer.material!="rigid" }.forEach { s ->
+            val pixels=s.x.indices.maxOf { i -> hypot(s.x[i]-s.layer.vertices[i][0],s.y[i]-s.layer.vertices[i][1]) }*pack.width
+            println("${s.layer.id}: $pixels pixels at moderate tilt")
+            assertTrue("${s.layer.id} moves only $pixels pixels",pixels>=2f)
+        }
+        repeat(1200) { frame ->
+            val sign=if(frame%60<30) 1f else -1f
+            solver.advance(1.0/120,sign*.2f,-sign*.2f,sign*12f,-sign*12f,sign,-sign)
+            solver.states.forEach { s ->
+                for(t in s.layer.triangles.indices step 3) {
+                    val a=s.layer.triangles[t];val b=s.layer.triangles[t+1];val c=s.layer.triangles[t+2]
+                    assertTrue("Fold in ${s.layer.id}",(s.x[b]-s.x[a])*(s.y[c]-s.y[a])-(s.y[b]-s.y[a])*(s.x[c]-s.x[a])>0f)
+                }
+                s.layer.pins.forEach { pin ->
+                    if(s.layer.parentId=="body") {
+                        assertEquals(s.layer.vertices[pin[0]][0],s.x[pin[0]],1e-6f)
+                        assertEquals(s.layer.vertices[pin[0]][1],s.y[pin[0]],1e-6f)
+                    }
+                }
+            }
+        }
+        solver.neutral=true
+        repeat(600) { solver.advance(1.0/120,0f,0f) }
+        assertTrue(solver.settled)
+    }
+
+    @Test fun inPlaneRollMovesTheBodyAndNeutralStopsIt() {
+        val solver=PhysicsSolver(pack().copy(maxBodyOffset=.035f))
+        // Upright phone rolled sideways: quaternion X/Y can remain zero, while
+        // gravity projected onto the display changes noticeably.
+        repeat(240) { solver.advance(1.0/120,0f,0f,gravityX=.5f) }
+        assertTrue(solver.angleX>.15f)
+        assertTrue(solver.bodyX>.03f)
+        assertEquals(0f,solver.bodyY,1e-6f)
+        solver.neutral=true
+        repeat(600) { solver.advance(1.0/120,0f,0f,gravityX=.5f) }
+        assertTrue(solver.settled)
+        assertEquals(0f,solver.bodyX,.00001f)
+    }
 
     @Test fun sameRecordedInputsAt30_60_120Fps() {
         val records = listOf(floatArrayOf(0f,0f,0f,0f,0f,0f),floatArrayOf(.18f,-.12f,0f,0f,.2f,-.1f),floatArrayOf(-.1f,.12f,9f,-8f,-.3f,.4f),floatArrayOf(0f,0f,0f,0f,0f,0f))

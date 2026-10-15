@@ -52,10 +52,30 @@ class PhysicsStore(private val context: Context) {
     fun revision(id: String): String? = runCatching {
         AtomicFile(File(directory(id), "active")).openRead().bufferedReader().use { it.readText() }.trim()
     }.getOrNull()
-    suspend fun load(id: String): InstalledPhysics? = withContext(Dispatchers.IO) {
+    suspend fun load(id: String): InstalledPhysics? = mutex.withLock { withContext(Dispatchers.IO) {
+        refreshBundled(id)
         val revision = revision(id) ?: return@withContext null
         require(revision.matches(Regex("[a-f0-9]{64}")))
         verify(id, File(directory(id), revision), revision)
+    } }
+    /** Upgrade an older bundled pack after APK import, without replacing an
+     * unrelated downloaded revision or pointing at partially copied files. */
+    private fun refreshBundled(id: String) {
+        val source="bundled-heroes/$id/physics"
+        val bundled=runCatching { context.assets.open("$source/active").bufferedReader().use { it.readText() }.trim() }.getOrNull() ?: return
+        require(bundled.matches(Regex("[a-f0-9]{64}")))
+        val current=revision(id)
+        val previous=prefs(id).getString("bundledRevision",null)
+        val knownBundled=context.assets.list(source).orEmpty().any { it.substringBefore('/')==current }
+        if (current!=bundled && (current==null || current==previous || knownBundled)) {
+            verify(id,File(directory(id),bundled),bundled)
+            activate(directory(id),bundled)
+        }
+        prefs(id).edit().putString("bundledRevision",bundled).commit()
+    }
+    private fun activate(root: File, revision: String) {
+        val atomic = AtomicFile(File(root, "active")); val out = atomic.startWrite()
+        try { out.write(revision.toByteArray()); atomic.finishWrite(out) } catch (e: Exception) { atomic.failWrite(out); throw e }
     }
     private fun verify(id: String, root: File, expected: String): InstalledPhysics {
         val bytes = File(root, "manifest.json").readBytes()
@@ -91,7 +111,7 @@ class PhysicsStore(private val context: Context) {
     }
     suspend fun install(api: MascotApi, id: String, ref: AssetRefDto) = mutex.withLock { withContext(Dispatchers.IO) {
         require(ref.sha256.matches(Regex("[a-f0-9]{64}")))
-        if (revision(id) == ref.sha256 && runCatching { load(id) }.getOrNull() != null) return@withContext
+        if (revision(id) == ref.sha256 && runCatching { verify(id, File(directory(id), ref.sha256), ref.sha256) }.isSuccess) return@withContext
         val root = directory(id); root.mkdirs()
         val staging = File(root, "pending-${ref.sha256}").apply { mkdirs() }
         val bytes = download(api, ref.url, 8L * 1024 * 1024)
@@ -115,8 +135,7 @@ class PhysicsStore(private val context: Context) {
         }
         if (!destination.exists()) check(staging.renameTo(destination)) { "Не удалось сохранить пакет" }
         verify(id, destination, ref.sha256)
-        val atomic = AtomicFile(File(root, "active")); val out = atomic.startWrite()
-        try { out.write(ref.sha256.toByteArray()); atomic.finishWrite(out) } catch (e: Exception) { atomic.failWrite(out); throw e }
+        activate(root,ref.sha256)
         setStatus(id, "Физика готова")
     } }
     companion object {

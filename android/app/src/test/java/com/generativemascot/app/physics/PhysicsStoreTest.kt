@@ -34,6 +34,34 @@ class PhysicsStoreTest {
     private fun png(color: Int): ByteArray = ByteArrayOutputStream().use { out ->
         Bitmap.createBitmap(64,64,Bitmap.Config.ARGB_8888).apply { eraseColor(color); compress(Bitmap.CompressFormat.PNG,100,out); recycle() }; out.toByteArray()
     }
+    @Test fun bundledUpgradeIsVerifiedAndDoesNotDowngradeAnIndependentDownload() = runBlocking {
+        val id=PhysicsStore.PILOT_ID; val source="bundled-heroes/$id"
+        val hero=File(context.filesDir,"hero/$id").apply { mkdirs() }
+        fun copy(asset:String,destination:File) {
+            val children=context.assets.list(asset).orEmpty()
+            if(children.isNotEmpty()) { destination.mkdirs();children.forEach { copy("$asset/$it",File(destination,it)) } }
+            else { destination.parentFile!!.mkdirs();context.assets.open(asset).use { input->destination.outputStream().use { output->input.copyTo(output) } } }
+        }
+        try {
+            copy("$source/base.png",File(hero,"base.png"))
+            copy("$source/videos/neutral.png",File(hero,"videos/neutral.png"))
+            copy("$source/physics",File(hero,"physics"))
+            val root=File(hero,"physics");val newest=File(root,"active").readText().trim()
+            val old=root.listFiles()!!.first { it.isDirectory && it.name!=newest }.name
+            File(root,"active").writeText(old)
+            val store=PhysicsStore(context)
+            assertEquals(newest,store.load(id)!!.directory.name)
+            assertEquals(newest,store.revision(id))
+            val installed=store.load(id)!!
+            val remoteBytes=Json.encodeToString(installed.pack.copy(maxBodyOffset=.02f)).toByteArray()
+            val remoteHash=PhysicsStore.hash(remoteBytes)
+            val remote=File(root,remoteHash);installed.directory.copyRecursively(remote)
+            File(remote,"manifest.json").writeBytes(remoteBytes)
+            File(root,"active").writeText(remoteHash)
+            assertEquals(remoteHash,store.load(id)!!.directory.name)
+            assertEquals(remoteHash,store.revision(id))
+        } finally { hero.deleteRecursively() }
+    }
     @Test fun interruptedOrRejectedDownloadNeverReplacesTheWorkingPackage() = runBlocking {
         val id="physics-test-${UUID.randomUUID()}"; val store=PhysicsStore(context)
         val base=png(Color.RED); val second=png(Color.BLUE)

@@ -36,8 +36,13 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
     var onSettled: () -> Unit = {}
     var onFailure: (String) -> Unit = {}
     val sensorsAvailable get() = motion.available
+    val calibrated get() = motion.calibrated
+    fun recalibrate() { motion.recalibrate() }
     init { isOpaque = false; surfaceTextureListener = this }
-    fun resume() { active = true; motion.start() }
+    fun resume() {
+        active = motion.start()
+        if (!active) post { onFailure("Не удалось включить датчики движения") }
+    }
     fun pause() { active = false; motion.stop() }
     override fun onDetachedFromWindow() { pause(); super.onDetachedFromWindow() }
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) { viewportWidth = width; viewportHeight = height }
@@ -83,7 +88,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
             if (owner.cancelled.get()) { dispose(); return@post }
             try {
                 val solver = PhysicsSolver(installed.pack)
-                var angle = -1; var fit = -1; var breath = -1
+                var angle = -1; var fit = -1; var breath = -1; var bodyOffset = -1; var lean = -1
                 fun initializeGraphics() {
                 display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
                 check(EGL14.eglInitialize(display, IntArray(2), 0, IntArray(2), 0))
@@ -101,12 +106,14 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                 fit = GLES30.glGetUniformLocation(program, "fit")
                 val aspect = GLES30.glGetUniformLocation(program, "aspect")
                 breath = GLES30.glGetUniformLocation(program, "breath")
+                bodyOffset = GLES30.glGetUniformLocation(program, "bodyOffset")
+                lean = GLES30.glGetUniformLocation(program, "lean")
                 GLES30.glUniform1f(aspect, installed.pack.height.toFloat() / installed.pack.width)
                 }
                 initializeGraphics()
                 var previous = 0L; var wasActive = false; var ready = false; var settledSent = false; var lastSettleToken = -1
                 var frameCount = 0; var computeNanos = 0L; var contextRecoveries = 0
-                val metrics = FrameMetrics(context)
+                val metrics = FrameMetrics(context, motion)
                 callback = Choreographer.FrameCallback { time ->
                     if (owner.cancelled.get()) dispose()
                     if (!stopped) try {
@@ -123,6 +130,8 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                             GLES30.glUniform2f(angle, solver.angleX, solver.angleY)
                             GLES30.glUniform2f(fit, 2 * pixels / w, 2 * pixels / h)
                             GLES30.glUniform1f(breath, solver.breathingOffset)
+                            GLES30.glUniform2f(bodyOffset, solver.bodyX, solver.bodyY)
+                            GLES30.glUniform2f(lean, solver.leanAngle, solver.supportY)
                             resources.forEach(GlLayer::draw)
                             if (!EGL14.eglSwapBuffers(display, eglSurface)) {
                                 if (EGL14.eglGetError() == EGL14.EGL_CONTEXT_LOST) throw ContextLost()
@@ -133,7 +142,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                             if (neutral && solver.settled && !settledSent) { settledSent = true; val token = settleToken; post { if (session === owner && !owner.cancelled.get() && token == settleToken) onSettled() } }
                             val elapsed = System.nanoTime() - started
                             computeNanos += elapsed; frameCount++
-                            metrics.add(time, elapsed)
+                            metrics.add(time, elapsed, sample, solver)
                             if (frameCount == 1) check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "physics_gl_error" }
                             if (frameCount == 600) { android.util.Log.i("MascotPhysics", "600 frames mean render ms=${computeNanos / 600e6}"); frameCount = 0; computeNanos = 0; contextRecoveries = 0 }
                         }
@@ -194,23 +203,29 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
         }
         fun dispose() { GLES30.glDeleteTextures(1, intArrayOf(texture), 0); GLES30.glDeleteBuffers(2, buffers, 0) }
     }
-    /** Bounded local diagnostics; CSV contains timings/memory only, never images or keys. */
-    private class FrameMetrics(context: Context) {
+    /** Bounded local diagnostics; timings, memory and motion aggregates, never images or keys. */
+    private class FrameMetrics(context: Context, private val motion: PhoneMotion) {
         val samples = LongArray(600); var count = 0; var previous = 0L; var interval = 0L; var intervals = 0
+        val peaks = FloatArray(8); var neutralFrames = 0
         val file = runCatching {
             val folder = File(context.getExternalFilesDir(null) ?: context.filesDir, "physics-metrics").apply { mkdirs() }
             folder.listFiles()?.filter { it.extension == "csv" }?.sortedByDescending { it.lastModified() }?.drop(4)?.forEach { it.delete() }
-            File(folder,"frames-${System.currentTimeMillis()}.csv").apply { writeText("time_ms,frames,fps,render_mean_ms,render_p95_ms,java_heap_bytes,native_heap_bytes\n") }
+            File(folder,"frames-${System.currentTimeMillis()}.csv").apply { writeText("time_ms,frames,fps,render_mean_ms,render_p95_ms,java_heap_bytes,native_heap_bytes,tilt_x_peak,tilt_y_peak,gravity_x_peak,gravity_y_peak,angle_x_peak,angle_y_peak,body_x_peak,body_y_peak,neutral_frames,rotation_events,gravity_events,acceleration_events,calibrated,tilt_x,tilt_y,body_x,body_y\n") }
         }.getOrNull()
-        fun add(time: Long, elapsed: Long) {
+        fun add(time: Long, elapsed: Long, input: PhoneSample, solver: PhysicsSolver) {
+            fun peak(i: Int, value: Float) { peaks[i] = maxOf(peaks[i], kotlin.math.abs(value)) }
+            peak(0,input.tiltX); peak(1,input.tiltY); peak(2,input.gravityX); peak(3,input.gravityY)
+            peak(4,solver.angleX); peak(5,solver.angleY); peak(6,solver.bodyX); peak(7,solver.bodyY)
+            if (solver.neutral) neutralFrames++
             if (previous > 0 && time > previous) { interval += time-previous; intervals++ }
             previous=time; samples[count++]=elapsed
             if (count < samples.size) return
             samples.sort()
             val runtime=Runtime.getRuntime()
             val logFile=file
-            if (logFile != null && logFile.length() < 256 * 1024) runCatching { logFile.appendText("${System.currentTimeMillis()},$count,${if(interval>0) intervals*1e9/interval else 0.0},${samples.average()/1e6},${samples[569]/1e6},${runtime.totalMemory()-runtime.freeMemory()},${android.os.Debug.getNativeHeapAllocatedSize()}\n") }
+            if (logFile != null && logFile.length() < 256 * 1024) runCatching { logFile.appendText("${System.currentTimeMillis()},$count,${if(interval>0) intervals*1e9/interval else 0.0},${samples.average()/1e6},${samples[569]/1e6},${runtime.totalMemory()-runtime.freeMemory()},${android.os.Debug.getNativeHeapAllocatedSize()},${peaks.joinToString(",")},$neutralFrames,${motion.rotationEvents},${motion.gravityEvents},${motion.accelerationEvents},${motion.calibrated},${input.tiltX},${input.tiltY},${solver.bodyX},${solver.bodyY}\n") }
             count=0; interval=0; intervals=0
+            peaks.fill(0f); neutralFrames=0
         }
     }
     private fun makeProgram(): Int {
@@ -221,14 +236,16 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
         val vertex = shader(GLES30.GL_VERTEX_SHADER, """#version 300 es
             layout(location=0) in vec3 position;
             layout(location=1) in vec2 texcoord;
-            uniform vec2 angle; uniform vec2 fit; uniform float aspect; uniform float breath;
+            uniform vec2 angle; uniform vec2 fit; uniform vec2 bodyOffset; uniform vec2 lean; uniform float aspect; uniform float breath;
             out vec2 uv;
             void main() {
                 vec3 p = position - vec3(0.5, aspect * 0.5, 0.0);
                 float x = p.x*cos(angle.x) + p.z*sin(angle.x);
                 float z = -p.x*sin(angle.x) + p.z*cos(angle.x);
                 float y = p.y*cos(angle.y) - z*sin(angle.y) + breath;
-                gl_Position = vec4((x + angle.x * 0.025)*fit.x, -(y + angle.y * 0.025)*fit.y, 0.0, 1.0); uv=texcoord;
+                float rx = x*cos(lean.x) - (y-lean.y)*sin(lean.x);
+                float ry = x*sin(lean.x) + (y-lean.y)*cos(lean.x) + lean.y;
+                gl_Position = vec4((rx + bodyOffset.x)*fit.x, -(ry + bodyOffset.y)*fit.y, 0.0, 1.0); uv=texcoord;
             }
         """.trimIndent())
         val fragment = shader(GLES30.GL_FRAGMENT_SHADER, """#version 300 es

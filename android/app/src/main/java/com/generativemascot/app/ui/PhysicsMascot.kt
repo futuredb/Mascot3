@@ -100,6 +100,14 @@ private fun PhysicsPlayback(
     var waking by remember { mutableStateOf(false) }
     var settleToken by remember { mutableIntStateOf(0) }
     var playbackSerial by remember { mutableIntStateOf(0) }
+    var physicsView by remember { mutableStateOf<PhysicsView?>(null) }
+    var calibrated by remember { mutableStateOf(false) }
+    LaunchedEffect(physicsView, foreground) {
+        while (foreground && isActive) {
+            calibrated = physicsView?.calibrated == true
+            delay(100)
+        }
+    }
     val urls = remember(videoUrls) { videoUrls.mapKeys { HeroLocalStore.normalizeVideoAction(it.key) } }
     val visibleCallback by rememberUpdatedState(visible)
     val finishedCallback by rememberUpdatedState(finished)
@@ -124,8 +132,13 @@ private fun PhysicsPlayback(
     fun ended() { phase = PhysicsPhase.RETURNING; settleToken++ }
     Box(Modifier.fillMaxSize()) {
         AndroidView(
-            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible) 0f else 1f },
+            // TextureView must be consumed while the neutral frame is prepared.
+            // An alpha-zero parent can stop SurfaceTexture consumption, blocking
+            // eglSwapBuffers and the callback that is meant to reveal physics.
+            // The final video frame remains above it until onSettled fires.
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible && phase == PhysicsPhase.VIDEO) 0f else 1f },
             factory = { ctx -> PhysicsView(ctx, installed).also { view ->
+                physicsView = view
                 if (!view.sensorsAvailable) failureCallback("На устройстве недоступны датчики движения")
             } },
             update = { view ->
@@ -146,7 +159,7 @@ private fun PhysicsPlayback(
                 }
                 if (foreground && (phase != PhysicsPhase.VIDEO || !videoVisible)) view.resume() else view.pause()
             },
-            onRelease = { it.pause() },
+            onRelease = { it.pause(); if (physicsView === it) physicsView = null },
         )
         val current = playing
         if (current != null) {
@@ -163,6 +176,14 @@ private fun PhysicsPlayback(
                     PhysicsActionVideo(urls.getValue(current), foreground && phase == PhysicsPhase.VIDEO, videoModifier,
                         onVisible = { videoVisible = true; visibleCallback?.invoke(current) },
                         onEnded = { if (current in setOf("greeting", "signature")) finishedCallback?.invoke(current); ended() }, onFailure = failureCallback)
+                }
+            }
+        }
+        if (phase == PhysicsPhase.IDLE && foreground) {
+            Column(Modifier.align(Alignment.BottomCenter).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (!calibrated) Text("Подержите телефон неподвижно", fontSize = 12.sp)
+                TextButton(onClick = { physicsView?.recalibrate(); calibrated = false }, enabled = calibrated) {
+                    Text("Выровнять по телефону", fontSize = 12.sp)
                 }
             }
         }

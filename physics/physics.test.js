@@ -6,7 +6,8 @@ const path = require('node:path');
 const { Providers, MODELS, atomicJson, dataUrl } = require('./providers');
 const { PhysicsJobs } = require('./jobs');
 const { PILOT_ID, FORMAT, VERSION, sha256, validateAnalysis, validatePack } = require('./contracts');
-const { png, rgba, partMask, assemble, renderPack, neutralError } = require('./assets');
+const { png, rgba, analysisFrame, partMask, assemble, renderPack, neutralError } = require('./assets');
+const { maskCandidates, addCandidates, selectCandidateParts } = require('./segmentation');
 
 async function temporary(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'mascot-physics-'));
@@ -56,6 +57,57 @@ test('OpenRouter unknown outcomes also never purchase automatically twice', asyn
   const providers = new Providers({env:{OPENROUTER_API_KEY:'fixture'},directory:await temporary(t),fetchImpl:async()=>{calls++; throw new Error('lost');}});
   await assert.rejects(providers.vision('review','prompt',[]),/submission_unknown/);
   await assert.rejects(providers.vision('review','prompt',[]),/submission_unknown/);
+  assert.equal(calls,1);
+});
+
+test('renamed stages reuse identical SAM requests and cannot bypass an unknown submission', async t => {
+  const directory=await temporary(t), input={image:'fixture',prompt:'cloth'}; let posts=0;
+  const provider=new Providers({env:{REPLICATE_API_TOKEN:'fixture'},directory,fetchImpl:async(_url,options)=>{
+    if(options.method==='POST') { posts++; return response({id:'prediction1'}); }
+    return response({status:'succeeded',output:'mask',metrics:{predict_time:1}});
+  }});
+  await provider.replicate('original_stage',MODELS.masks,input);
+  assert.equal(await provider.replicate('new_strategy_stage',MODELS.masks,input),'mask');
+  assert.equal(posts,1);
+  assert.equal(JSON.parse(await fs.readFile(path.join(directory,'new_strategy_stage.json'))).cost_usd,0);
+  const unknown=new Providers({env:{REPLICATE_API_TOKEN:'fixture'},directory:await temporary(t),fetchImpl:async()=>{posts++;throw Error('lost');}});
+  await assert.rejects(unknown.replicate('first',MODELS.masks,input),/submission_unknown/);
+  await assert.rejects(unknown.replicate('renamed',MODELS.masks,input),/submission_unknown/);
+  assert.equal(posts,2);
+});
+
+test('SAM instances supply bounds and roots; incomplete or duplicate selections fail closed', async()=>{
+  const width=128,height=128,alpha=Buffer.alloc(width*height,255),union=Buffer.alloc(alpha.length);
+  for(let y=20;y<80;y++) for(let x=20;x<27;x++) {union[y*width+x]=255;union[y*width+x+60]=255;}
+  const candidates=await maskCandidates(await png(union,width,height,1),alpha,width,height);
+  assert.equal(candidates.length,2);
+  addCandidates(candidates,await maskCandidates(await png(union,width,height,1),alpha,width,height));
+  assert.equal(candidates.length,2);
+  const review={complete:true,rigid_regions_excluded:true,parts:[{...part,candidate_id:'C1',attachment_region:'top'}]};
+  const {analysis,masks}=selectCandidateParts(review,candidates,width,height);
+  assert.deepEqual(analysis.parts[0].bounds,[20/128,20/128,27/128,80/128]);
+  assert.equal(analysis.parts[0].attachment[1],20/128);
+  assert.equal(masks[0][20*width+23],255);
+  assert.throws(()=>selectCandidateParts({...review,complete:false},candidates,width,height),/review_rejected/);
+  assert.throws(()=>selectCandidateParts({...review,parts:[...review.parts,{...review.parts[0],id:'duplicate'}]},candidates,width,height),/candidate_selection/);
+  assert.throws(()=>selectCandidateParts({...review,parts:[{...review.parts[0],candidate_id:'C99'}]},candidates,width,height),/candidate_selection/);
+});
+
+test('explicit rejected creation is recorded and can resume; server errors stay unknown', async t => {
+  const directory = await temporary(t); let posts = 0;
+  const providers = new Providers({env:{REPLICATE_API_TOKEN:'fixture'}, directory, fetchImpl:async (url, options)=>{
+    if (options.method === 'POST') { posts++; return posts === 1 ? {ok:false,status:402} : response({id:'accepted123'}); }
+    return response({status:'succeeded',output:'fixture'});
+  }});
+  await assert.rejects(providers.replicate('matte',MODELS.matte,{image:'fixture'}),/provider_rejected:matte:402/);
+  const rejection=JSON.parse(await fs.readFile(path.join(directory,'matte.json')));
+  assert.equal(rejection.state,'rejected'); assert.equal(rejection.cost_usd,0);
+  assert.equal(await providers.replicate('matte',MODELS.matte,{image:'fixture'}),'fixture'); assert.equal(posts,2);
+  assert.equal(JSON.parse(await fs.readFile(path.join(directory,'matte.json'))).attempts[0].error,'provider_http_402');
+  let calls=0;
+  const ambiguous=new Providers({env:{OPENROUTER_API_KEY:'fixture'},directory,fetchImpl:async()=>{calls++;return {ok:false,status:503};}});
+  await assert.rejects(ambiguous.vision('review','prompt',[]),/submission_unknown/);
+  await assert.rejects(ambiguous.vision('review','prompt',[]),/submission_unknown/);
   assert.equal(calls,1);
 });
 
@@ -119,16 +171,20 @@ test('CLI and server sharing a directory cannot create duplicate input jobs',asy
 test('entire local pipeline publishes only when independent review approves',async t=>{
   for(const approved of [false,true]) {
     const root=await temporary(t), f=await fixture(), models=[];
+    const {frame}=await analysisFrame(f.original);
+    const croppedPart={...part,bounds:[(part.bounds[0]*128-frame.left)/frame.width,(part.bounds[1]*128-frame.top)/frame.height,(part.bounds[2]*128-frame.left)/frame.width,(part.bounds[3]*128-frame.top)/frame.height],attachment:[(part.attachment[0]*128-frame.left)/frame.width,(part.attachment[1]*128-frame.top)/frame.height]};
+    const croppedMask=await require('sharp')(await png(f.masks[0],128,128,1)).extract({left:frame.left,top:frame.top,width:frame.width,height:frame.height}).png().toBuffer();
     const jobs=new PhysicsJobs({root,env:{PHYSICS_ENABLED:'true',REPLICATE_API_TOKEN:'fixture',OPENROUTER_API_KEY:'fixture'},providerFactory:()=>({
       download:async uri=>Buffer.from(uri.split(',')[1],'base64'),
-      replicate:async(stage,model,input)=>{models.push([stage,model,input.model_size]); if(stage==='depth') return {grey_depth:dataUrl(f.depthImage)}; return dataUrl(stage==='matte'?f.original:stage==='restored_matte'?f.restored:await png(f.masks[0],128,128,1));},
-      vision:async(stage)=> stage==='analysis'?{parts:[part]}:stage==='reconstruction'?dataUrl(f.restored):{identity_preserved:approved,neutral_matches:true,no_holes_or_duplicates:true,attachments_correct:true,rigid_parts_preserved:true,depth_plausible:true},
+      replicate:async(stage,model,input)=>{models.push([stage,model,input.model_size]); if(stage==='depth') return {grey_depth:dataUrl(f.depthImage)}; if(input.prompt===part.prompt) return dataUrl(await png(Buffer.alloc(frame.width*frame.height),frame.width,frame.height,1)); return dataUrl(stage==='matte'?f.original:stage.startsWith('restored_matte_')?f.restored:croppedMask);},
+      vision:async(stage)=> stage==='analysis_grid_v1'?{parts:[structuredClone(croppedPart)]}:stage.startsWith('binding_v1_')?{complete:true,rigid_regions_excluded:true,parts:[{...part,candidate_id:'C1',attachment_region:'top'}]}:stage.startsWith('reconstruction_')?dataUrl(f.restored):{identity_preserved:approved,neutral_matches:true,no_holes_or_duplicates:true,attachments_correct:true,rigid_parts_preserved:true,depth_plausible:true},
     })});
     const job=await jobs.create({mascot_id:PILOT_ID,image_base64:f.original.toString('base64'),character_contract:{}},`fixture-pipeline-${approved}`);
     await jobs.start(job.id); const result=await jobs.get(job.id);
     assert.equal(result.status,approved?'ready':'failed',JSON.stringify(result));
     assert.equal(!!jobs.public(result).physics_pack,approved);
     assert.ok(models.some(([stage,,size])=>stage==='depth'&&size==='Small'));
+    assert.ok(models.some(([stage])=>stage.startsWith('mask_category_')));
     if(approved) {
       const bytes=await fs.readFile(path.join(root,job.id,'pack/manifest.json'));
       assert.equal(sha256(bytes),result.pack_sha256); validatePack(JSON.parse(bytes));

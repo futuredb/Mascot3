@@ -16,6 +16,7 @@ function validateAnalysis(value) {
   for (const part of value.parts) {
     requireValue(safeName(part.id) && !ids.has(part.id), 'invalid_part_id');
     requireValue(typeof part.prompt === 'string' && part.prompt.length >= 3 && part.prompt.length <= 200, 'invalid_part_prompt');
+    if (part.mask_prompts !== undefined) requireValue(Array.isArray(part.mask_prompts) && part.mask_prompts.length <= 3 && part.mask_prompts.every(p=>typeof p==='string'&&p.length>=3&&p.length<=100),'invalid_mask_prompts');
     requireValue(['hair', 'cord', 'cloth', 'rigid'].includes(part.material), 'invalid_material');
     requireValue(typeof part.parent_id === 'string' && ids.has(part.parent_id), 'parent_must_precede_child');
     requireValue(Array.isArray(part.bounds) && part.bounds.length === 4 && part.bounds.every(v => finite(v, 0, 1)) && part.bounds[2] > part.bounds[0] && part.bounds[3] > part.bounds[1], 'invalid_part_bounds');
@@ -32,6 +33,8 @@ function validatePack(pack, { requireApproval = true } = {}) {
   requireValue(/^[a-f0-9]{64}$/.test(pack.source_sha256) && /^[a-f0-9]{64}$/.test(pack.anchor_sha256), 'invalid_source_hash');
   requireValue(Number.isInteger(pack.width) && Number.isInteger(pack.height) && finite(pack.width, 64, 2048) && finite(pack.height, 64, 2048), 'invalid_canvas');
   requireValue(pack.max_tilt_degrees === 12, 'invalid_tilt_limit');
+  if (pack.max_body_offset !== undefined) requireValue(finite(pack.max_body_offset,0,.05),'invalid_body_offset');
+  if (pack.max_lean_degrees !== undefined) requireValue(finite(pack.max_lean_degrees,0,12),'invalid_lean_limit');
   requireValue(Array.isArray(pack.layers) && pack.layers.length >= 2 && pack.layers.length <= 17, 'invalid_layers');
   requireValue(!requireApproval || (pack.qa?.approved === true && finite(pack.qa.neutral_error, 0, .025)), 'physics_qa_not_approved');
   const ids = new Set();

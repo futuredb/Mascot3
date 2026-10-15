@@ -20,7 +20,13 @@ async function main() {
   const jobs = new PhysicsJobs({ root, env: { ...env, PHYSICS_ENABLED: 'true' } });
   const job = await jobs.create({ mascot_id: hero, image_base64: image.toString('base64'), anchor_base64: anchor.toString('base64'), character_contract: contract }, options.key || `physics-v1-${hero}`);
   await jobs.start(job.id);
-  const result = await jobs.get(job.id);
+  let result = await jobs.get(job.id);
+  const deadline=Date.now()+20*60*1000;
+  while(result.status==='queued' && Date.now()<deadline) {
+    console.log(JSON.stringify({id:result.id,status:result.status,stage:result.stage,error:result.error}));
+    await new Promise(resolve=>setTimeout(resolve,30000));
+    await jobs.start(job.id); result=await jobs.get(job.id);
+  }
   console.log(JSON.stringify({ ...jobs.public(result), directory: jobs.directory(job.id) }, null, 2));
   if (result.status !== 'ready') process.exitCode = 1;
 }

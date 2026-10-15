@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js && node --check physics/contracts.js && node --check physics/providers.js && node --check physics/assets.js && node --check physics/jobs.js && node --check scripts/prepare-physics.cjs",
+    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js && node --check physics/contracts.js && node --check physics/providers.js && node --check physics/assets.js && node --check physics/segmentation.js && node --check physics/jobs.js && node --check scripts/prepare-physics.cjs",
     "build": "npm run check",
     "test": "node --test pipeline/*.test.js server/*.test.js physics/*.test.js",
     "test:physics": "node --test physics/*.test.js",

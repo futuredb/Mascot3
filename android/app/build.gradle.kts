@@ -43,8 +43,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 41
-        versionName = "0.1.40"
+        versionCode = 43
+        versionName = "0.1.42"
         val serverUrl = providers.gradleProperty("MASCOT3_SERVER_URL").orElse("http://127.0.0.1:8788")
         val clientToken = providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orElse("")
         buildConfigField("String", "API_BASE_URL", quotedBuildConfig(serverUrl.get()))
@@ -83,6 +83,18 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        create("updateCompatible") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            // Existing team installations use this identity. Never uninstall to
+            // replace it with the separate production-distribution certificate.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    sourceSets.getByName("updateCompatible") {
+        manifest.srcFile("src/release/AndroidManifest.xml")
+        res.srcDirs("src/release/res")
     }
 
     compileOptions {
@@ -122,6 +134,22 @@ tasks.register("validateProductionConfiguration") {
 }
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     dependsOn("validateProductionConfiguration")
+}
+
+tasks.register("validateUpdateCompatibleConfiguration") {
+    doLast {
+        val server = providers.gradleProperty("MASCOT3_SERVER_URL").orNull.orEmpty()
+        val uri = runCatching { URI(server) }.getOrNull()
+        check(uri?.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) {
+            "Update-compatible release requires an explicit HTTPS server URL"
+        }
+        check(android.signingConfigs.getByName("debug").storeFile?.isFile == true) {
+            "The existing team signing identity is required; do not generate a replacement"
+        }
+    }
+}
+tasks.matching { it.name == "preUpdateCompatibleBuild" }.configureEach {
+    dependsOn("validateUpdateCompatibleConfiguration")
 }
 
 // Android 16 Robolectric images need Java 21+. Keep Android compilation on Java 17,
