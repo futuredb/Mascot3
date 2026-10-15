@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class PhysicsAsset(val file: String, val sha256: String, val size: Long = 0, val url: String = "")
 @Serializable data class PhysicsQa(val approved: Boolean = false, @SerialName("neutral_error") val neutralError: Float = 1f)
+@Serializable data class PhysicsEdgeCleanup(val applied: Boolean = false, @SerialName("background_chroma") val backgroundChroma: String = "")
 @Serializable data class PhysicsLayer(
     val id: String, @SerialName("parent_id") val parentId: String? = null,
     val material: String, val order: Int, val texture: String, val depth: String,
@@ -24,6 +25,7 @@ import kotlinx.serialization.Serializable
     val layers: List<PhysicsLayer>, val assets: Map<String, PhysicsAsset>, val qa: PhysicsQa,
     @SerialName("max_body_offset") val maxBodyOffset: Float = .00524f,
     @SerialName("max_lean_degrees") val maxLeanDegrees: Float = 0f,
+    @SerialName("edge_cleanup") val edgeCleanup: PhysicsEdgeCleanup? = null,
 ) {
     fun validate() {
         require(format == "mascot-physics-2.5d" && version == 1) { "Неподдерживаемый физический пакет" }

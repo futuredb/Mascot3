@@ -2,7 +2,9 @@ package com.generativemascot.app.physics
 
 import android.graphics.Bitmap
 import android.os.SystemClock
-import androidx.activity.ComponentActivity
+import com.generativemascot.app.MainActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -24,8 +26,9 @@ import kotlin.math.hypot
 
 /** Real GLES frames and real approved assets; inputs and context loss are controlled. */
 class PhysicsGraphicsAcceptanceTest {
-    private val compose = createAndroidComposeRule<ComponentActivity>()
+    private val compose = createAndroidComposeRule<MainActivity>()
     @get:Rule val device: RuleChain = RuleChain.outerRule(PhysicsDeviceScreenRule()).around(compose)
+    private fun content(block: @Composable () -> Unit) { compose.runOnUiThread { compose.activity.setContent(content=block) } }
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val output get() = File(context.getExternalFilesDir(null), "physics-acceptance").apply { mkdirs() }
 
@@ -87,13 +90,17 @@ class PhysicsGraphicsAcceptanceTest {
             bitmap.recycle()
         }
         assertTrue("Empty GPU frame: $name", pixels.count { (it ushr 24) > 128 } > 10000)
+        assertEquals("Green matte spill in $name",0,pixels.count {
+            val r=(it ushr 16) and 255;val g=(it ushr 8) and 255;val b=it and 255
+            (it ushr 24)>32 && g>70 && g>r+35 && g>b+25
+        })
         return pixels
     }
 
     @Test fun discardedContextRebuildsTexturesAndRepeatedFailureFallsBack() {
         val pack = installed(); val control = Control(); val failures = CopyOnWriteArrayList<String>()
         lateinit var view: PhysicsView
-        compose.setContent {
+        content {
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 PhysicsView(ctx, pack, control).also { view = it; it.neutral = true; it.onFailure = { failures += it }; it.resume() }
             }, onRelease = { it.pause() })
@@ -119,7 +126,7 @@ class PhysicsGraphicsAcceptanceTest {
     @Test fun recordedSmallTiltAndImpulseKeepRigidBodyAndAttachmentsIntact() {
         val pack = installed(); val control = Control(); val failures = CopyOnWriteArrayList<String>()
         lateinit var view: PhysicsView
-        compose.setContent {
+        content {
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 PhysicsView(ctx, pack, control).also { view = it; it.onFailure = { failures += it }; it.resume() }
             }, onRelease = { it.pause() })

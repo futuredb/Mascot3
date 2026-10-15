@@ -266,10 +266,23 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         """.trimIndent())
         val fragment = shader(GLES30.GL_FRAGMENT_SHADER, """#version 300 es
             precision mediump float; uniform sampler2D image; in vec2 uv; out vec4 color;
-            void main() { color=texture(image,uv); }
+            uniform float chroma;
+            void main() {
+                color=texture(image,uv);
+                // PNG textures are premultiplied. Despill only partial-alpha
+                // pixels, using the background detected by asset preparation.
+                if(color.a>0.0 && color.a<0.999) {
+                    if(chroma>0.5 && chroma<1.5) color.g=min(color.g,max(color.r,color.b)+0.045*color.a);
+                    if(chroma>1.5) color.b=min(color.b,max(color.r,color.g)+0.045*color.a);
+                }
+            }
         """.trimIndent())
         val program = GLES30.glCreateProgram(); GLES30.glAttachShader(program, vertex); GLES30.glAttachShader(program, fragment); GLES30.glLinkProgram(program)
         GLES30.glDeleteShader(vertex); GLES30.glDeleteShader(fragment)
-        val result = IntArray(1); GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, result, 0); check(result[0] != 0); return program
+        val result = IntArray(1); GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, result, 0); check(result[0] != 0)
+        GLES30.glUseProgram(program)
+        val cleanup=installed.pack.edgeCleanup
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program,"chroma"),if(cleanup?.applied==true)when(cleanup.backgroundChroma){"green"->1f;"blue"->2f;else->0f} else 0f)
+        return program
     }
 }

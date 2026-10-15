@@ -28,9 +28,11 @@ import java.util.concurrent.TimeUnit
 class PhysicsNetworkAcceptanceTest {
     @Test fun approvedExistingJobInstallsForPilotWithoutAnotherProviderSubmission() = runBlocking {
         assumeTrue(InstrumentationRegistry.getArguments().getString("installPilotApproved") == "true")
-        assumeTrue(BuildConfig.API_BASE_URL == "http://127.0.0.1:8788" && BuildConfig.MASCOT3_CLIENT_TOKEN == "physics-local-acceptance")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as MascotApp
         val store = PhysicsStore(app); val id = PhysicsStore.PILOT_ID
+        // Fail before uploading unless this exact already-paid job is available.
+        val approved = app.api.physicsJob("7c2caaca1b682e57ad76e0eb53085b46")
+        assertEquals("ready", approved.status)
         val source = File(app.filesDir, "hero/$id/base.png").readBytes()
         store.requestPreparation(id)
         val work = WorkManager.getInstance(app); val until = SystemClock.elapsedRealtime() + 90000
@@ -42,6 +44,7 @@ class PhysicsNetworkAcceptanceTest {
         }
         assertEquals(info?.outputData?.getString("error"), WorkInfo.State.SUCCEEDED, info?.state)
         val job = app.api.physicsJob(requireNotNull(store.savedJob(id)))
+        assertEquals(approved.id,job.id)
         assertEquals(job.physicsPack?.sha256, store.revision(id))
         assertNotNull(store.load(id)); assertArrayEquals(source, File(app.filesDir, "hero/$id/base.png").readBytes())
         val output = File(app.getExternalFilesDir(null), "physics-acceptance").apply { mkdirs() }

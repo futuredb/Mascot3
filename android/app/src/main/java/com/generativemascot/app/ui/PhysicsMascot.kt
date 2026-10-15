@@ -173,7 +173,7 @@ private fun PhysicsPlayback(
                             else { videoVisible = true; visibleCallback?.invoke(name) }
                         })
                 } else {
-                    PhysicsActionVideo(urls.getValue(current), foreground && phase == PhysicsPhase.VIDEO, videoModifier,
+                    PhysicsActionVideo(urls.getValue(current), neutralFrameUrl, foreground && phase == PhysicsPhase.VIDEO, videoModifier,
                         onVisible = { videoVisible = true; visibleCallback?.invoke(current) },
                         onEnded = { if (current in setOf("greeting", "signature")) finishedCallback?.invoke(current); ended() }, onFailure = failureCallback)
                 }
@@ -192,12 +192,13 @@ private fun PhysicsPlayback(
 
 /** One complete authored action. The last decoded frame remains until physics is ready. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-@Composable private fun PhysicsActionVideo(url: String, running: Boolean, modifier: Modifier, onVisible: () -> Unit, onEnded: () -> Unit, onFailure: (String) -> Unit) {
+@Composable private fun PhysicsActionVideo(url: String, neutralFrameUrl: String?, running: Boolean, modifier: Modifier, onVisible: () -> Unit, onEnded: () -> Unit, onFailure: (String) -> Unit) {
     val context = LocalContext.current
     val visible by rememberUpdatedState(onVisible); val ended by rememberUpdatedState(onEnded); val failed by rememberUpdatedState(onFailure)
     val player = remember(url) { ExoPlayer.Builder(context).build().apply { volume = 0f; repeatMode = Player.REPEAT_MODE_OFF } }
+    var playbackView by remember(url) { mutableStateOf<PlayerView?>(null) }
     var keyColor by remember(url) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(url) { keyColor = withContext(Dispatchers.IO) { detectBackgroundColor(url) } }
+    LaunchedEffect(url,neutralFrameUrl) { keyColor = withContext(Dispatchers.IO) { detectBackgroundColor(neutralFrameUrl ?: url) } }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() { visible() }
@@ -211,10 +212,16 @@ private fun PhysicsPlayback(
         (LayoutInflater.from(ctx).inflate(R.layout.mascot_video_player, FrameLayout(ctx), false) as PlayerView).apply {
             this.player = player; setKeepContentOnPlayerReset(true); setShutterBackgroundColor(AndroidColor.TRANSPARENT)
             (videoSurfaceView as? TextureView)?.isOpaque = false
+        }.also { playbackView=it }
+    })
+    LaunchedEffect(player, keyColor, playbackView) {
+        val key=keyColor;val view=playbackView
+        if (key != null && view != null) {
+            // Video effects must be installed before prepare. AndroidView's
+            // asynchronous update can otherwise lose the first-clip race.
+            applyBackgroundKey(view,key)
+            player.setMediaItem(MediaItem.fromUri(Uri.parse(url.substringBefore('?')))); player.prepare()
         }
-    }, update = { view -> keyColor?.let { applyBackgroundKey(view, it) } })
-    LaunchedEffect(player, keyColor) {
-        if (keyColor != null) { player.setMediaItem(MediaItem.fromUri(Uri.parse(url.substringBefore('?')))); player.prepare() }
     }
     LaunchedEffect(player, running, keyColor) { player.playWhenReady = running && keyColor != null }
 }

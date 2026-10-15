@@ -58,6 +58,7 @@ private const val SLEEP_HANDOFF_CROSSFADE_MS = 360L
 private const val SLEEP_LOOP_MARKER = "sleep-loop-ready"
 private const val FIRST_FRAME_TIMEOUT_MS = 1_500L
 private val compatibilityKeys = WeakHashMap<ExoPlayer, Int>()
+private val compatibilityColorListeners = WeakHashMap<ExoPlayer, Player.Listener>()
 private data class NeutralMatte(val bitmap: Bitmap?)
 
 private const val BACKGROUND_KEY_SHADER = """
@@ -138,9 +139,11 @@ fun SoraMascotVideo(
     val backgroundKeys by produceState<Map<String, Int>>(
         initialValue = emptyMap(),
         normalizedUrls,
+        neutralFrameUrl,
     ) {
         value = withContext(Dispatchers.IO) {
-            normalizedUrls.mapValues { (_, url) -> detectBackgroundColor(url) }
+            val anchorKey=neutralFrameUrl?.let(::detectBackgroundColor)
+            normalizedUrls.mapValues { (_, url) -> anchorKey ?: detectBackgroundColor(url) }
         }
     }
     val neutralBackgroundKey by produceState<Int?>(
@@ -672,7 +675,23 @@ internal fun applyBackgroundKey(view: View, keyColor: Int) {
             (view.videoSurfaceView as? TextureView)?.isOpaque=false
             (view.player as? ExoPlayer)?.let { player ->
                 if(compatibilityKeys[player]!=keyColor) {
-                    player.setVideoEffects(listOf(VideoBackgroundKey(keyColor)))
+                    val effect=VideoBackgroundKey(keyColor)
+                    fun updateColor(tracks: androidx.media3.common.Tracks) {
+                        val formats=tracks.groups.filter { it.type==androidx.media3.common.C.TRACK_TYPE_VIDEO }
+                            .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }.map { group.getTrackFormat(it) } }
+                        // Legacy canonical-frame stitching used FFmpeg's default
+                        // BT.601 conversion without a colour tag. Media3's SDR
+                        // effect path assumes BT.709; invert that matrix only
+                        // for untagged clips. Explicit colour metadata is kept.
+                        effect.correctUntaggedBt601=formats.isNotEmpty() && formats.all(::usesUntaggedLegacyMatrix)
+                    }
+                    compatibilityColorListeners.remove(player)?.let(player::removeListener)
+                    val listener=object:Player.Listener {
+                        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) { updateColor(tracks) }
+                    }
+                    updateColor(player.currentTracks)
+                    player.addListener(listener);compatibilityColorListeners[player]=listener
+                    player.setVideoEffects(listOf(effect))
                     compatibilityKeys[player]=keyColor
                 }
             }

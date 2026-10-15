@@ -6,6 +6,9 @@ import android.graphics.Color
 import android.opengl.GLES20
 import androidx.annotation.OptIn
 import androidx.media3.common.VideoFrameProcessingException
+import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
+import androidx.media3.common.Format
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
@@ -14,6 +17,12 @@ import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
+
+@OptIn(UnstableApi::class)
+internal fun usesUntaggedLegacyMatrix(format: Format): Boolean =
+    format.sampleMimeType?.startsWith("video/")==true &&
+        (format.colorInfo==null || format.colorInfo!!.colorSpace==Format.NO_VALUE) &&
+        !ColorInfo.isTransferHdr(format.colorInfo)
 
 /** The same soft matte for CPU thumbnails and the pre-Android-13 GPU path. */
 internal fun keyedPixel(color: Int, keyColor: Int): Int {
@@ -44,11 +53,12 @@ internal fun keyBitmap(source: Bitmap, keyColor: Int): Bitmap {
  * Output premultiplied RGBA for Android's transparent TextureView compositor. */
 @OptIn(UnstableApi::class)
 internal class VideoBackgroundKey(private val keyColor: Int): GlEffect {
+    @Volatile var correctUntaggedBt601 = false
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
         if(useHdr)throw VideoFrameProcessingException("The mascot chroma key requires SDR video")
-        return KeyProgram(keyColor)
+        return KeyProgram(keyColor) { correctUntaggedBt601 }
     }
-    private class KeyProgram(key: Int): BaseGlShaderProgram(false,1) {
+    private class KeyProgram(key: Int, private val correctColor: () -> Boolean): BaseGlShaderProgram(false,1) {
         private val program=GlProgram(VERTEX,FRAGMENT).apply {
             setBufferAttribute("position",floatArrayOf(-1f,-1f,1f,-1f,-1f,1f,1f,1f),2)
             setFloatsUniform("keyColor",floatArrayOf(Color.red(key)/255f,Color.green(key)/255f,Color.blue(key)/255f))
@@ -58,6 +68,7 @@ internal class VideoBackgroundKey(private val keyColor: Int): GlEffect {
         override fun drawFrame(inputTexId: Int,presentationTimeUs: Long) {
             try {
                 program.use();program.setSamplerTexIdUniform("image",inputTexId,0)
+                program.setFloatUniform("correctBt601",if(correctColor())1f else 0f)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4)
             }catch(error:Exception){throw VideoFrameProcessingException(error,presentationTimeUs)}
@@ -71,11 +82,17 @@ internal class VideoBackgroundKey(private val keyColor: Int): GlEffect {
         """
         private const val FRAGMENT="""
             precision highp float; uniform sampler2D image; uniform vec3 keyColor;
-            uniform float greenKey; varying vec2 uv;
+            uniform float greenKey; uniform float correctBt601; varying vec2 uv;
+            vec3 restore601(vec3 rgb) {
+                float y=dot(rgb,vec3(0.2126,0.7152,0.0722));
+                float u=(rgb.b-y)/1.8556;float v=(rgb.r-y)/1.5748;
+                return clamp(vec3(y+1.402*v,y-0.344136*u-0.714136*v,y+1.772*u),0.0,1.0);
+            }
             void main(){
                 vec4 source=texture2D(image,uv);
-                vec3 rgb=source.rgb;
-                float generic=smoothstep(0.10,0.42,distance(rgb,keyColor));
+                vec3 rgb=mix(source.rgb,restore601(source.rgb),correctBt601);
+                vec3 key=mix(keyColor,restore601(keyColor),correctBt601);
+                float generic=smoothstep(0.10,0.42,distance(rgb,key));
                 float green=1.0-smoothstep(0.07,0.22,rgb.g-max(rgb.r,rgb.b));
                 float matte=mix(generic,green,greenKey);float alpha=source.a*matte;
                 float edge=greenKey*(1.0-smoothstep(0.70,0.98,matte));

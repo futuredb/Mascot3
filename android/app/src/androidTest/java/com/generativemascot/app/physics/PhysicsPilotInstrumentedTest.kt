@@ -2,7 +2,9 @@ package com.generativemascot.app.physics
 
 import android.view.View
 import android.view.ViewGroup
-import androidx.activity.ComponentActivity
+import com.generativemascot.app.MainActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -27,8 +29,9 @@ import kotlin.math.hypot
 
 /** Real approved pilot assets, local playback only; never starts provider jobs. */
 class PhysicsPilotInstrumentedTest {
-    private val compose = createAndroidComposeRule<ComponentActivity>()
+    private val compose = createAndroidComposeRule<MainActivity>()
     @get:Rule val device: RuleChain = RuleChain.outerRule(PhysicsDeviceScreenRule()).around(compose)
+    private fun content(block: @Composable () -> Unit) { compose.runOnUiThread { compose.activity.setContent(content=block) } }
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val hero get() = "bundled-heroes/${PhysicsStore.PILOT_ID}"
 
@@ -72,7 +75,7 @@ class PhysicsPilotInstrumentedTest {
         val output=File(context.getExternalFilesDir(null),"physics-acceptance").apply { mkdirs() }
         val events=File(output,"transition-events.jsonl").apply { writeText("") }
         fun event(kind:String,name:String) { events.appendText("{\"time_ms\":${System.currentTimeMillis()},\"kind\":\"$kind\",\"action\":\"$name\"}\n") }
-        compose.setContent {
+        content {
             key(surface.intValue) {
                 PhysicsMascot(PhysicsStore.PILOT_ID,videos,File(local,"neutral.png").toURI().toString(),action.value,PuppetInteraction(),Modifier.fillMaxSize(),
                     onAnimationVisible={visible+=it;event("visible",it)},onOneShotFinished={completed+=it;event("completed",it)},fallback={})
@@ -81,7 +84,24 @@ class PhysicsPilotInstrumentedTest {
         fun awaitVisible(name:String,timeout:Long=30000) { compose.waitUntil(timeout) { name in visible } }
         fun request(name:String) { compose.runOnIdle { visible.clear();event("request",name);action.value=name } }
         awaitVisible("idle")
-        request("greeting");awaitVisible("greeting");awaitVisible("idle");assertTrue("greeting" in completed)
+        request("greeting");awaitVisible("greeting")
+        android.os.SystemClock.sleep(200)
+        compose.waitForIdle()
+        run {
+            val screenshot=requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            File(output,"greeting-window.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }
+            var green=0;var foreground=0
+            for(y in 100 until screenshot.height-100)for(x in 0 until screenshot.width) {
+                val c=screenshot.getPixel(x,y);val r=(c ushr 16) and 255;val g=(c ushr 8) and 255;val b=c and 255
+                if(g>70 && g>r+35 && g>b+25)green++
+                if(r>70 && r>g+30 && r>b+10)foreground++
+            }
+            screenshot.recycle()
+            assertTrue("Opaque green video background: $green pixels",green<100)
+            assertTrue("Greeting character was not visible",foreground>3000)
+            File(output,"greeting-window-check.json").writeText("""{"green_pixels":$green,"foreground_pixels":$foreground}""")
+        }
+        awaitVisible("idle");assertTrue("greeting" in completed)
         request("dancing");awaitVisible("dancing");awaitVisible("idle")
         request("sleeping");awaitVisible("sleeping")
         request("idle");awaitVisible("idle",45000)

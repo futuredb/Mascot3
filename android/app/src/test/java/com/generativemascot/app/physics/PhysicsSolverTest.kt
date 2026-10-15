@@ -93,8 +93,12 @@ class PhysicsSolverTest {
         val records = listOf(floatArrayOf(0f,0f,0f,0f,0f,0f),floatArrayOf(.18f,-.12f,0f,0f,.2f,-.1f),floatArrayOf(-.1f,.12f,9f,-8f,-.3f,.4f),floatArrayOf(0f,0f,0f,0f,0f,0f))
         fun run(fps: Int): List<Float> {
             val solver=PhysicsSolver(pack())
-            records.forEach { r -> repeat(fps) { solver.advance(1.0/fps,r[0],r[1],r[2],r[3],r[4],r[5]) } }
-            return snapshot(solver)
+            val sampled=mutableListOf<Float>()
+            records.forEach { r -> repeat(10) {
+                repeat(fps/10) { solver.advance(1.0/fps,r[0],r[1],r[2],r[3],r[4],r[5]) }
+                sampled+=snapshot(solver)
+            } }
+            return sampled
         }
         val reference=run(120)
         for (fps in listOf(30,60)) reference.zip(run(fps)).forEach { (a,b) -> assertEquals(a,b,1e-6f) }

@@ -315,15 +315,7 @@ class AppViewModel(
                 previewUrl = heroStore.baseFile(id)?.toURI()?.toString(),
             )
         }
-        val shown = when {
-            waitingForHero(restored) || restored?.status == "AWAITING_ACCEPTANCE" -> restored
-            restored?.status == "READY" -> restored
-            accepted?.status == "READY" -> accepted
-            active != null -> active
-            localAccepted != null -> localAccepted
-            localBundled != null -> localBundled
-            else -> restored
-        }
+        val shown = restoredHomeHero(restored, accepted, localAccepted, active, localBundled)
         val waiting = waitingForHero(shown)
         if (waiting) generateStartedAt = System.currentTimeMillis()
         generationGaveUp = false

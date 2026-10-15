@@ -12,6 +12,16 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],application=Application::class)
 class VideoBackgroundKeyTest {
+    @Test fun matrixCorrectionOnlyAppliesToUntaggedSdrVideo() {
+        val untagged=androidx.media3.common.Format.Builder().setSampleMimeType("video/avc").build()
+        assertTrue(usesUntaggedLegacyMatrix(untagged))
+        assertFalse(usesUntaggedLegacyMatrix(androidx.media3.common.Format.Builder().setSampleMimeType("audio/aac").build()))
+        for(space in listOf(androidx.media3.common.C.COLOR_SPACE_BT601,androidx.media3.common.C.COLOR_SPACE_BT709,androidx.media3.common.C.COLOR_SPACE_BT2020)) {
+            val tagged=untagged.buildUpon().setColorInfo(androidx.media3.common.ColorInfo.Builder().setColorSpace(space).build()).build()
+            assertFalse(usesUntaggedLegacyMatrix(tagged))
+        }
+        assertFalse(usesUntaggedLegacyMatrix(untagged.buildUpon().setColorInfo(androidx.media3.common.ColorInfo.Builder().setColorTransfer(androidx.media3.common.C.COLOR_TRANSFER_ST2084).build()).build()))
+    }
     @Test fun compressedAndShadedGreenDisappear() {
         for(color in listOf(Color.GREEN,Color.rgb(0,140,0),Color.rgb(20,110,25))) {
             assertEquals(Color.TRANSPARENT,keyedPixel(color,Color.GREEN))
