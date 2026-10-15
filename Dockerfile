@@ -20,10 +20,12 @@ COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json package-lock.json ./
 COPY --chown=node:node extensions ./extensions
 COPY --chown=node:node pipeline ./pipeline
+COPY --chown=node:node physics ./physics
 COPY --chown=node:node public ./public
 COPY --chown=node:node server ./server
 COPY --chown=node:node deploy ./deploy
-RUN mkdir -p /data && chown node:node /data
+RUN node -e "require('./physics/jobs')" \
+    && mkdir -p /data && chown node:node /data
 
 USER node
 EXPOSE 8788
