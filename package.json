@@ -6,15 +6,18 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js",
+    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js && node --check physics/contracts.js && node --check physics/providers.js && node --check physics/assets.js && node --check physics/jobs.js && node --check scripts/prepare-physics.cjs",
     "build": "npm run check",
-    "test": "node --test pipeline/*.test.js server/*.test.js",
+    "test": "node --test pipeline/*.test.js server/*.test.js physics/*.test.js",
+    "test:physics": "node --test physics/*.test.js",
+    "physics:prepare": "node scripts/prepare-physics.cjs",
     "test:pipeline": "node --test pipeline/*.test.js",
     "preflight": "node pipeline/run_preflight.js",
     "verify": "npm run check && npm test && npm run build"
   },
   "dependencies": {
-    "ajv": "^8.17.1"
+    "ajv": "^8.17.1",
+    "sharp": "0.35.5"
   },
   "packageManager": "npm@10.8.2",
   "engines": {

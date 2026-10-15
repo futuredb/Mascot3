@@ -30,6 +30,7 @@ test("health stays public while mutations require the client token", async (t) =
       MASCOT3_DATA_DIR: dataRoot,
       MASCOT3_SKIP_SEED: "true",
       MASCOT3_CLIENT_TOKEN: "test-client-token",
+      PHYSICS_ENABLED: "false",
     },
     stdio: "ignore",
   });
@@ -69,4 +70,11 @@ test("health stays public while mutations require the client token", async (t) =
     body: JSON.stringify({ city_id: "524901", name: "Moscow" }),
   });
   assert.equal(authorized.status, 200);
+
+  const physics = `http://127.0.0.1:${port}/v1/physics/jobs`;
+  assert.equal((await fetch(physics, {method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status,401);
+  const disabled = await fetch(physics,{method:"POST",headers:{"content-type":"application/json","x-mascot-client-token":"test-client-token","idempotency-key":"fixture-idempotency"},body:"{}"});
+  assert.equal(disabled.status,422);
+  assert.equal((await disabled.json()).error,"physics_pilot_disabled");
+  assert.equal((await fetch(`${physics}/${"a".repeat(32)}`,{headers:{"x-mascot-client-token":"test-client-token"}})).status,404);
 });

@@ -85,6 +85,7 @@ data class ManifestDto(
     val states: Map<String, StateAssetsDto> = emptyMap(),
     @SerialName("sprite_pack") val spritePack: SpritePackDto? = null,
     @SerialName("puppet_pack") val puppetPack: PuppetPackDto? = null,
+    @SerialName("physics_pack") val physicsPack: AssetRefDto? = null,
     @SerialName("expires_at") val expiresAt: String? = null,
 )
 

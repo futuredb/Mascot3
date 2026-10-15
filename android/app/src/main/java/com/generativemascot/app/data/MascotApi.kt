@@ -24,6 +24,12 @@ import retrofit2.http.Url
 import java.util.concurrent.TimeUnit
 
 interface MascotApi {
+    @POST("/v1/physics/jobs")
+    suspend fun preparePhysics(@Header("Idempotency-Key") key: String, @Body body: com.generativemascot.app.worker.PhysicsJobRequest): com.generativemascot.app.worker.PhysicsJobDto
+
+    @GET("/v1/physics/jobs/{id}")
+    suspend fun physicsJob(@Path("id") id: String): com.generativemascot.app.worker.PhysicsJobDto
+
     @GET("/v1/cities")
     suspend fun searchCities(@Query("q") query: String): List<CityDto>
 

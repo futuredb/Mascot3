@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const { chooseAnimationBatch, chooseGreetingBatch } = require("./animation_batch");
+const { PhysicsJobs } = require("../physics/jobs");
 const { loadEnvFileDefaults } = require("../extensions/02_tools_and_apps/_shared/env_file.js");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -22,6 +23,7 @@ const MASCOTS_FILE = path.join(SERVER_DATA_DIR, "mascots.json");
 const IDEMPOTENCY_FILE = path.join(SERVER_DATA_DIR, "idempotency.json");
 const BUDGET_LEDGER_FILE = path.join(SERVER_DATA_DIR, "budget-ledger.json");
 const SEED_ROOT = path.join(ROOT, "deploy", "seed");
+const physicsJobs = new PhysicsJobs({ root: path.join(SERVER_DATA_DIR, "physics"), env });
 const ANIMATION_CATALOG = JSON.parse(fs.readFileSync(path.join(PIPELINE, "dict", "animation_prompt_catalog.json"), "utf8"));
 const ENABLED_ANIMATION_ENTRIES = ANIMATION_CATALOG.entries.filter((entry) => entry.availability === "enabled");
 const UI_TO_PIPELINE_ANIMATION = Object.freeze({
@@ -130,12 +132,12 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
   res.end(data);
 }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = 128 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 128 * 1024) throw Object.assign(new Error("request_too_large"), { status: 413 });
+    if (size > maxBytes) throw Object.assign(new Error("request_too_large"), { status: 413 });
     chunks.push(chunk);
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -609,7 +611,7 @@ function nativeManifest(mascot) {
     const animation = videoAsset(mascot, state);
     return [state, { still: null, animation, sequence: null, status: animation ? "ready" : "pending" }];
   }));
-  return { mascot_id: mascot.id, version: 1, base, base_sequence: null, states, expires_at: null };
+  return { mascot_id: mascot.id, version: 1, base, base_sequence: null, states, physics_pack: physicsJobs.readyForMascot(mascot.id, base?.sha256), expires_at: null };
 }
 
 function nativeContext(mascot) {
@@ -721,6 +723,23 @@ const server = http.createServer(async (req, res) => {
       profile: PROFILE,
     });
     if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { status: "ok" });
+    if (url.pathname.startsWith("/v1/physics/")) {
+      if (!env.MASCOT3_CLIENT_TOKEN) return send(res, 503, { error: "physics_client_auth_not_configured" });
+      requireClientAuth(req);
+      if (req.method === "POST" && url.pathname === "/v1/physics/jobs") {
+        const job = await physicsJobs.create(await readBody(req, 33 * 1024 * 1024), idempotencyKey(req));
+        return send(res, 202, physicsJobs.public(job));
+      }
+      const match = url.pathname.match(/^\/v1\/physics\/jobs\/([a-f0-9]{32})(?:\/assets\/([a-z][a-z0-9_-]*\.(?:json|png)))?$/);
+      if (req.method === "GET" && match) {
+        const job = await physicsJobs.get(match[1]);
+        if (!job) return send(res, 404, { error: "physics_job_not_found" });
+        if (!match[2]) return send(res, 200, physicsJobs.public(job));
+        if (job.status !== "ready") return send(res, 409, { error: "physics_pack_not_ready" });
+        return serveFile(res, path.join(physicsJobs.directory(job.id), "pack"), match[2]);
+      }
+      return send(res, 404, { error: "physics_route_not_found" });
+    }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) requireClientAuth(req);
     if (req.method === "PUT" && url.pathname === "/v1/profile/city") {
       const body = await readBody(req);
@@ -828,6 +847,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`Mascot 3 is running on port ${port}`);
+  physicsJobs.resumeInterrupted().catch(error => console.error(`physics_resume_failed: ${error.message}`));
   if (!env.OPENROUTER_API_KEY) return;
   for (const mascot of mascots.values()) {
     const shouldResume = mascot.status === "READY"

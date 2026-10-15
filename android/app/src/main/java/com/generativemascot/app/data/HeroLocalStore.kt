@@ -1008,6 +1008,7 @@ class HeroLocalStore(context: Context) {
             metadata.parentFile?.mkdirs()
             metadata.writeText(json.encodeToString(pack))
         }
+        manifest.physicsPack?.let { com.generativemascot.app.physics.PhysicsStore(appContext).enqueueInstall(mascotId, it) }
     }
 
     private fun unpackSpriteAtlas(mascotId: String, pack: SpritePackDto) {

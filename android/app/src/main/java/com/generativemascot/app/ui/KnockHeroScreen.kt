@@ -728,7 +728,16 @@ fun KnockHeroScreen(
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
-                        SoraMascotVideo(
+                        PhysicsMascot(
+                            mascotId = visualMascotId ?: mascotId.orEmpty(),
+                            videoUrls = visualVideoUrls,
+                            neutralFrameUrl = visualNeutralFrameUrl,
+                            action = stateKey ?: "idle",
+                            interaction = interaction,
+                            onAnimationVisible = onAnimationVisible,
+                            onOneShotFinished = onOneShotFinished,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { SoraMascotVideo(
                             videoUrl = visualAnimationVideoUrl,
                             videoUrls = visualVideoUrls,
                             onAnimationVisible = onAnimationVisible,
@@ -737,7 +746,7 @@ fun KnockHeroScreen(
                             action = stateKey ?: "idle",
                             interaction = interaction,
                             modifier = Modifier.fillMaxSize(),
-                        )
+                        ) }
                     }
                 }
             } else PngSequence(
