@@ -1,6 +1,7 @@
 package com.generativemascot.app.ui
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.RenderEffect
@@ -37,6 +38,7 @@ import androidx.media3.ui.PlayerView
 import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
 import java.net.URI
+import java.util.WeakHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -55,6 +57,8 @@ private const val SLEEP_HANDOFF_PRELOAD_MS = 700L
 private const val SLEEP_HANDOFF_CROSSFADE_MS = 360L
 private const val SLEEP_LOOP_MARKER = "sleep-loop-ready"
 private const val FIRST_FRAME_TIMEOUT_MS = 1_500L
+private val compatibilityKeys = WeakHashMap<ExoPlayer, Int>()
+private data class NeutralMatte(val bitmap: Bitmap?)
 
 private const val BACKGROUND_KEY_SHADER = """
     uniform shader content;
@@ -145,6 +149,18 @@ fun SoraMascotVideo(
     ) {
         value = withContext(Dispatchers.IO) {
             neutralFrameUrl?.let(::detectBackgroundColor) ?: Color.rgb(232, 244, 252)
+        }
+    }
+    val neutralMatte by produceState<NeutralMatte?>(null,neutralFrameUrl,neutralBackgroundKey) {
+        value=null
+        if(Build.VERSION.SDK_INT<33 && neutralFrameUrl!=null && neutralBackgroundKey!=null) {
+            value=withContext(Dispatchers.IO) {
+                NeutralMatte(runCatching {
+                    BitmapFactory.decodeFile(mediaUri(neutralFrameUrl).path)?.let { original ->
+                        try { keyBitmap(original,neutralBackgroundKey!!) } finally { original.recycle() }
+                    }
+                }.getOrNull())
+            }
         }
     }
     val idleAction = defaultHomeVideoAction(normalizedUrls.keys)
@@ -242,16 +258,18 @@ fun SoraMascotVideo(
             (0 until frame.childCount).forEach { index ->
                 (frame.getChildAt(index) as? PlayerView)?.player = players[index]
             }
+            if(Build.VERSION.SDK_INT<33)neutralMatte?.let { neutralView?.setImageBitmap(it.bitmap) }
         },
     )
 
-    LaunchedEffect(players, playerViews, neutralView, normalizedUrls, backgroundKeys, neutralBackgroundKey) {
+    LaunchedEffect(players, playerViews, neutralView, normalizedUrls, backgroundKeys, neutralBackgroundKey,neutralMatte) {
         if (playerViews.size != 2) return@LaunchedEffect
         if (!backgroundKeys.keys.containsAll(normalizedUrls.keys)) return@LaunchedEffect
         if (neutralFrameUrl != null && neutralBackgroundKey == null) return@LaunchedEffect
+        if(Build.VERSION.SDK_INT<33 && neutralFrameUrl!=null && neutralMatte==null)return@LaunchedEffect
         neutralView?.let { anchor ->
             neutralBackgroundKey?.let { applyBackgroundKey(anchor, it) }
-            anchor.alpha = 1f
+            anchor.alpha = if(Build.VERSION.SDK_INT>=33 || neutralMatte?.bitmap!=null)1f else 0f
         }
         var activeIndex = 0
         var currentAction = requestedAction
@@ -274,10 +292,6 @@ fun SoraMascotVideo(
         fun prepare(index: Int, actionName: String) {
             val url = normalizedUrls[actionName] ?: normalizedUrls.getValue(idleAction)
             firstFrameRendered[index] = false
-            applyBackgroundKey(
-                playerViews[index],
-                backgroundKeys[actionName] ?: Color.rgb(232, 244, 252),
-            )
             val item = MediaItem.Builder()
                 .setUri(mediaUri(url))
                 .apply {
@@ -294,6 +308,7 @@ fun SoraMascotVideo(
             players[index].apply {
                 stop()
                 clearMediaItems()
+                applyBackgroundKey(playerViews[index],backgroundKeys[actionName] ?: Color.rgb(232,244,252))
                 repeatMode = if (greetingOnly) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 setMediaItem(item)
                 prepare()
@@ -652,7 +667,18 @@ internal fun detectBackgroundColor(rawUrl: String): Int = runCatching {
 
 @OptIn(UnstableApi::class)
 internal fun applyBackgroundKey(view: View, keyColor: Int) {
-    if (Build.VERSION.SDK_INT < 33) return
+    if (Build.VERSION.SDK_INT < 33) {
+        if(view is PlayerView) {
+            (view.videoSurfaceView as? TextureView)?.isOpaque=false
+            (view.player as? ExoPlayer)?.let { player ->
+                if(compatibilityKeys[player]!=keyColor) {
+                    player.setVideoEffects(listOf(VideoBackgroundKey(keyColor)))
+                    compatibilityKeys[player]=keyColor
+                }
+            }
+        }
+        return // Still images are matted on their existing background IO jobs.
+    }
     val shader = RuntimeShader(BACKGROUND_KEY_SHADER)
     shader.setColorUniform("keyColor", keyColor)
     shader.setFloatUniform(
@@ -691,6 +717,7 @@ private fun LegacyPerformanceVideo(
 ) {
     val context = LocalContext.current
     val uri = remember(videoUrl) { mediaUri(videoUrl) }
+    val keyColor by produceState<Int?>(null,videoUrl) { value=withContext(Dispatchers.IO){detectBackgroundColor(videoUrl)} }
     var readySerial by remember(videoUrl) { mutableIntStateOf(0) }
     val player = remember(videoUrl) {
         ExoPlayer.Builder(context).build().apply {
@@ -701,8 +728,6 @@ private fun LegacyPerformanceVideo(
                     if (playbackState == Player.STATE_READY) readySerial += 1
                 }
             })
-            setMediaItem(MediaItem.fromUri(uri))
-            prepare()
         }
     }
     var reaction by remember(videoUrl) { mutableStateOf<String?>(null) }
@@ -733,10 +758,13 @@ private fun LegacyPerformanceVideo(
         modifier = modifier,
         factory = { viewContext ->
             (LayoutInflater.from(viewContext).inflate(R.layout.mascot_video_player, null) as PlayerView)
-                .also { it.player = player }
+                .also { it.player = player;(it.videoSurfaceView as? TextureView)?.isOpaque=false }
         },
-        update = { it.player = player },
+        update = { view -> view.player=player;view.alpha=if(keyColor==null)0f else 1f;keyColor?.let { applyBackgroundKey(view,it) } },
     )
+    LaunchedEffect(player,keyColor) {
+        if(keyColor!=null){player.setMediaItem(MediaItem.fromUri(uri));player.prepare()}
+    }
 
     LaunchedEffect(player, readySerial, activeBeat) {
         if (player.playbackState != Player.STATE_READY) return@LaunchedEffect

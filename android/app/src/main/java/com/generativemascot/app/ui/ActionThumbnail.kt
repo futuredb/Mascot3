@@ -44,7 +44,12 @@ internal fun ActionThumbnail(
                     val bitmap = if (Build.VERSION.SDK_INT >= 27) {
                         retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST, 256, 320)
                     } else retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    bitmap?.let { ActionFrame(it, detectBackgroundColor(videoUrl)) }
+                    bitmap?.let {
+                        val key=detectBackgroundColor(videoUrl)
+                        if(Build.VERSION.SDK_INT<33) {
+                            try { ActionFrame(keyBitmap(it,key),key) } finally { it.recycle() }
+                        }else ActionFrame(it,key)
+                    }
                 } finally { retriever.release() }
             }.getOrNull()
         }

@@ -43,8 +43,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 44
-        versionName = "0.1.43"
+        versionCode = 45
+        versionName = "0.1.44"
         val serverUrl = providers.gradleProperty("MASCOT3_SERVER_URL").orElse("http://127.0.0.1:8788")
         val clientToken = providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orElse("")
         buildConfigField("String", "API_BASE_URL", quotedBuildConfig(serverUrl.get()))
@@ -195,6 +195,7 @@ dependencies {
     implementation("io.coil-kt:coil-gif:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-effect:1.4.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
