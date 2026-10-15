@@ -1,0 +1,263 @@
+{
+  "id": "7c2caaca1b682e57ad76e0eb53085b46",
+  "mascot_id": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+  "source_sha256": "7ddcfa44589146e0479b2d7f386419780747c244203d3f54497b1d43da94c0a2",
+  "request_hash": "e7cd645bc3979a55a7e8f6b92fca119a3d8691dae1691012f433d1fabf6ec663",
+  "created_at": "2026-10-15T16:01:43.334Z",
+  "status": "ready",
+  "stage": "complete",
+  "error": null,
+  "cost": {
+    "known_usd": 0.1588711,
+    "complete": true,
+    "stages": [
+      {
+        "stage": "analysis",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792080216-flO2DtD6SCujRevO6gq5",
+        "cost_usd": 0.0017669,
+        "compute_seconds": null
+      },
+      {
+        "stage": "analysis_cropped_v1",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792080398-qLMA8JcqDmMuy59X1rTL",
+        "cost_usd": 0.0019828,
+        "compute_seconds": null
+      },
+      {
+        "stage": "analysis_grid_v1",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792080664-2NURS1FinMOPzzlwv4eN",
+        "cost_usd": 0.001908,
+        "compute_seconds": null
+      },
+      {
+        "stage": "binding_v1_f94c45a602c79178",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792081591-qjcGazlZz3rGHcuUQ5eC",
+        "cost_usd": 0.0010514,
+        "compute_seconds": null
+      },
+      {
+        "stage": "binding_v1_f99bfd1f7074e9e2",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792081430-AAALOSp7LRt65pmAerZY",
+        "cost_usd": 0.0009834,
+        "compute_seconds": null
+      },
+      {
+        "stage": "depth",
+        "model": "chenxwh/depth-anything-v2:b239ea33cff32bb7abb5db39ffe9a09c14cbc2894331d1ef66fe096eed88ebd4",
+        "provider_id": "nfqhwd8r91rnc0d1817ae4dqmg",
+        "cost_usd": null,
+        "compute_seconds": 0.532657016
+      },
+      {
+        "stage": "mask_1f635f936175_helmet_cord_left",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "77qwz9py7nrmy0d18189b7vrrw",
+        "cost_usd": null,
+        "compute_seconds": 0.161053108
+      },
+      {
+        "stage": "mask_1f635f936175_helmet_cord_right",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "zhjc7kyvshrmt0d1818v7mtsmg",
+        "cost_usd": null,
+        "compute_seconds": 0.156245527
+      },
+      {
+        "stage": "mask_1f635f936175_waist_cord",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "cost_usd": 0,
+        "compute_seconds": null
+      },
+      {
+        "stage": "mask_5b09c77cde60_cord_left_a0",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "sa1qa9fsrxrmr0d181ab372wsc",
+        "cost_usd": null,
+        "compute_seconds": 0.123031218
+      },
+      {
+        "stage": "mask_5b09c77cde60_cord_left_a1",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "qy2qt5zkhdrmr0d181av8an63w",
+        "cost_usd": null,
+        "compute_seconds": 0.158598305
+      },
+      {
+        "stage": "mask_5b09c77cde60_cord_left_a2",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "n46t12zjn1rmw0d181b8rh23ng",
+        "cost_usd": null,
+        "compute_seconds": 0.092233966
+      },
+      {
+        "stage": "mask_category_15dbd03870074851",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "caawj03zkhrmt0d181g80m4wzc",
+        "cost_usd": null,
+        "compute_seconds": 0.131491121
+      },
+      {
+        "stage": "mask_category_39f3879398cb0fd8",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "bd2bz2djd1rmt0d181cr6rxkgg",
+        "cost_usd": null,
+        "compute_seconds": 0.108408788
+      },
+      {
+        "stage": "mask_category_4ed87aaffaf6b30e",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "7jvn5w5rq9rmw0d181bsqjcgp8",
+        "cost_usd": null,
+        "compute_seconds": 0.119927769
+      },
+      {
+        "stage": "mask_category_61eeb05108aa30d1",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "w8agkzzymxrmy0d181gsq51y0w",
+        "cost_usd": null,
+        "compute_seconds": 0.119016069
+      },
+      {
+        "stage": "mask_category_8fca7e63b88b93c0",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "yy7c0hxeqsrmy0d181c87672v8",
+        "cost_usd": null,
+        "compute_seconds": 0.1674521
+      },
+      {
+        "stage": "mask_category_b3ec31b7bf0ec605",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "provider_id": "r6q3knfm5drmt0d181h8kgrpz4",
+        "cost_usd": null,
+        "compute_seconds": 0.093076822
+      },
+      {
+        "stage": "mask_helmet_cord_left",
+        "model": "mattsays/sam3-image:d73db077226443ba4fafd34e233b3626b552eac2a433f90c7c32a9ac89bd9e72",
+        "cost_usd": 0,
+        "compute_seconds": null
+      },
+      {
+        "stage": "material_acceptance_audit_v1",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792089891-Nbmr4QMc8J9Xk1aRvSXT",
+        "cost_usd": 0.0017465,
+        "compute_seconds": null
+      },
+      {
+        "stage": "material_acceptance_audit_v2",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792090137-jpOqeGcKh7meCv3LASZ3",
+        "cost_usd": 0.0015918,
+        "compute_seconds": null
+      },
+      {
+        "stage": "matte",
+        "model": "men1scus/birefnet:f74986db0355b58403ed20963af156525e2891ea3c2d499bfbfb2a28cd87c5d7",
+        "provider_id": "fv7ts7zebdrnc0d1816sr01k5m",
+        "cost_usd": null,
+        "compute_seconds": 0.172771399
+      },
+      {
+        "stage": "reconstruction_78d37baec44e7817",
+        "model": "google/gemini-3.1-flash-image-preview",
+        "provider_id": "gen-1792081435-fkhmwaqBKfH4ZENthduG",
+        "cost_usd": 0.0686295,
+        "compute_seconds": null
+      },
+      {
+        "stage": "reconstruction_7ac6158346462714",
+        "model": "google/gemini-3.1-flash-image-preview",
+        "provider_id": "gen-1792081595-hsQq1NYmkwGq2zw29xO0",
+        "cost_usd": 0.0686025,
+        "compute_seconds": null
+      },
+      {
+        "stage": "restored_matte_78d37baec44e7817",
+        "model": "men1scus/birefnet:f74986db0355b58403ed20963af156525e2891ea3c2d499bfbfb2a28cd87c5d7",
+        "provider_id": "bsz6cepde1rnc0d181g9xp9r90",
+        "cost_usd": null,
+        "compute_seconds": 0.362481537
+      },
+      {
+        "stage": "restored_matte_7ac6158346462714",
+        "model": "men1scus/birefnet:f74986db0355b58403ed20963af156525e2891ea3c2d499bfbfb2a28cd87c5d7",
+        "provider_id": "s4q9cwst9nrn80d181hrpb2z6m",
+        "cost_usd": null,
+        "compute_seconds": 0.366164095
+      },
+      {
+        "stage": "review_00a2576f06f11d0f",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792081787-6ETpq8cmoVGD7MeS6K0u",
+        "cost_usd": 0.0009235,
+        "compute_seconds": null
+      },
+      {
+        "stage": "review_0b6dbe7d84189cec",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792090999-KITnChwn80NwktgD6Qyg",
+        "cost_usd": 0.0012361,
+        "compute_seconds": null
+      },
+      {
+        "stage": "review_1135c995f2ef109f",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792082623-4zgJucxrbYFiwOB8USro",
+        "cost_usd": 0.0009135,
+        "compute_seconds": null
+      },
+      {
+        "stage": "review_337b1b7302fcee4c",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792084296-Kc5zWZCgqrcLwygnxPSb",
+        "cost_usd": 0.0009685,
+        "compute_seconds": null
+      },
+      {
+        "stage": "review_40398bdd452f596b",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792092093-D7gNY0wViaQMVBGpJg7A",
+        "cost_usd": 0.0011986,
+        "compute_seconds": null
+      },
+      {
+        "stage": "review_6bd3ad0b56eedcb6",
+        "model": "google/gemini-2.5-flash",
+        "provider_id": "gen-1792081692-DnbfdFuzroCCzXBOdT8T",
+        "cost_usd": 0.0008681,
+        "compute_seconds": null
+      }
+    ],
+    "replicate_billing": {
+      "invoice_id": "bfc509a2-6641-5bcc-a2da-71f77e9bf8f6",
+      "status": "DRAFT",
+      "checked_at": "2026-10-15T18:44:56.137Z",
+      "cost_usd": 0.0045,
+      "exclusive_prediction_count": 15,
+      "per_prediction_allocation_known": false,
+      "models": [
+        {
+          "model": "chenxwh/depth-anything-v2",
+          "cost_usd": 0.00115
+        },
+        {
+          "model": "mattsays/sam3-image",
+          "cost_usd": 0.00195
+        },
+        {
+          "model": "men1scus/birefnet",
+          "cost_usd": 0.0014
+        }
+      ]
+    }
+  },
+  "pack_sha256": "397405fab9aa7c89c1df10d91a24a2732452483eeefefa5ada923fd95689355d",
+  "rebuild_reason": "Generic body lean and corrected material compliance; preserve provider caches, repeat QA for changed extreme renders.",
+  "previous_pack_sha256": "f5e2f7dc8101bab2507972cacf6efa516ca7ed900379ffa14d50a2c08897dc49"
+}

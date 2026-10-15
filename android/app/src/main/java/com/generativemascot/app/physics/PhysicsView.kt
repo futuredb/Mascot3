@@ -19,8 +19,16 @@ import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** In-process acceptance harness. Normal playback never supplies an observer. */
+interface PhysicsRenderObserver {
+    fun sample(): PhoneSample? = null
+    fun discardContext(): Boolean = false
+    fun contextCreated() = Unit
+    fun frame(solver: PhysicsSolver) = Unit
+}
+
 /** GL objects are owned exclusively by the render thread, including teardown. */
-class PhysicsView(context: Context, private val installed: InstalledPhysics) : TextureView(context), TextureView.SurfaceTextureListener {
+class PhysicsView(context: Context, private val installed: InstalledPhysics, private val observer: PhysicsRenderObserver? = null) : TextureView(context), TextureView.SurfaceTextureListener {
     private val motion = PhoneMotion(context)
     private class SurfaceSession(val texture: SurfaceTexture) {
         val cancelled = AtomicBoolean(false)
@@ -109,6 +117,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                 bodyOffset = GLES30.glGetUniformLocation(program, "bodyOffset")
                 lean = GLES30.glGetUniformLocation(program, "lean")
                 GLES30.glUniform1f(aspect, installed.pack.height.toFloat() / installed.pack.width)
+                observer?.contextCreated()
                 }
                 initializeGraphics()
                 var previous = 0L; var wasActive = false; var ready = false; var settledSent = false; var lastSettleToken = -1
@@ -120,9 +129,15 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                         if (!active) { previous = 0; wasActive = false; metrics.previous = 0 }
                         else {
                             val started = System.nanoTime()
+                            if (observer?.discardContext() == true) {
+                                // Invalidate real GPU resources on their owning thread,
+                                // then enter the same recovery path as EGL_CONTEXT_LOST.
+                                releaseGraphics(contextLost = true)
+                                throw ContextLost()
+                            }
                             if (!wasActive) { solver.reset(); previous = time; wasActive = true; settledSent = false }
                             if (lastSettleToken != settleToken) { lastSettleToken = settleToken; settledSent = false }
-                            val sample = motion.sample; solver.neutral = neutral
+                            val sample = observer?.sample() ?: motion.sample; solver.neutral = neutral
                             solver.advance((time - previous).coerceAtLeast(0) / 1e9, sample.tiltX, sample.tiltY, sample.accelerationX, sample.accelerationY, sample.gravityX, sample.gravityY); previous = time
                             val w = viewportWidth.coerceAtLeast(1); val h = viewportHeight.coerceAtLeast(1)
                             val pixels = minOf(w.toFloat() / installed.pack.width, h.toFloat() / installed.pack.height) * installed.pack.width
@@ -137,6 +152,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics) : T
                                 if (EGL14.eglGetError() == EGL14.EGL_CONTEXT_LOST) throw ContextLost()
                                 error("egl_swap_failed")
                             }
+                            observer?.frame(solver)
                             if (!ready) { ready = true; post { if (session === owner && !owner.cancelled.get()) onReady() } }
                             if (!neutral) settledSent = false
                             if (neutral && solver.settled && !settledSent) { settledSent = true; val token = settleToken; post { if (session === owner && !owner.cancelled.get() && token == settleToken) onSettled() } }

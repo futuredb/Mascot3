@@ -19,7 +19,8 @@ async function main() {
   const root = path.join(env.MASCOT3_DATA_DIR || ROOT, 'server-data/physics');
   const jobs = new PhysicsJobs({ root, env: { ...env, PHYSICS_ENABLED: 'true' } });
   const job = await jobs.create({ mascot_id: hero, image_base64: image.toString('base64'), anchor_base64: anchor.toString('base64'), character_contract: contract }, options.key || `physics-v1-${hero}`);
-  await jobs.start(job.id);
+  if (options.rebuild === 'yes' && job.status === 'ready') await jobs.rebuild(job.id);
+  else await jobs.start(job.id);
   let result = await jobs.get(job.id);
   const deadline=Date.now()+20*60*1000;
   while(result.status==='queued' && Date.now()<deadline) {

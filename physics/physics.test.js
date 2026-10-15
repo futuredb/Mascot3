@@ -171,13 +171,14 @@ test('CLI and server sharing a directory cannot create duplicate input jobs',asy
 test('entire local pipeline publishes only when independent review approves',async t=>{
   for(const approved of [false,true]) {
     const root=await temporary(t), f=await fixture(), models=[];
+    let accept=approved, note='initial';
     const {frame}=await analysisFrame(f.original);
     const croppedPart={...part,bounds:[(part.bounds[0]*128-frame.left)/frame.width,(part.bounds[1]*128-frame.top)/frame.height,(part.bounds[2]*128-frame.left)/frame.width,(part.bounds[3]*128-frame.top)/frame.height],attachment:[(part.attachment[0]*128-frame.left)/frame.width,(part.attachment[1]*128-frame.top)/frame.height]};
     const croppedMask=await require('sharp')(await png(f.masks[0],128,128,1)).extract({left:frame.left,top:frame.top,width:frame.width,height:frame.height}).png().toBuffer();
     const jobs=new PhysicsJobs({root,env:{PHYSICS_ENABLED:'true',REPLICATE_API_TOKEN:'fixture',OPENROUTER_API_KEY:'fixture'},providerFactory:()=>({
       download:async uri=>Buffer.from(uri.split(',')[1],'base64'),
       replicate:async(stage,model,input)=>{models.push([stage,model,input.model_size]); if(stage==='depth') return {grey_depth:dataUrl(f.depthImage)}; if(input.prompt===part.prompt) return dataUrl(await png(Buffer.alloc(frame.width*frame.height),frame.width,frame.height,1)); return dataUrl(stage==='matte'?f.original:stage.startsWith('restored_matte_')?f.restored:croppedMask);},
-      vision:async(stage)=> stage==='analysis_grid_v1'?{parts:[structuredClone(croppedPart)]}:stage.startsWith('binding_v1_')?{complete:true,rigid_regions_excluded:true,parts:[{...part,candidate_id:'C1',attachment_region:'top'}]}:stage.startsWith('reconstruction_')?dataUrl(f.restored):{identity_preserved:approved,neutral_matches:true,no_holes_or_duplicates:true,attachments_correct:true,rigid_parts_preserved:true,depth_plausible:true},
+      vision:async(stage)=> stage==='analysis_grid_v1'?{parts:[structuredClone(croppedPart)]}:stage.startsWith('binding_v1_')?{complete:true,rigid_regions_excluded:true,parts:[{...part,candidate_id:'C1',attachment_region:'top'}]}:stage.startsWith('reconstruction_')?dataUrl(f.restored):{identity_preserved:accept,neutral_matches:true,no_holes_or_duplicates:true,attachments_correct:true,rigid_parts_preserved:true,depth_plausible:true,edge_matte_clean:true,notes:note},
     })});
     const job=await jobs.create({mascot_id:PILOT_ID,image_base64:f.original.toString('base64'),character_contract:{}},`fixture-pipeline-${approved}`);
     await jobs.start(job.id); const result=await jobs.get(job.id);
@@ -188,6 +189,14 @@ test('entire local pipeline publishes only when independent review approves',asy
     if(approved) {
       const bytes=await fs.readFile(path.join(root,job.id,'pack/manifest.json'));
       assert.equal(sha256(bytes),result.pack_sha256); validatePack(JSON.parse(bytes));
+      note='revised'; await jobs.rebuild(job.id);
+      const revised=await jobs.get(job.id);
+      assert.equal(revised.status,'ready'); assert.notEqual(revised.pack_sha256,result.pack_sha256);
+      const archive=(await fs.readdir(path.join(root,job.id))).find(name=>name.startsWith(`previous-pack-${result.pack_sha256.slice(0,16)}-`));
+      assert.deepEqual(await fs.readFile(path.join(root,job.id,archive,'manifest.json')),bytes);
+      accept=false; await jobs.rebuild(job.id);
+      assert.equal((await jobs.get(job.id)).status,'failed');
+      assert.equal(sha256(await fs.readFile(path.join(root,job.id,'pack/manifest.json'))),revised.pack_sha256);
     } else await assert.rejects(fs.access(path.join(root,job.id,'pack/manifest.json')));
   }
 });

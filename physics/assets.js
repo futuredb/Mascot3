@@ -2,6 +2,7 @@ const sharp = require('sharp');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { requireValue, sha256 } = require('./contracts');
+const { cleanMatteEdges } = require('./edges');
 
 async function rgba(bytes, width, height) {
   const image = sharp(bytes, { limitInputPixels: 2048 * 2048 }).ensureAlpha();
@@ -169,8 +170,8 @@ async function writeAsset(directory, name, bytes) {
 }
 
 /** Only pixels in the swept area may be replaced by generated reconstruction. */
-async function assemble({ original, restored, depthImage, parts, masks, directory }) {
-  const { data, info } = await rgba(original), w = info.width, h = info.height;
+async function assemble({ original, restored, depthImage, parts, masks, directory, backgroundImage }) {
+  const { data, info, report: edgeCleanup } = await cleanMatteEdges(original, backgroundImage), w = info.width, h = info.height;
   const numericDepth = (await rgba(depthImage)).data;
   for (let i=0;i<numericDepth.length;i+=4) requireValue(Math.max(numericDepth[i],numericDepth[i+1],numericDepth[i+2])-Math.min(numericDepth[i],numericDepth[i+1],numericDepth[i+2]) <= 2,'depth_must_be_numeric_grayscale');
   const depthRaw = await sharp(depthImage).resize(w, h).removeAlpha().greyscale().raw().toBuffer();
@@ -187,8 +188,13 @@ async function assemble({ original, restored, depthImage, parts, masks, director
       swept[(y+dy)*w+x+dx]=255;
     }
   }
-  const clean = (await rgba(restored, w, h)).data, body = Buffer.from(data);
+  const clean = (await rgba(restored, w, h)).data;
+  let body = Buffer.from(data);
   for (let i = 0; i < swept.length; i++) if (swept[i] > 8) clean.copy(body, i * 4, i * 4, i * 4 + 4);
+  // Reconstructed surfaces can carry their own narrow spill fringe.
+  const bodyCleanup = await cleanMatteEdges(await png(body, w, h), backgroundImage);
+  body = bodyCleanup.data;
+  edgeCleanup.reconstructed_body_changed_pixels = bodyCleanup.report.changed_pixels;
   const bodyMask = Buffer.alloc(alpha.length); for (let i = 0; i < alpha.length; i++) bodyMask[i] = body[i * 4 + 3];
   const silhouette=boundsOf(alpha,w,h);
   // Relative depth has no metric scale. Fit it to the subject, not the empty
@@ -201,7 +207,7 @@ async function assemble({ original, restored, depthImage, parts, masks, director
   assets.body_depth = await writeAsset(directory, 'body_depth', await png(depthRaw, w, h, 1));
   for (let n = 0; n < parts.length; n++) {
     const part = parts[n], mask = masks[n], color = Buffer.from(data);
-    for (let i = 0; i < mask.length; i++) color[i * 4 + 3] = mask[i];
+    for (let i = 0; i < mask.length; i++) color[i * 4 + 3] = Math.min(mask[i], data[i * 4 + 3]);
     const layer = mesh(mask, depthRaw, w, h, part,depthScale);
     const parent = layers.find(l => l.id === part.parent_id);
     requireValue(parent, 'missing_parent_layer');
@@ -217,7 +223,7 @@ async function assemble({ original, restored, depthImage, parts, masks, director
     assets[layer.texture] = await writeAsset(directory, layer.texture, await png(color, w, h));
     assets[layer.depth] = await writeAsset(directory, layer.depth, await png(depthRaw, w, h, 1));
   }
-  return { width: w, height: h, layers, assets };
+  return { width: w, height: h, layers, assets, edge_cleanup: edgeCleanup };
 }
 
 /** Software triangle rasterizer for QA: uses package topology, alpha, depth and actual vertices. */

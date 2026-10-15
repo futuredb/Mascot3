@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const { chooseAnimationBatch, chooseGreetingBatch } = require("./animation_batch");
 const { PhysicsJobs } = require("../physics/jobs");
+const { importPhysicsSeeds } = require("../physics/seed");
 const { loadEnvFileDefaults } = require("../extensions/02_tools_and_apps/_shared/env_file.js");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -85,6 +86,7 @@ function seedDataDirectory() {
     fs.mkdirSync(directory, { recursive: true });
   }
   if (env.MASCOT3_SKIP_SEED === "true") return;
+  importPhysicsSeeds(path.join(SEED_ROOT, "physics"), path.join(SERVER_DATA_DIR, "physics"));
   const seedCharacters = path.join(SEED_ROOT, "characters");
   if (fs.existsSync(seedCharacters) && fs.readdirSync(CHARACTERS_DIR).length === 0) {
     fs.cpSync(seedCharacters, CHARACTERS_DIR, { recursive: true });
