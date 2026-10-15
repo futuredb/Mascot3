@@ -73,6 +73,22 @@ class PhysicsSolverTest {
         assertEquals(0f,solver.bodyX,.00001f)
     }
 
+    @Test fun smallPhoneTiltIsVisibleButStationaryNoiseDoesNotMoveBody() {
+        val solver=PhysicsSolver(pack().copy(maxBodyOffset=.035f,maxLeanDegrees=8f))
+        // Five degrees of screen-plane roll gives a clear lean without needing
+        // to approach Android's autorotation threshold.
+        repeat(240) { solver.advance(1.0/120,0f,0f,gravityX=kotlin.math.sin(Math.toRadians(5.0)).toFloat()) }
+        assertTrue(solver.bodyX>.025f)
+        assertTrue(solver.leanAngle>Math.toRadians(6.0))
+        solver.reset()
+        repeat(1200) { i ->
+            val noise=if(i%2==0) .001f else -.001f
+            solver.advance(1.0/120,noise,noise,gravityX=noise,gravityY=noise)
+        }
+        assertEquals(0f,solver.bodyX,1e-6f);assertEquals(0f,solver.bodyY,1e-6f)
+        assertEquals(0f,solver.leanAngle,1e-6f)
+    }
+
     @Test fun sameRecordedInputsAt30_60_120Fps() {
         val records = listOf(floatArrayOf(0f,0f,0f,0f,0f,0f),floatArrayOf(.18f,-.12f,0f,0f,.2f,-.1f),floatArrayOf(-.1f,.12f,9f,-8f,-.3f,.4f),floatArrayOf(0f,0f,0f,0f,0f,0f))
         fun run(fps: Int): List<Float> {

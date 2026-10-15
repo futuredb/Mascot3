@@ -111,8 +111,15 @@ class PhysicsSolver(val pack: PhysicsPack) {
         val limit = Math.toRadians(pack.maxTiltDegrees.toDouble()).toFloat()
         // Rolling an upright phone is mainly rotation around screen Z. Its
         // projected gravity changes even when quaternion X/Y stay near zero.
-        val targetX = if (neutral) 0f else (tiltX + gx * .7f).coerceIn(-limit, limit)
-        val targetY = if (neutral) 0f else (tiltY + gy * .7f).coerceIn(-limit, limit)
+        fun response(input: Float): Float {
+            // A small phone tilt should be visible while the render remains
+            // bounded to the QA-approved poses. Ignore sub-degree sensor noise.
+            val deadZone = .004f
+            val magnitude = (kotlin.math.abs(input)-deadZone).coerceAtLeast(0f)
+            return (kotlin.math.sign(input)*magnitude*3f).coerceIn(-limit,limit)
+        }
+        val targetX = if (neutral) 0f else response(tiltX + gx * .7f)
+        val targetY = if (neutral) 0f else response(tiltY + gy * .7f)
         bodyVelocityX += (65f * (targetX / limit * pack.maxBodyOffset - bodyX) - 13f * bodyVelocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.025f) * dt
         bodyVelocityY += (65f * (targetY / limit * pack.maxBodyOffset - bodyY) - 13f * bodyVelocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.025f) * dt
         bodyX = (bodyX + bodyVelocityX * dt).coerceIn(-pack.maxBodyOffset,pack.maxBodyOffset)
