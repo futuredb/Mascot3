@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 private const val MOSCOW_NAME = "Москва"
@@ -175,9 +176,13 @@ class AppViewModel(
     }
 
     private suspend fun applyMoscow() {
-        if (!directMode()) runCatching { api.saveCity(MOSCOW) }
         session.saveCityName(MOSCOW_NAME)
         _state.update { it.copy(cityName = MOSCOW_NAME) }
+        if (!directMode()) withTimeoutOrNull(STARTUP_REMOTE_TIMEOUT_MS) {
+            try { api.saveCity(MOSCOW) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* The local city remains available offline. */ }
+        }
     }
 
     private suspend fun bootstrap() {
@@ -197,7 +202,7 @@ class AppViewModel(
             Log.e("BundledHeroes", "Cannot import bundled heroes; existing library is retained", error)
             "Не удалось добавить встроенных героев. Проверьте свободное место и откройте приложение снова."
         }
-        runCatching { applyMoscow() }
+        viewModelScope.launch { applyMoscow() }
         acceptanceWorkflow.pending()?.let { request ->
             restoreGreeting(request)
             return
@@ -300,13 +305,12 @@ class AppViewModel(
         }
         val savedId = session.mascotId()
         val acceptedId = session.acceptedMascotId() ?: savedId
-        val restored = savedId?.let { runCatching { api.getMascot(it) }.getOrNull() }
-        val accepted = acceptedId?.let { runCatching { api.getMascot(it) }.getOrNull() }
-        val active = runCatching { api.activeMascot() }.getOrNull()?.takeIf { it.isSuccessful }?.body()
+        val unaccepted = acceptanceWorkflow.unacceptedIds()
         val localAccepted = acceptedId
-            ?.takeIf { heroStore.baseFile(it) != null }
-            ?.let { MascotDto(id = it, name = heroStore.mascotName(it), status = "READY") }
-        val localBundled = heroStore.localMascotIds().firstOrNull()?.let { id ->
+            ?.takeIf { it !in unaccepted && heroStore.baseFile(it) != null }
+            ?.let { MascotDto(id = it, name = heroStore.mascotName(it), status = "READY",
+                previewUrl = heroStore.baseFile(it)?.toURI()?.toString()) }
+        val localBundled = heroStore.localMascotIds().firstOrNull { it !in unaccepted }?.let { id ->
             MascotDto(
                 id = id,
                 name = heroStore.mascotName(id),
@@ -315,25 +319,40 @@ class AppViewModel(
                 previewUrl = heroStore.baseFile(id)?.toURI()?.toString(),
             )
         }
-        val shown = restoredHomeHero(restored, accepted, localAccepted, active, localBundled)
+        val selection = heroSelectionSeq
+        (localAccepted ?: localBundled)?.let { local ->
+            val ctx = localContext(local.id)
+            _state.update { it.copy(ready = true, mascot = local, context = ctx,
+                name = local.name.orEmpty(), error = bundledImportError,
+                animationPackReady = heroStore.animationPackReady(local.id)) }
+        }
+        val remote = loadStartupHeroes(savedId, acceptedId, api::getMascot,
+            { api.activeMascot().takeIf { it.isSuccessful }?.body() })
+        // A menu or hero selection remains usable while the server is slow.
+        if (selection != heroSelectionSeq || _state.value.greetingPending) return
+        val shown = restoredHomeHero(remote.restored, remote.accepted, localAccepted, remote.active, localBundled)
         val waiting = waitingForHero(shown)
         if (waiting) generateStartedAt = System.currentTimeMillis()
         generationGaveUp = false
         _state.update {
             it.copy(
                 ready = true,
-                route = "knock",
+                route = if (waiting || !it.ready) "knock" else it.route,
                 cityName = MOSCOW_NAME,
                 mascot = if (waiting || shown?.status == "READY" || shown?.status == "AWAITING_ACCEPTANCE") shown else null,
                 creating = waiting,
                 busy = false,
-                error = bundledImportError ?: if (shown?.status == "FAILED_FINAL") "Не удалось сгенерировать нового героя" else null,
-                context = null,
+                error = bundledImportError ?: if (shown?.status == "FAILED_FINAL") "Не удалось сгенерировать нового героя"
+                    else if (remote.unavailable) "Нет связи с сервером. Сохранённые герои доступны на телефоне." else null,
+                context = it.context.takeIf { _ -> it.mascot?.id == shown?.id },
                 name = shown?.name.orEmpty(),
             )
         }
         if (shown?.status == "READY") {
-            session.saveAcceptedMascot(shown.id)
+            // Do not erase an unverified pending server request with an offline fallback.
+            if (!(remote.unavailable && savedId != null && savedId != acceptedId && remote.restored == null)) {
+                session.saveAcceptedMascot(shown.id)
+            }
             cacheHero(shown.id)
             loadContext(interact = false)
         }
@@ -1088,6 +1107,7 @@ class AppViewModel(
     private suspend fun loadContext(interact: Boolean): ContextDto? {
         val selectedId = session.acceptedMascotId() ?: return null
         val rawContext = localContext(selectedId)
+        _state.update { if (it.mascot?.id == selectedId) it.copy(context = rawContext) else it }
         val mascotId = session.acceptedMascotId() ?: session.mascotId()
         if (!directMode() && mascotId != null) {
             runCatching { heroStore.sync(api, mascotId) }
@@ -1103,8 +1123,10 @@ class AppViewModel(
             animationFps = if (frames.isEmpty()) rawContext.animationFps else HeroLocalStore.FULL_FRAME_FPS,
         )
         return ctx.also {
-        _state.update { it.copy(context = ctx) }
-        pushWidget(ctx)
+        if (_state.value.mascot?.id == selectedId) {
+            _state.update { if (it.mascot?.id == selectedId) it.copy(context = ctx) else it }
+            pushWidget(ctx)
+        }
     }
     }
 
