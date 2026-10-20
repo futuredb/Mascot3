@@ -6,6 +6,8 @@ const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const { chooseAnimationBatch, chooseGreetingBatch } = require("./animation_batch");
 const { PhysicsJobs } = require("../physics/jobs");
+const { LightingJobs } = require("../lighting/jobs");
+const { handleLighting } = require("../lighting/routes");
 const { importPhysicsSeeds } = require("../physics/seed");
 const { loadEnvFileDefaults } = require("../extensions/02_tools_and_apps/_shared/env_file.js");
 
@@ -25,6 +27,7 @@ const IDEMPOTENCY_FILE = path.join(SERVER_DATA_DIR, "idempotency.json");
 const BUDGET_LEDGER_FILE = path.join(SERVER_DATA_DIR, "budget-ledger.json");
 const SEED_ROOT = path.join(ROOT, "deploy", "seed");
 const physicsJobs = new PhysicsJobs({ root: path.join(SERVER_DATA_DIR, "physics"), env });
+const lightingJobs = new LightingJobs({ root: path.join(SERVER_DATA_DIR, "lighting"), env });
 const ANIMATION_CATALOG = JSON.parse(fs.readFileSync(path.join(PIPELINE, "dict", "animation_prompt_catalog.json"), "utf8"));
 const ENABLED_ANIMATION_ENTRIES = ANIMATION_CATALOG.entries.filter((entry) => entry.availability === "enabled");
 const UI_TO_PIPELINE_ANIMATION = Object.freeze({
@@ -312,6 +315,7 @@ async function createNativeMascot(requestKey) {
         characterSlug: path.basename(characterDir),
         characterDir,
         previewPath,
+        lightingEnabled: true,
         runDir: result.runDir,
         stages: { deal: "done", lore: "done", design: "done", canonical: "review" },
       });
@@ -320,6 +324,7 @@ async function createNativeMascot(requestKey) {
       mascot.error = error.message;
     }
     await saveMascots();
+    if (mascot.lightingEnabled) queueNativeLighting(mascot).catch(error => console.error(`lighting_enqueue_failed: ${error.message}`));
   });
   return mascotDto(mascot);
 }
@@ -487,6 +492,18 @@ function videoAsset(mascot, state) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function queueNativeLighting(mascot) {
+  if (!mascot.lightingEnabled) return;
+  const files = [['image', presentationPreviewPath(mascot)],
+    ...[...PROFILE.uiStates, 'sleep_loop'].map(state => ['video', presentationVideoPath(mascot, state)])];
+  for (const [kind, file] of files) {
+    if (!file) continue;
+    const source = sha256File(file);
+    if (await lightingJobs.get(lightingJobs.identity(kind, source))) continue;
+    await lightingJobs.put(kind, source, await fsp.readFile(file));
+  }
+}
+
 async function runAnimationBatch(mascot) {
   const batchIds = mascot.animationBatchIds;
   if (!Array.isArray(batchIds) || !batchIds.length || !mascot.animationBatchDir) {
@@ -506,12 +523,14 @@ async function runAnimationBatch(mascot) {
     `--max-cost-usd=${PROFILE.maxAnimationCostUsd}`,
   ];
   mascot.animationStatus = "running";
+  mascot.lightingEnabled = true;
   mascot.stages = { ...mascot.stages, animations: "running" };
   await saveMascots();
   try {
     for (let poll = 0; poll < 480; poll += 1) {
       const raw = await runNode(args);
       const result = JSON.parse(raw);
+      queueNativeLighting(mascot).catch(error => console.error(`lighting_enqueue_failed: ${error.message}`));
       mascot.animationEstimateUsd = result.estimated_total_usd;
       if (result.estimated_total_usd > PROFILE.maxAnimationCostUsd) {
         throw new Error("animation_budget_exceeded");
@@ -725,6 +744,10 @@ const server = http.createServer(async (req, res) => {
       profile: PROFILE,
     });
     if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { status: "ok" });
+    if (url.pathname.startsWith('/v1/lighting/')) {
+      await handleLighting({ req, res, url, lightingJobs, token: env.MASCOT3_CLIENT_TOKEN, send, serveFile });
+      return;
+    }
     if (url.pathname.startsWith("/v1/physics/")) {
       if (!env.MASCOT3_CLIENT_TOKEN) return send(res, 503, { error: "physics_client_auth_not_configured" });
       requireClientAuth(req);
@@ -850,6 +873,10 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, "0.0.0.0", () => {
   console.log(`Mascot 3 is running on port ${port}`);
   physicsJobs.resumeInterrupted().catch(error => console.error(`physics_resume_failed: ${error.message}`));
+  lightingJobs.resumeInterrupted().catch(error => console.error(`lighting_resume_failed: ${error.message}`));
+  for (const mascot of mascots.values()) if (mascot.lightingEnabled) {
+    queueNativeLighting(mascot).catch(error => console.error(`lighting_enqueue_failed: ${error.message}`));
+  }
   if (!env.OPENROUTER_API_KEY) return;
   for (const mascot of mascots.values()) {
     const shouldResume = mascot.status === "READY"
