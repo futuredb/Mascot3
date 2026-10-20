@@ -20,7 +20,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY lighting/requirements.txt /tmp/lighting-requirements.txt
 RUN python3 -m venv /opt/lighting \
-    && /opt/lighting/bin/pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu \
+    && /opt/lighting/bin/pip install --no-cache-dir --upgrade pip==25.2 \
+    && /opt/lighting/bin/pip install --no-cache-dir torch==2.5.1+cpu torchvision==0.20.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu \
     && /opt/lighting/bin/pip install --no-cache-dir -r /tmp/lighting-requirements.txt \
     && /opt/lighting/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('depth-anything/Depth-Anything-V2-Small-hf', revision='5426e4f0f36572d16453bbda7a8389317b1bef99', allow_patterns=['*.json','*.safetensors'])" \
     && chmod -R a+rX /opt/lighting-models
