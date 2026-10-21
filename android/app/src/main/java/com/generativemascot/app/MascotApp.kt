@@ -50,6 +50,7 @@ class MascotApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        com.generativemascot.app.data.DashboardTelemetry.initialize(this)
         session = SessionStore(this)
         heroStore = HeroLocalStore(this)
         openRouterSettings = OpenRouterSettingsStore(this)

@@ -1,3 +1,5 @@
+let dashboardMiddleware=()=>{};
+void import("./futuredb-telemetry.mjs").then(m=>{dashboardMiddleware=m.httpMiddleware(r=>r.method==="POST"?"mascot3.request":undefined);m.scheduleKeySnapshots();}).catch(()=>{});
 const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
@@ -734,6 +736,7 @@ function serveFile(res, root, requestPath) {
 }
 
 const server = http.createServer(async (req, res) => {
+  dashboardMiddleware(req,res);
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method === "GET" && url.pathname === "/api/health") return send(res, 200, {

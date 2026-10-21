@@ -39,6 +39,7 @@ class OnDeviceMascotGenerator(
     @Volatile private var modelReady = false
     @Volatile private var videoModelReady = false
     private val client = OkHttpClient.Builder()
+        .addNetworkInterceptor(DashboardTelemetry.interceptor())
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.MINUTES)
         .writeTimeout(90, TimeUnit.SECONDS)

@@ -34,6 +34,24 @@ class MainActivity : ComponentActivity() {
         AppViewModel.factory(app.api, app.session, app.heroStore, app.openRouterSettings)
     }
 
+    private val telemetryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val telemetryHeartbeat = object : Runnable {
+        override fun run() {
+            com.generativemascot.app.data.DashboardTelemetry.visit()
+            telemetryHandler.postDelayed(this, 60_000)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        telemetryHandler.post(telemetryHeartbeat)
+    }
+
+    override fun onPause() {
+        telemetryHandler.removeCallbacks(telemetryHeartbeat)
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vm.observeBehavior()
