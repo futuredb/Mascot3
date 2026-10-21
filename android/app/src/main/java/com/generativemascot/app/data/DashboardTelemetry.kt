@@ -93,10 +93,33 @@ object DashboardTelemetry {
         }.getOrDefault(false)
     }
 
+    // The bounded image-response suffix may begin inside base64 data. Balance the
+    // usage object instead of stopping at its first nested token-details object.
+    private fun usageFromSuffix(text: String): JSONObject? {
+        val marker = Regex("\"usage\"\\s*:\\s*\\{").find(text) ?: return null
+        val start = marker.range.last
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        for (index in start until text.length) {
+            val char = text[index]
+            if (quoted) {
+                if (escaped) escaped = false
+                else if (char == '\\') escaped = true
+                else if (char == '\"') quoted = false
+            } else when (char) {
+                '\"' -> quoted = true
+                '{' -> depth++
+                '}' -> if (--depth == 0) return runCatching { JSONObject(text.substring(start, index + 1)) }.getOrNull()
+            }
+        }
+        return null
+    }
+
     fun interceptor(): Interceptor = Interceptor { chain ->
         val request = chain.request()
         val path = request.url.encodedPath
-        val post = request.method == "POST" && Regex(".*/(chat/completions|images|videos)$").matches(path)
+        val post = request.method == "POST" && Regex(".*/(chat/completions|images(?:/generations)?|videos(?:/generations)?)$").matches(path)
         val jobId = if (request.method == "GET" && Regex(".*/videos/[^/]+$").matches(path)) path.substringAfterLast('/') else null
         val app = context
         if (app == null || request.url.host != "openrouter.ai" || (!post && jobId == null)) return@Interceptor chain.proceed(request)
@@ -111,7 +134,7 @@ object DashboardTelemetry {
                     super.write(source, byteCount)
                 }
             }.buffer()
-            runCatching { request.body?.writeTo(sink); sink.flush() }
+            runCatching { if (request.body?.isOneShot() != true && request.body?.isDuplex() != true) { request.body?.writeTo(sink); sink.flush() } }
             val prefix = head.readUtf8()
             val model = Regex("\"model\"\\s*:\\s*\"([A-Za-z0-9_.:/@~-]+)\"").find(prefix)?.groupValues?.get(1) ?: "unknown"
             val team = BuildConfig.OPENROUTER_API_KEY.isNotBlank() && request.header("Authorization") == "Bearer ${BuildConfig.OPENROUTER_API_KEY}"
@@ -132,11 +155,10 @@ object DashboardTelemetry {
                     val tail = capture.readUtf8()
                     val raw = runCatching { JSONObject(tail) }.getOrElse {
                         // Images may be tens of MB. Only retain the bounded suffix containing usage.
-                        val match = Regex("\"usage\"\\s*:\\s*(\\{.*?\\})\\s*[,}]", RegexOption.DOT_MATCHES_ALL).find(tail)
-                        JSONObject().apply { match?.groupValues?.get(1)?.let { put("usage", JSONObject(it)) } }
+                        JSONObject().apply { usageFromSuffix(tail)?.let { put("usage", it) } }
                     }
                     val status = raw.optString("status")
-                    if (post && path.endsWith("/videos") && response.isSuccessful && raw.optString("id").isNotBlank() && status != "completed" && status != "failed") {
+                    if (post && (path.endsWith("/videos") || path.endsWith("/videos/generations")) && response.isSuccessful && raw.optString("id").isNotBlank() && status != "completed" && status != "failed") {
                         prefs.edit().putString(raw.getString("id"), contextFields.toString()).apply()
                         return@runCatching
                     }
