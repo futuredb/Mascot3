@@ -1,3 +1,4 @@
+const telemetry = import('../../../server/futuredb-telemetry.mjs');
 const BASE_URL = "https://openrouter.ai/api/v1";
 
 function headers(apiKey) {
@@ -14,7 +15,8 @@ async function request(fetchImpl, url, { apiKey, method = "GET", payload, timeou
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
+    const observe = await telemetry;
+    const response = await observe.instrumentFetch(fetchImpl,{provider:"openrouter",credentialId:"mascot3-team"})(url, {
       method,
       headers: headers(apiKey),
       body: payload === undefined ? undefined : JSON.stringify(payload),

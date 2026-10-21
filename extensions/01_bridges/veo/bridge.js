@@ -1,3 +1,4 @@
+const telemetry = import('../../../server/futuredb-telemetry.mjs');
 const BASE_URL = "https://openrouter.ai/api/v1";
 
 function createVeoBridgeFromEnv({ env = process.env, fetchImpl = fetch } = {}) {
@@ -8,7 +9,8 @@ function createVeoBridgeFromEnv({ env = process.env, fetchImpl = fetch } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchImpl(url, { ...options, headers: { ...auth, ...(options.headers || {}) }, signal: controller.signal });
+      const observe = await telemetry;
+      const response = await observe.instrumentFetch(fetchImpl,{provider:"openrouter",credentialId:"mascot3-team"})(url, { ...options, headers: { ...auth, ...(options.headers || {}) }, signal: controller.signal });
       const text = await response.text();
       if (!response.ok) throw new Error(`OpenRouter video ${response.status}: ${text.slice(0, 1000)}`);
       return { data: text ? JSON.parse(text) : {} };
