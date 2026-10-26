@@ -1,0 +1,72 @@
+# Preserve the existing data volume and routes; share the private AI egress network.
+services:
+  mascot3:
+    build: .
+    restart: unless-stopped
+    mem_limit: 2147483648
+    cpus: 2.0
+    expose:
+      - "8788"
+    environment:
+      DASHBOARD_INGEST_TOKEN: "${DASHBOARD_INGEST_TOKEN}"
+      DASHBOARD_INGEST_URL: "${DASHBOARD_INGEST_URL}"
+      DASHBOARD_KEY_ALIAS: "${DASHBOARD_KEY_ALIAS}"
+      DASHBOARD_QUEUE_DIR: "${DASHBOARD_QUEUE_DIR}"
+      DASHBOARD_RESOURCE_ID: "${DASHBOARD_RESOURCE_ID}"
+      HOST: "0.0.0.0"
+      IMAGE_RENDER_MODEL: "${IMAGE_RENDER_MODEL}"
+      MASCOT3_ALLOW_ACCOUNT_DELETE: "${MASCOT3_ALLOW_ACCOUNT_DELETE}"
+      MASCOT3_BASE_COST_RESERVE_USD: "${MASCOT3_BASE_COST_RESERVE_USD}"
+      MASCOT3_CLIENT_TOKEN: "${MASCOT3_CLIENT_TOKEN}"
+      MASCOT3_DATA_DIR: "/data"
+      MASCOT3_ENABLE_LEGACY_API: "${MASCOT3_ENABLE_LEGACY_API}"
+      MASCOT3_MAX_ANIMATION_COST_USD: "${MASCOT3_MAX_ANIMATION_COST_USD}"
+      MASCOT3_MAX_HERO_COST_USD: "${MASCOT3_MAX_HERO_COST_USD}"
+      MASCOT3_MAX_HERO_STARTS_PER_DAY: "${MASCOT3_MAX_HERO_STARTS_PER_DAY}"
+      MASCOT3_PORT: "8788"
+      NODE_ENV: "production"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      OPENROUTER_PROXY_URL: "${OPENROUTER_PROXY_URL}"
+      PET_V2_MAX_ANIMATION_COST_USD: "${PET_V2_MAX_ANIMATION_COST_USD}"
+      PET_V2_PYTHON: "python3"
+      PET_V2_TEXT_MODEL: "${PET_V2_TEXT_MODEL}"
+      PET_V2_VIDEO_MODEL: "${PET_V2_VIDEO_MODEL}"
+      PET_V2_VIDEO_PRICE_PER_SECOND_USD: "${PET_V2_VIDEO_PRICE_PER_SECOND_USD}"
+      PET_V2_VIDEO_RESOLUTION: "${PET_V2_VIDEO_RESOLUTION}"
+      PHYSICS_ENABLED: "${PHYSICS_ENABLED}"
+      PORT: "8788"
+      REPLICATE_API_TOKEN: "${REPLICATE_API_TOKEN}"
+    volumes:
+      - existing-data-0:/data
+    networks:
+      coolify:
+        aliases: [9ronyeoqd35ij22pt12uyhdc, mascot3]
+      ai_egress:
+        gw_priority: -1
+    labels:
+      traefik.enable: "true"
+      traefik.http.middlewares.gzip.compress: "true"
+      traefik.http.middlewares.redirect-to-https.redirectscheme.scheme: "https"
+      traefik.http.routers.http-0-9ronyeoqd35ij22pt12uyhdc.entryPoints: "http"
+      traefik.http.routers.http-0-9ronyeoqd35ij22pt12uyhdc.middlewares: "redirect-to-https"
+      traefik.http.routers.http-0-9ronyeoqd35ij22pt12uyhdc.rule: "Host(`mascot3.45-91-52-137.sslip.io`) && PathPrefix(`/`)"
+      traefik.http.routers.http-0-9ronyeoqd35ij22pt12uyhdc.service: "http-0-9ronyeoqd35ij22pt12uyhdc"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.entryPoints: "https"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.middlewares: "gzip"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.rule: "Host(`mascot3.45-91-52-137.sslip.io`) && PathPrefix(`/`)"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.service: "https-0-9ronyeoqd35ij22pt12uyhdc"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.tls: "true"
+      traefik.http.routers.https-0-9ronyeoqd35ij22pt12uyhdc.tls.certresolver: "letsencrypt"
+      traefik.http.services.http-0-9ronyeoqd35ij22pt12uyhdc.loadbalancer.server.port: "8788"
+      traefik.http.services.https-0-9ronyeoqd35ij22pt12uyhdc.loadbalancer.server.port: "8788"
+networks:
+  coolify:
+    external: true
+    name: coolify
+  ai_egress:
+    external: true
+    name: urgaqzc5und8ly1epxub8kzo
+volumes:
+  existing-data-0:
+    external: true
+    name: 9ronyeoqd35ij22pt12uyhdc-mascot3-data
