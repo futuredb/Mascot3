@@ -1,5 +1,5 @@
 let dashboardMiddleware=()=>{};
-void import("./futuredb-telemetry.mjs").then(m=>{dashboardMiddleware=m.httpMiddleware(r=>r.method==="POST"?"mascot3.request":undefined);m.scheduleKeySnapshots();}).catch(()=>{});
+void import("./futuredb-telemetry.mjs").then(m=>{dashboardMiddleware=m.httpMiddleware(r=>r.method==="POST"?"mascot3.request":undefined);m.scheduleKeySnapshots(require("./provider-fetch.cjs"));}).catch(()=>{});
 const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");

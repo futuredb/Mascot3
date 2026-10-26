@@ -30,7 +30,7 @@ async function request(fetchImpl, url, { apiKey, method = "GET", payload, timeou
   }
 }
 
-function createOpenRouterDirectBridgeFromEnv({ env = process.env, fetchImpl = fetch } = {}) {
+function createOpenRouterDirectBridgeFromEnv({ env = process.env, fetchImpl = require("../../../server/provider-fetch.cjs") } = {}) {
   const apiKey = env.OPENROUTER_API_KEY;
   return {
     async listModels({ timeoutMs } = {}) {
@@ -43,7 +43,7 @@ function createOpenRouterDirectBridgeFromEnv({ env = process.env, fetchImpl = fe
   };
 }
 
-function createOpenRouterProxyBridgeFromEnv({ env = process.env, allowDirectFallback = false, fetchImpl = fetch } = {}) {
+function createOpenRouterProxyBridgeFromEnv({ env = process.env, allowDirectFallback = false, fetchImpl = require("../../../server/provider-fetch.cjs") } = {}) {
   const proxyUrl = String(env.PET_V2_OPENROUTER_PROXY_URL || "").replace(/\/$/, "");
   if (!proxyUrl) {
     if (allowDirectFallback) return createOpenRouterDirectBridgeFromEnv({ env, fetchImpl });
