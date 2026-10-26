@@ -44,6 +44,7 @@ services:
       ai_egress:
         gw_priority: -1
     labels:
+      traefik.docker.network: coolify
       traefik.enable: "true"
       traefik.http.middlewares.gzip.compress: "true"
       traefik.http.middlewares.redirect-to-https.redirectscheme.scheme: "https"
