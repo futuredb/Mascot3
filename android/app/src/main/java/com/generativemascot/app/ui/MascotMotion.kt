@@ -34,12 +34,7 @@ internal fun <T> MascotTransition(
         modifier = modifier,
         contentKey = contentKey,
         transitionSpec = {
-            (fadeIn(tween(200, delayMillis = 80)) +
-                slideInVertically(tween(280, easing = MascotEase)) { it / 40 })
-                .togetherWith(
-                    fadeOut(tween(100)) +
-                        slideOutVertically(tween(180, easing = MascotEase)) { -it / 80 },
-                ).using(null)
+            fadeIn(tween(180)).togetherWith(fadeOut(tween(180))).using(null)
         },
         label = "mascot navigation",
     ) { displayed -> content(displayed) }

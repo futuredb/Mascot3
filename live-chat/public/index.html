@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f5f2"><title>Маскот · автоматические реакции</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="/" aria-label="Маскот Live">маскот<span class="brand-live">Wan</span></a>
+    <div class="header-actions"><span class="prototype">Чат + автоматическая анимация</span><button id="settingsButton" class="text-button">Настройки</button></div>
+  </header>
+  <main class="workspace">
+    <section class="stage" aria-label="Персонаж">
+      <div class="stage-top"><label class="hero-picker"><span class="sr-only">Персонаж</span><select id="heroSelect" aria-label="Выбрать персонажа"></select><span aria-hidden="true">⌄</span></label><span id="videoBadge" class="status"><i></i><span>Фото</span></span></div>
+      <div class="portrait"><img id="heroImage" alt="" draggable="false"><video id="heroVideo" autoplay muted playsinline hidden aria-label="Живой видеопоток персонажа"></video></div>
+      <div class="stage-bottom"><div class="hero-intro"><h1 id="heroName">Аким</h1><p id="heroSubtitle">Спокойный, любопытный, немного мечтатель.</p></div>
+        <div class="live-controls"><button id="liveButton" class="primary"><span class="play-icon" aria-hidden="true">▷</span><span id="liveButtonText">Подключить live</span></button><span id="timer" hidden></span></div>
+        <p id="videoStatus" class="video-note" role="status">Загружаем настройки…</p>
+      </div>
+    </section>
+    <section class="conversation" aria-label="Переписка">
+      <div class="chat-top"><div><h2>Ваш разговор</h2><p id="chatStatus">ИИ отвечает · маскот дополняет ответ</p></div><button id="newChat" class="text-button" title="Начать новый разговор">Новый чат <span aria-hidden="true">↗</span></button></div>
+      <div id="messages" class="messages" role="log" aria-label="Сообщения" aria-live="polite">
+        <div id="welcome" class="welcome"><span class="welcome-mark" aria-hidden="true">✳</span><h3>С чего начнём?</h3><p>Задай вопрос ИИ.<br>Маскот дополнит ответ своей реакцией.</p><div class="suggestions"><button data-suggestion="Я новичок в теннисе. С чего начать, чтобы научиться уверенно подавать?">Научиться подавать в теннисе <span>↗</span></button><button data-suggestion="Сегодня всё идёт не по плану. Можно просто поболтать?">Рассказать, как прошёл день <span>↗</span></button></div></div>
+      </div>
+      <div class="composer-area"><p id="chatError" class="error" role="alert" hidden></p><form id="chatForm" class="composer"><label for="messageInput" class="sr-only">Твоё сообщение</label><textarea id="messageInput" placeholder="Напиши Акиму…" rows="1" maxlength="1500" required></textarea><button id="sendButton" type="submit" aria-label="Отправить сообщение" disabled>↑</button></form><div class="composer-foot"><span id="inputHint">≈ $0,05 за анимацию · Enter — отправить</span><span id="counter">0 / 1500</span></div></div>
+    </section>
+  </main>
+  <dialog id="settingsDialog"><div class="dialog-heading"><h2>Автоматические реакции</h2><button type="button" id="closeSettings" class="icon-button" aria-label="Закрыть настройки">×</button></div><p>После сообщения ИИ готовит ответ и описание жеста. Wan создаёт короткую анимацию, и она сама появляется рядом с ответом.</p><div class="setup-status"><span>Текстовый чат</span><strong id="chatKeyStatus"></strong><span>Анимации</span><strong id="videoKeyStatus"></strong></div><p class="small">Одна реакция Wan в 480p — около $0,05. Генерация занимает время. Показ ограничен 8 секундами; повторное воспроизведение бесплатно. Ключ хранится только на локальном сервере.</p></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -24,6 +24,15 @@ import retrofit2.http.Url
 import java.util.concurrent.TimeUnit
 
 interface MascotApi {
+    @GET("/v1/lighting/sources/{kind}/{hash}")
+    suspend fun lightingSource(@Path("kind") kind: String, @Path("hash") hash: String): Response<LightingJob>
+
+    @PUT("/v1/lighting/sources/{kind}/{hash}")
+    suspend fun prepareLighting(@Path("kind") kind: String, @Path("hash") hash: String, @Body body: okhttp3.RequestBody): LightingJob
+
+    @GET("/v1/lighting/jobs/{id}")
+    suspend fun lightingJob(@Path("id") id: String): LightingJob
+
     @POST("/v1/physics/jobs")
     suspend fun preparePhysics(@Header("Idempotency-Key") key: String, @Body body: com.generativemascot.app.worker.PhysicsJobRequest): com.generativemascot.app.worker.PhysicsJobDto
 

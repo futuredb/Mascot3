@@ -14,9 +14,10 @@ internal data class StartupHeroes(
     val accepted: MascotDto?,
     val active: MascotDto?,
     val unavailable: Boolean,
+    val connectionIssue: ServerIssue? = null,
 )
 
-private data class StartupRead(val hero: MascotDto?, val unavailable: Boolean = false)
+private data class StartupRead(val hero: MascotDto?, val issue: ServerIssue? = null)
 
 /** These are reads only. A slow lookup must not hide cached heroes or retry paid work. */
 internal suspend fun loadStartupHeroes(
@@ -27,17 +28,18 @@ internal suspend fun loadStartupHeroes(
     timeoutMs: Long = STARTUP_REMOTE_TIMEOUT_MS,
 ): StartupHeroes = coroutineScope {
     suspend fun read(block: suspend () -> MascotDto?): StartupRead = try {
-        withTimeoutOrNull(timeoutMs) { StartupRead(block()) } ?: StartupRead(null, true)
+        withTimeoutOrNull(timeoutMs) { StartupRead(block()) } ?: StartupRead(null, ServerIssue.UNREACHABLE)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (missing: HttpException) {
-        StartupRead(null, missing.code() != 404)
-    } catch (_: Exception) {
-        StartupRead(null, true)
+        StartupRead(null, if (missing.code() == 404) null else serverIssue(missing))
+    } catch (error: Exception) {
+        StartupRead(null, serverIssue(error))
     }
     val restored = async { read { savedId?.let { getHero(it) } } }
     val accepted = if (acceptedId == savedId) restored else async { read { acceptedId?.let { getHero(it) } } }
     val active = async { read(activeHero) }
     val r = restored.await(); val a = accepted.await(); val current = active.await()
-    StartupHeroes(r.hero, a.hero, current.hero, r.unavailable || a.unavailable || current.unavailable)
+    val issue = current.issue ?: r.issue ?: a.issue
+    StartupHeroes(r.hero, a.hero, current.hero, issue != null, issue)
 }

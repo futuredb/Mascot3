@@ -12,21 +12,35 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.generativemascot.app.overlay.OverlayPermissionIntro
+import com.generativemascot.app.overlay.OverlayPermissionsDialog
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.generativemascot.app.data.HeroLocalStore
 import com.generativemascot.app.data.GenerationRoute
 import com.generativemascot.app.ui.AppViewModel
 import com.generativemascot.app.ui.AnimationLibraryScreen
+import com.generativemascot.app.ui.PersonalityGenerationScene
+import com.generativemascot.app.ui.CharacterTypeScreen
 import com.generativemascot.app.ui.KnockHeroScreen
+import com.generativemascot.app.ui.MascotChatScreen
 import com.generativemascot.app.ui.GenerationScene
 import com.generativemascot.app.ui.MascotTheme
 import com.generativemascot.app.ui.SettingsScreen
+import com.generativemascot.app.ui.ServerIssue
 import com.generativemascot.app.ui.stateTitle
 import com.generativemascot.app.ui.MascotTransition
 import com.generativemascot.app.ui.FigmaCanvas
 import com.generativemascot.app.ui.heroFlowContentKey
 import com.generativemascot.app.ui.showsHeroHome
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels {
@@ -40,7 +54,16 @@ class MainActivity : ComponentActivity() {
         handleWidgetIntent(intent)
         setContent {
             MascotTheme {
+                var showPermissions by rememberSaveable { mutableStateOf(OverlayPermissionIntro.needed(this)) }
+                if (showPermissions) OverlayPermissionsDialog(this, onDismiss = {
+                    OverlayPermissionIntro.seen(this)
+                    showPermissions = false
+                })
                 val liveState by vm.state.collectAsState()
+                var showChat by rememberSaveable { mutableStateOf(false) }
+                var showCharacterType by rememberSaveable { mutableStateOf(false) }
+                val transitionScope = rememberCoroutineScope()
+                BackHandler(showChat) { showChat = false }
                 BackHandler(liveState.route == "animations") {
                     vm.closeAnimationLibrary()
                 }
@@ -49,6 +72,11 @@ class MainActivity : ComponentActivity() {
                 }
                 BackHandler(liveState.route == "create" && !liveState.creating) {
                     vm.cancelHeroCreation()
+                }
+                // Creation is paid and must not be interrupted by navigating back.
+                // Once it finishes or fails, back returns to the previous hero.
+                BackHandler(liveState.newCreationFlow && !liveState.showsHeroHome) {
+                    if (!liveState.creating) vm.cancelHeroCreation()
                 }
                 MascotTransition(
                     target = liveState,
@@ -63,7 +91,20 @@ class MainActivity : ComponentActivity() {
                     "knock", "onboarding", "create", "progress", "meet", "hero" -> {
                         val mascot = state.mascot
                         if (!state.showsHeroHome) {
-                            GenerationScene(
+                            if (state.newCreationFlow) PersonalityGenerationScene(
+                                generating = state.creating,
+                                previewUrl = mascot?.previewUrl,
+                                heroName = mascot?.name,
+                                nameDraft = state.name,
+                                error = state.error,
+                                acceptEnabled = !state.busy && !state.creating && mascot?.status == "AWAITING_ACCEPTANCE",
+                                onGenerate = vm::createHero,
+                                onRegenerate = vm::replaceHero,
+                                onAccept = vm::accept,
+                                onNameChange = vm::onName,
+                                onSaveName = vm::saveNameInPlace,
+                                onCancel = vm::cancelHeroCreation,
+                            ) else GenerationScene(
                                 generating = state.creating,
                                 previewUrl = mascot?.previewUrl,
                                 error = state.error,
@@ -79,6 +120,7 @@ class MainActivity : ComponentActivity() {
                                     (mascot?.status == "AWAITING_ACCEPTANCE" || state.greetingPending),
                             )
                         } else {
+                        Box(Modifier.fillMaxSize()) {
                         KnockHeroScreen(
                             generating = state.creating,
                             previewUrl = if (mascot?.status == "READY") {
@@ -94,7 +136,7 @@ class MainActivity : ComponentActivity() {
                             neutralVideoFrameUrl = mascot?.id
                                 ?.let { HeroLocalStore.current?.neutralVideoFrameFile(it)?.toURI()?.toString() },
                             animationFps = state.context?.animationFps ?: HeroLocalStore.FULL_FRAME_FPS,
-                            error = state.error,
+                            error = state.error ?: state.serverMessage?.takeUnless { it == ServerIssue.UNREACHABLE.message },
                             accepted = mascot?.status == "READY",
                             heroLoading = state.greetingPending && state.creating,
                             greetingInterrupted = state.greetingPending && !state.creating && !state.busy,
@@ -116,18 +158,49 @@ class MainActivity : ComponentActivity() {
                             onKnockComplete = vm::createHero,
                             onAccept = vm::accept,
                             onSelectHero = vm::selectLibraryHero,
-                            onNewHero = vm::startHeroCreation,
+                            onNewHero = { showCharacterType = true },
                             onAnimations = vm::openAnimationLibrary,
+                            onChat = { showChat = true },
+                            screenActive = !showChat && !showCharacterType,
                             onGenerate = vm::replaceHero,
                             onPoll = vm::pollProgress,
                             onRefresh = vm::refreshQuietly,
                             onRefreshHeroes = vm::refreshHeroLibrary,
                             onGenerationSettings = vm::openSettings,
+                            onOverlaySettings = {
+                                startActivity(Intent(this@MainActivity, com.generativemascot.app.overlay.OverlaySettingsActivity::class.java)
+                                    .putExtra(com.generativemascot.app.overlay.MascotOverlayService.EXTRA_HERO, mascot?.id))
+                            },
                             acceptEnabled = !state.busy && mascot?.status == "AWAITING_ACCEPTANCE",
                             onStateGesture = { (application as MascotApp).behavior.gesture(it) },
                             onAnimationVisible = { (application as MascotApp).behavior.observed("app", it) },
                             onOneShotFinished = { (application as MascotApp).behavior.clipFinished(it) },
                         )
+                        if (showCharacterType) Box(Modifier.fillMaxSize().zIndex(2f)) {
+                            CharacterTypeScreen(onClose = { if (!vm.state.value.creating) showCharacterType = false }, onFinish = { choice ->
+                                vm.startHeroCreation(choice).also { started ->
+                                    // Keep the selector covering the outgoing home until
+                                    // its crossfade has completed; never reveal home in between.
+                                    if (started) transitionScope.launch { delay(250); showCharacterType = false }
+                                }
+                            }, creationInProgress = liveState.creating)
+                        }
+                        if (mascot != null) Box(Modifier.fillMaxSize().zIndex(if (showChat) 1f else -1f)
+                            .then(if (showChat) Modifier else Modifier.clearAndSetSemantics { })) {
+                        MascotChatScreen(
+                            mascotId = mascot.id,
+                            heroName = mascot.name ?: "Маскот",
+                            previewUrl = state.context?.stillUrl ?: mascot.previewUrl,
+                            animationVideoUrl = state.context?.animationUrl,
+                            animationFrames = state.context?.animationFrames.orEmpty(),
+                            animationFps = state.context?.animationFps ?: HeroLocalStore.FULL_FRAME_FPS,
+                            animationVideoUrls = HeroLocalStore.current?.actionVideoUrls(mascot.id).orEmpty(),
+                            neutralFrameUrl = HeroLocalStore.current?.neutralVideoFrameFile(mascot.id)?.toURI()?.toString(),
+                            active = showChat,
+                            onBack = { showChat = false },
+                        )
+                        }
+                        }
                         }
                     }
                     "animations" -> AnimationLibraryScreen(

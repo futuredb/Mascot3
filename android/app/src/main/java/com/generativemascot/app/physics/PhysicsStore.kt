@@ -23,7 +23,7 @@ import java.io.File
 import java.net.URI
 import java.security.MessageDigest
 
-data class InstalledPhysics(val pack: PhysicsPack, val directory: File)
+data class InstalledPhysics(val pack: PhysicsPack, val directory: File, val framing: PhysicsFraming = PhysicsFraming())
 
 class PhysicsStore(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -77,6 +77,15 @@ class PhysicsStore(private val context: Context) {
         val atomic = AtomicFile(File(root, "active")); val out = atomic.startWrite()
         try { out.write(revision.toByteArray()); atomic.finishWrite(out) } catch (e: Exception) { atomic.failWrite(out); throw e }
     }
+    internal suspend fun installPrepared(id: String, staging: File, expected: String) = mutex.withLock { withContext(Dispatchers.IO) {
+        require(expected.matches(Regex("[a-f0-9]{64}")))
+        verify(id, staging, expected)
+        val root = directory(id).apply { mkdirs() }
+        val destination = File(root, expected)
+        if (!destination.exists()) check(staging.renameTo(destination)) { "Не удалось сохранить карты героя" }
+        verify(id, destination, expected)
+        activate(root, expected)
+    } }
     private fun verify(id: String, root: File, expected: String): InstalledPhysics {
         val bytes = File(root, "manifest.json").readBytes()
         require(hash(bytes) == expected) { "Повреждён манифест физики" }
@@ -94,7 +103,25 @@ class PhysicsStore(private val context: Context) {
             require(bounds.outWidth == pack.width && bounds.outHeight == pack.height) { "Неверные размеры слоя физики" }
         }
         require(pack.width.toLong() * pack.height * pack.layers.size * 4 <= 128L * 1024 * 1024) { "Пакет превышает лимит памяти" }
-        return InstalledPhysics(pack, root)
+        return InstalledPhysics(pack, root, framing(pack, root))
+    }
+    private fun framing(pack: PhysicsPack, root: File): PhysicsFraming {
+        var left=pack.width; var top=pack.height; var right=0; var bottom=0
+        // Once per loaded revision, off the UI thread. Transparent canvas
+        // margins must not decide a character's apparent size.
+        pack.layers.map { it.texture }.distinct().forEach { texture ->
+            val bitmap = requireNotNull(BitmapFactory.decodeFile(File(root,pack.assets.getValue(texture).file).path))
+            try {
+                val row = IntArray(pack.width)
+                for (y in 0 until pack.height) {
+                    bitmap.getPixels(row,0,pack.width,0,y,pack.width,1)
+                    for (x in row.indices) if ((row[x] ushr 24) >= 16) {
+                        left=minOf(left,x); right=maxOf(right,x+1); top=minOf(top,y); bottom=maxOf(bottom,y+1)
+                    }
+                }
+            } finally { bitmap.recycle() }
+        }
+        return PhysicsFraming.fit(pack.width,pack.height,left,top,right,bottom)
     }
     private fun url(raw: String): String {
         val base = URI(BuildConfig.API_BASE_URL + "/"); val resolved = base.resolve(raw)

@@ -46,7 +46,9 @@ fun PngSequence(
     interaction: PuppetInteraction = PuppetInteraction(),
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
+    playbackEnabled: Boolean = true,
 ) {
+    val playbackAllowed = playbackEnabled && rememberAppResumed()
     val resolved = remember(frames) {
         animationFramesWithoutZero(frames) { it }.mapNotNull(::resolveMediaUrl)
     }
@@ -83,11 +85,6 @@ fun PngSequence(
     var frameTime by remember(resolved) { mutableLongStateOf(0L) }
     var genericReaction by remember(mascotId) { mutableStateOf<String?>(null) }
     var genericReactionStartedAt by remember(mascotId) { mutableLongStateOf(0L) }
-    LaunchedEffect(bitmaps) {
-        while (isActive && bitmaps.size > 1) {
-            withFrameNanos { frameTime = it }
-        }
-    }
     LaunchedEffect(interaction.tapSerial) {
         if (interaction.tapSerial == 0) return@LaunchedEffect
         val startedAt = System.nanoTime()
@@ -150,8 +147,8 @@ fun PngSequence(
                 .mapNotNull { file -> decodeFile(file.absolutePath, decodeSize) }
         }
     }
-    LaunchedEffect(fullFrameBitmaps) {
-        while (isActive && fullFrameBitmaps.size > 1) withFrameNanos { frameTime = it }
+    LaunchedEffect(bitmaps, fullFrameBitmaps, playbackAllowed) {
+        while (isActive && playbackAllowed && (fullFrameBitmaps.size > 1 || bitmaps.size > 1)) withFrameNanos { frameTime = it }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val activeReaction = genericReaction ?: puppetAction

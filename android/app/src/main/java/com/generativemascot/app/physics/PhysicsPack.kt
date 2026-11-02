@@ -28,15 +28,21 @@ import kotlinx.serialization.Serializable
     @SerialName("edge_cleanup") val edgeCleanup: PhysicsEdgeCleanup? = null,
 ) {
     fun validate() {
-        require(format == "mascot-physics-2.5d" && version == 1) { "Неподдерживаемый физический пакет" }
+        val depthOnly = format == "mascot-depth-2.5d"
+        require((depthOnly || format == "mascot-physics-2.5d") && version == 1) { "Неподдерживаемый физический пакет" }
         require(qa.approved && qa.neutralError.isFinite() && qa.neutralError in 0f.. .025f) { "Пакет не прошёл проверку качества" }
         require(width in 64..2048 && height in 64..2048 && maxTiltDegrees == 12f)
         require(maxBodyOffset.isFinite() && maxBodyOffset in 0f.. .05f)
         require(maxLeanDegrees.isFinite() && maxLeanDegrees in 0f..12f)
         val hash = Regex("[a-f0-9]{64}")
         require(hash.matches(sourceSha256) && hash.matches(anchorSha256))
-        require(layers.size in 2..17 && layers.sumOf { it.vertices.size } <= 12000)
-        require(layers.any { it.material != "rigid" })
+        require(layers.sumOf { it.vertices.size } <= 12000)
+        if (depthOnly) {
+            require(layers.size == 1 && layers.single().id == "body" && layers.single().material == "rigid")
+            require(layers.single().vertices.all { it.size == 6 && it[5] == 0f })
+        } else {
+            require(layers.size in 2..17 && layers.any { it.material != "rigid" })
+        }
         val known = mutableMapOf<String, PhysicsLayer>()
         layers.forEach { l ->
             require(l.id.matches(Regex("[a-z][a-z0-9_-]{0,63}")) && l.id !in known)
@@ -81,7 +87,7 @@ class PhysicsSolver(val pack: PhysicsPack) {
     var angleY = 0f; private set
     var bodyX = 0f; private set
     var bodyY = 0f; private set
-    val leanAngle get() = angleX * pack.maxLeanDegrees / pack.maxTiltDegrees
+    val leanAngle get() = angleX * pack.maxLeanDegrees / pack.maxTiltDegrees * .2f
     val supportY = pack.layers.first { it.id == "body" }.vertices.maxOf { it[1] } - pack.height.toFloat()/pack.width/2f
     private var velocityX = 0f
     private var velocityY = 0f
@@ -111,23 +117,17 @@ class PhysicsSolver(val pack: PhysicsPack) {
     private fun step(dt: Float, tiltX: Float, tiltY: Float, ax: Float, ay: Float, gx: Float, gy: Float) {
         clock += dt
         val limit = Math.toRadians(pack.maxTiltDegrees.toDouble()).toFloat()
-        // Rolling an upright phone is mainly rotation around screen Z. Its
-        // projected gravity changes even when quaternion X/Y stay near zero.
-        fun response(input: Float): Float {
-            // A small phone tilt should be visible while the render remains
-            // bounded to the QA-approved poses. Ignore sub-degree sensor noise.
-            val deadZone = .004f
-            val magnitude = (kotlin.math.abs(input)-deadZone).coerceAtLeast(0f)
-            return (kotlin.math.sign(input)*magnitude*3f).coerceIn(-limit,limit)
-        }
+        // PhoneMotion supplies heading-independent tilt. The optional gravity
+        // terms also support recorded / externally supplied physics inputs.
+        fun response(input: Float): Float = TiltResponse.angle(input, limit)
         val targetX = if (neutral) 0f else response(tiltX + gx * .7f)
         val targetY = if (neutral) 0f else response(tiltY + gy * .7f)
-        bodyVelocityX += (65f * (targetX / limit * pack.maxBodyOffset - bodyX) - 13f * bodyVelocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.025f) * dt
-        bodyVelocityY += (65f * (targetY / limit * pack.maxBodyOffset - bodyY) - 13f * bodyVelocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.025f) * dt
+        bodyVelocityX += (300f * (targetX / limit * pack.maxBodyOffset * .3f - bodyX) - 30f * bodyVelocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.025f) * dt
+        bodyVelocityY += (300f * (targetY / limit * pack.maxBodyOffset * .3f - bodyY) - 30f * bodyVelocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.025f) * dt
         bodyX = (bodyX + bodyVelocityX * dt).coerceIn(-pack.maxBodyOffset,pack.maxBodyOffset)
         bodyY = (bodyY + bodyVelocityY * dt).coerceIn(-pack.maxBodyOffset,pack.maxBodyOffset)
-        velocityX += (110f * (targetX - angleX) - 20f * velocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.18f) * dt
-        velocityY += (110f * (targetY - angleY) - 20f * velocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.18f) * dt
+        velocityX += (360f * (targetX - angleX) - 32f * velocityX - if(neutral) 0f else ax.coerceIn(-12f,12f)*.18f) * dt
+        velocityY += (360f * (targetY - angleY) - 32f * velocityY - if(neutral) 0f else ay.coerceIn(-12f,12f)*.18f) * dt
         angleX = (angleX + velocityX * dt).coerceIn(-limit, limit)
         angleY = (angleY + velocityY * dt).coerceIn(-limit, limit)
         states.forEach { s ->

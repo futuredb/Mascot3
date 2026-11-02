@@ -1,0 +1,164 @@
+[
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "angry",
+    "sha256": "9ca2ed4d542e90cd5a33badbbbbac092ba59ecc1be8825591d0bde302159b11d",
+    "frames": 193
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "at_glass",
+    "sha256": "e36a8ee1f4c1d64a45e242b83987105a113c8f24e9fcfbecc0ac58475d54d5c6",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "curious",
+    "sha256": "6c2743f0ebced2d90bff1669633c6c15a25661dfd586ee4c0778286e832f102d",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "dancing",
+    "sha256": "4c44d337539237f9505b303fc2515004d8a8c34aa7839c13e1e4cce93f445f01",
+    "frames": 193
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "frightened",
+    "sha256": "069bd117887863f30857bd883662c1dafcf9ca62f7a26adbd4caa14674201056",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "greeting",
+    "sha256": "f97ce2aba2cc67ff3b94a78b1f1311a7bb770b9bc1d19afc1afab28dfac70acb",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "idle",
+    "sha256": "174d35457e3de3746e1df78f58997d4e8b9db4666652a754824b2737e56e9dcc",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "joyful",
+    "sha256": "8da0a772246794dec4c662827e16b6272156e13b0ee5e2aa58e22ef6d56bf85a",
+    "frames": 193
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "refusal",
+    "sha256": "a5fdb2fe900aa7d616da814d09a983d7afa26bc021bd468d6fd4bd142427b3c7",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "resting",
+    "sha256": "a9fff9093e655bbffb6e5f713b5517bd3510b54c4becae46c44fd8f9d612da27",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "sad",
+    "sha256": "d4d3c3956b4b9df5650d696924a86e5df7bc44c37aae5cea88d0e2ffdbddd0c4",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "signature_move",
+    "sha256": "f3127394cf71a39977248289b07e3d63fef4624bf9f4dcb71e5a88a05705a8a1",
+    "frames": 193
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "sleeping",
+    "sha256": "c6585b341e99e7174b6713aeb34d464f5026c898a6cafd17fbd35f9f3e86627e",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "stretching",
+    "sha256": "5ce011029b6abd0418035563e03b4f7d8120526fb8f100b176fd6de77a4c55d4",
+    "frames": 193
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "tender",
+    "sha256": "b6cf7518fce10f6afe499aab97ea1e42663e279c23b6bb156236208d381c2479",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "thinking",
+    "sha256": "7371e1f31a1cdd79f0d92639dacb5e18139a406d0778b3754507a04f80be0744",
+    "frames": 145
+  },
+  {
+    "hero": "716cdb43-703b-4d7e-8a79-27f03d92b99c",
+    "action": "watching",
+    "sha256": "2221f408d4cb8d24d5ab62743df10094acb561f51daee155a27d9680dffe571e",
+    "frames": 145
+  },
+  {
+    "hero": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "action": "dancing",
+    "sha256": "dbbb843cf5b0b0aaa9bb79c5b8f563b4b004299ff86995d9c107440d77500219",
+    "frames": 194
+  },
+  {
+    "hero": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "action": "idle",
+    "sha256": "e2b65ed09b5971017b17c7c3696d02487453111b0fe02fd9b17659083772c11d",
+    "frames": 146
+  },
+  {
+    "hero": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "action": "joyful",
+    "sha256": "52ec909b6f4e8fee37c8de4903cd5a6ea08f89f3bc5730623d4f2477e7d24c40",
+    "frames": 194
+  },
+  {
+    "hero": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "action": "sleep_loop",
+    "sha256": "21ec956ef077dfa8142f4cb1e0104641a69b181e7280985f061bea1f5de831f5",
+    "frames": 60
+  },
+  {
+    "hero": "9f226b89-df35-4d3a-9b36-96c28ea1bb62",
+    "action": "sleeping",
+    "sha256": "190a8211c2f9bdfd0318310af12bfd823e66c1a0ed65baa90b649335f41a2e09",
+    "frames": 145
+  },
+  {
+    "hero": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "action": "dancing",
+    "sha256": "9ad2bc26660b4a8916be5f3e141e921a4885fd8f39133ce7f7392ca52a69a9bb",
+    "frames": 194
+  },
+  {
+    "hero": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "action": "idle",
+    "sha256": "0297cc1c8a3ce28c40ded9e5aceef6cc4aa49124be2cb670b23f8d16ca277e19",
+    "frames": 146
+  },
+  {
+    "hero": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "action": "joyful",
+    "sha256": "f149d8f35b4e8d3c6d2cee47fdab6a1b3f491e4f09eeb8f58804a13a4e7accd9",
+    "frames": 194
+  },
+  {
+    "hero": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "action": "sleep_loop",
+    "sha256": "00c09a983cdfa660c2c93735473c2c66dc1ab885dd14d57281476aa31c2c5037",
+    "frames": 60
+  },
+  {
+    "hero": "a83e9d30-1270-40e6-902c-b44774e84c17",
+    "action": "sleeping",
+    "sha256": "091a6c7b42d646a8d787e1c837fe9f11777fec5bef272cf20c29a9f6bc610909",
+    "frames": 145
+  }
+]

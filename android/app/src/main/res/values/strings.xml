@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Маскоты</string>
     <string name="widget_name">Живой маскот</string>
+    <string name="widget_overlay_active">Герой поверх приложений. Нажмите, чтобы развернуть.</string>
 </resources>

@@ -39,6 +39,7 @@ import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
 import java.net.URI
 import java.util.WeakHashMap
+import com.generativemascot.app.physics.TiltLighting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -57,25 +58,37 @@ private const val SLEEP_HANDOFF_PRELOAD_MS = 700L
 private const val SLEEP_HANDOFF_CROSSFADE_MS = 360L
 private const val SLEEP_LOOP_MARKER = "sleep-loop-ready"
 private const val FIRST_FRAME_TIMEOUT_MS = 1_500L
-private val compatibilityKeys = WeakHashMap<ExoPlayer, Int>()
+private val compatibilityKeys = WeakHashMap<ExoPlayer, Pair<Int, GreenMatteTuning>>()
+private val compatibilityLighting = WeakHashMap<ExoPlayer, VideoLightingBinding>()
 private val compatibilityColorListeners = WeakHashMap<ExoPlayer, Player.Listener>()
+private val localBackgroundKeys = object : LinkedHashMap<String, Int>(32, .75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 32
+}
 private data class NeutralMatte(val bitmap: Bitmap?)
 
 private const val BACKGROUND_KEY_SHADER = """
     uniform shader content;
     layout(color) uniform half4 keyColor;
     uniform float greenKey;
+    uniform float keyLow;
+    uniform float keyHigh;
+    uniform float greenLow;
+    uniform float greenHigh;
+    uniform float greenAdaptive;
 
     half4 main(float2 coordinate) {
         half4 color = content.eval(coordinate);
         float distanceFromBackground = distance(float3(color.rgb), float3(keyColor.rgb));
-        float genericAlpha = smoothstep(0.10, 0.42, distanceFromBackground);
+        float genericAlpha = smoothstep(keyLow, keyHigh, distanceFromBackground);
         // Generated chroma footage often preserves the green hue but changes
         // its luminance substantially. Key by green-channel dominance rather
         // than distance from literal #00FF00 so shaded green does not survive
         // as a visible rectangle.
         float greenDominance = float(color.g) - max(float(color.r), float(color.b));
         float chromaAlpha = 1.0 - smoothstep(0.07, 0.22, greenDominance);
+        float greenHue = 1.0 - smoothstep(0.65, 0.72, float(color.b) / max(float(color.g), 0.001));
+        float adaptiveAlpha = 1.0 - smoothstep(greenLow, greenHigh, greenDominance);
+        chromaAlpha = mix(chromaAlpha, adaptiveAlpha, greenAdaptive * greenHue);
         float matteAlpha = mix(genericAlpha, chromaAlpha, greenKey);
         float alpha = float(color.a) * matteAlpha;
 
@@ -116,9 +129,14 @@ fun SoraMascotVideo(
     modifier: Modifier = Modifier,
     onAnimationVisible: ((String) -> Unit)? = null,
     onOneShotFinished: ((String) -> Unit)? = null,
+    lighting: TiltLighting? = null,
+    fullClip: Boolean = false,
+    onPlaybackError: (() -> Unit)? = null,
+    playbackEnabled: Boolean = true,
 ) {
+    val playbackAllowed = playbackEnabled && rememberAppResumed()
     if (videoUrls.isEmpty()) {
-        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier)
+        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier, lighting, fullClip, onAnimationVisible, onPlaybackError, playbackAllowed)
         return
     }
 
@@ -197,10 +215,11 @@ fun SoraMascotVideo(
     val context = LocalContext.current
     val visibleCallback by rememberUpdatedState(onAnimationVisible)
     val finishedCallback by rememberUpdatedState(onOneShotFinished)
+    val playbackAllowedState by rememberUpdatedState(playbackAllowed)
     val firstFrameRendered = remember(normalizedUrls) { BooleanArray(2) }
     val players = remember(normalizedUrls) {
         List(2) { index ->
-            ExoPlayer.Builder(context).build().apply {
+            createMascotVideoPlayer(context).apply {
                 volume = 0f
                 repeatMode = Player.REPEAT_MODE_OFF
                 playWhenReady = false
@@ -277,22 +296,31 @@ fun SoraMascotVideo(
         var activeIndex = 0
         var currentAction = requestedAction
         var oneShotBoundaryReportedAt: Long? = null
+        val matteTunings = mutableMapOf<String, GreenMatteTuning>()
         // Start at zero instead of copying requestSerial: a detail screen can
         // request its action before the players finish initializing.
         var consumedSerial = 0
         var queuedAction: String? = null
         var preparedAction: String? = null
 
-        suspend fun waitForFirstFrame(index: Int) {
+        suspend fun waitForFirstFrame(index: Int): Boolean {
             val deadline = SystemClock.uptimeMillis() + FIRST_FRAME_TIMEOUT_MS
             while (
                 isActive &&
                 !firstFrameRendered[index] &&
                 SystemClock.uptimeMillis() < deadline
             ) delay(16)
+            return firstFrameRendered[index]
         }
 
-        fun prepare(index: Int, actionName: String) {
+        suspend fun waitForReady(index: Int): Boolean {
+            val player = players[index]
+            val deadline = SystemClock.uptimeMillis() + 5_000L
+            while (isActive && player.playbackState != Player.STATE_READY && player.playerError == null && SystemClock.uptimeMillis() < deadline) delay(32)
+            return player.playbackState == Player.STATE_READY
+        }
+
+        suspend fun prepare(index: Int, actionName: String) {
             val url = normalizedUrls[actionName] ?: normalizedUrls.getValue(idleAction)
             firstFrameRendered[index] = false
             val item = MediaItem.Builder()
@@ -308,10 +336,14 @@ fun SoraMascotVideo(
                     }
                 }
                 .build()
+            val lightPack=if(lighting!=null)loadVideoLighting(context,url) else null
+            val binding=lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }
+            val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl) }
+                .also { matteTunings[url] = it }
             players[index].apply {
                 stop()
                 clearMediaItems()
-                applyBackgroundKey(playerViews[index],backgroundKeys[actionName] ?: Color.rgb(232,244,252))
+                applyBackgroundKey(playerViews[index],backgroundKeys[actionName] ?: Color.rgb(232,244,252),binding, tuning = tuning)
                 repeatMode = if (greetingOnly) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 setMediaItem(item)
                 prepare()
@@ -330,7 +362,7 @@ fun SoraMascotVideo(
                 prepare(incomingIndex, actionName)
                 preparedAction = actionName
             }
-            while (isActive && incoming.playbackState != Player.STATE_READY) delay(8)
+            if (!waitForReady(incomingIndex)) { queuedAction = null; preparedAction = null; return }
             if (!isActive) return
 
             incomingView.alpha = 0f
@@ -345,7 +377,11 @@ fun SoraMascotVideo(
                 }
             }
             outgoing.pause()
-            waitForFirstFrame(incomingIndex)
+            if (!waitForFirstFrame(incomingIndex)) {
+                incoming.pause(); anchor?.let { it.alpha = 0f }; outgoing.play()
+                queuedAction = null; preparedAction = null
+                return
+            }
             if (!isActive) return
             outgoingView.alpha = 0f
             incomingView.alpha = 1f
@@ -367,11 +403,11 @@ fun SoraMascotVideo(
         }
 
         prepare(activeIndex, currentAction)
-        while (isActive && players[activeIndex].playbackState != Player.STATE_READY) delay(16)
+        if (!waitForReady(activeIndex) || !isActive) return@LaunchedEffect
+        while (isActive && !playbackAllowedState) delay(200)
         if (!isActive) return@LaunchedEffect
         players[activeIndex].play()
-        waitForFirstFrame(activeIndex)
-        if (!isActive) return@LaunchedEffect
+        if (!waitForFirstFrame(activeIndex) || !isActive) return@LaunchedEffect
         playerViews[activeIndex].alpha = 1f
         visibleCallback?.invoke(currentAction)
         neutralView?.let { anchor ->
@@ -383,7 +419,14 @@ fun SoraMascotVideo(
             anchor.alpha = 0f
         }
 
+        var pausedForVisibility = false
         while (isActive) {
+            if (!playbackAllowedState) {
+                if (!pausedForVisibility) { players.forEach { it.pause() }; pausedForVisibility = true }
+                delay(200)
+                continue
+            }
+            if (pausedForVisibility) { players[activeIndex].play(); pausedForVisibility = false }
             if (requestSerial != consumedSerial) {
                 consumedSerial = requestSerial
                 queuedAction = requestedAction
@@ -454,11 +497,15 @@ fun SoraMascotVideo(
                     val incomingView = playerViews[inactiveIndex]
                     incomingView.alpha = 0f
                     active.pause()
-                    while (isActive && incoming.playbackState != Player.STATE_READY) delay(16)
+                    if (!waitForReady(inactiveIndex)) {
+                        preparedAction = null; active.seekTo(0); active.play(); delay(250); continue
+                    }
                     if (!isActive) break
                     incoming.seekTo(0)
                     incoming.play()
-                    waitForFirstFrame(inactiveIndex)
+                    if (!waitForFirstFrame(inactiveIndex)) {
+                        incoming.pause(); preparedAction = null; active.seekTo(0); active.play(); delay(250); continue
+                    }
                     if (!isActive) break
                     val steps = 15
                     repeat(steps) { step ->
@@ -504,11 +551,15 @@ fun SoraMascotVideo(
                             preparedAction = SLEEP_LOOP_MARKER
                         }
                         val incoming = players[inactiveIndex]
-                        while (isActive && incoming.playbackState != Player.STATE_READY) delay(16)
+                        if (!waitForReady(inactiveIndex)) {
+                            preparedAction = null; active.seekTo(0); active.play(); delay(250); continue
+                        }
                         if (!isActive) break
                         incoming.seekTo(0)
                         incoming.play()
-                        waitForFirstFrame(inactiveIndex)
+                        if (!waitForFirstFrame(inactiveIndex)) {
+                            incoming.pause(); preparedAction = null; active.seekTo(0); active.play(); delay(250); continue
+                        }
                         if (!isActive) break
                         val outgoingView = playerViews[activeIndex]
                         val incomingView = playerViews[inactiveIndex]
@@ -577,9 +628,8 @@ fun SoraMascotVideo(
                     preparedAction = desiredNext
                 }
                 val incoming = players[inactiveIndex]
-                while (isActive && incoming.playbackState != Player.STATE_READY) {
-                    if (active.playbackState == Player.STATE_ENDED) active.pause()
-                    delay(16)
+                if (!waitForReady(inactiveIndex)) {
+                    preparedAction = null; queuedAction = null; active.seekTo(0); active.play(); delay(250); continue
                 }
                 if (!isActive) break
 
@@ -600,7 +650,10 @@ fun SoraMascotVideo(
                     // reached the TextureView. Keep the neutral anchor visible
                     // until that happens so the surface's black clear color never
                     // flashes at the sides during a player swap.
-                    waitForFirstFrame(inactiveIndex)
+                    if (!waitForFirstFrame(inactiveIndex)) {
+                        incoming.pause(); anchor.alpha = 0f; preparedAction = null; queuedAction = null
+                        active.seekTo(0); active.play(); delay(250); continue
+                    }
                     if (!isActive) break
                     outgoingView.alpha = 0f
                     incomingView.alpha = 1f
@@ -613,7 +666,10 @@ fun SoraMascotVideo(
                     // Seamless assets end on their own first frame. Wait until
                     // the incoming texture actually has that frame, then swap
                     // atomically; an alpha blend would show both bodies at once.
-                    waitForFirstFrame(inactiveIndex)
+                    if (!waitForFirstFrame(inactiveIndex)) {
+                        incoming.pause(); preparedAction = null; queuedAction = null
+                        active.seekTo(0); active.play(); delay(250); continue
+                    }
                     if (!isActive) break
                 }
                 active.pause()
@@ -633,18 +689,31 @@ fun SoraMascotVideo(
     }
 
     DisposableEffect(players) {
-        onDispose { players.forEach(ExoPlayer::release) }
+        onDispose { players.forEach(::releaseMascotVideoPlayer) }
     }
+}
+
+@OptIn(UnstableApi::class)
+internal fun releaseMascotVideoPlayer(player: ExoPlayer) {
+    compatibilityColorListeners.remove(player)?.let(player::removeListener)
+    compatibilityKeys.remove(player);compatibilityLighting.remove(player)
+    player.release()
 }
 
 internal fun detectBackgroundColor(rawUrl: String): Int = runCatching {
     val uri = mediaUri(rawUrl)
+    val cacheKey = if (uri.scheme == "file") uri.path?.let { filePath ->
+        java.io.File(filePath).takeIf { it.isFile }?.let { "$filePath:${it.length()}:${it.lastModified()}" }
+    } else null
+    cacheKey?.let { key -> synchronized(localBackgroundKeys) { localBackgroundKeys[key] }?.let { return@runCatching it } }
     val bitmap = if (uri.path?.endsWith(".png", ignoreCase = true) == true) {
         BitmapFactory.decodeFile(uri.path)
     } else {
         MediaMetadataRetriever().let { retriever ->
             try {
-                retriever.setDataSource(uri.path)
+                if (uri.scheme == "https" || uri.scheme == "http") {
+                    retriever.setDataSource(uri.toString(), emptyMap())
+                } else retriever.setDataSource(uri.path)
                 retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } finally {
                 retriever.release()
@@ -662,20 +731,23 @@ internal fun detectBackgroundColor(rawUrl: String): Int = runCatching {
             samples += bitmap.getPixel(x, y)
         }
         fun median(channel: (Int) -> Int): Int = samples.map(channel).sorted()[samples.size / 2]
-        Color.rgb(median(Color::red), median(Color::green), median(Color::blue))
+        Color.rgb(median(Color::red), median(Color::green), median(Color::blue)).also { value ->
+            if (cacheKey != null) synchronized(localBackgroundKeys) { localBackgroundKeys[cacheKey] = value }
+        }
     } finally {
         bitmap.recycle()
     }
 }.getOrDefault(Color.rgb(232, 244, 252))
 
 @OptIn(UnstableApi::class)
-internal fun applyBackgroundKey(view: View, keyColor: Int) {
-    if (Build.VERSION.SDK_INT < 33) {
+internal fun applyBackgroundKey(view: View, keyColor: Int, lighting: VideoLightingBinding? = null, conservative: Boolean = false, tuning: GreenMatteTuning = GreenMatteTuning()) {
+    if (Build.VERSION.SDK_INT < 33 || (view is PlayerView && lighting != null)) {
+        if(Build.VERSION.SDK_INT>=31)view.setRenderEffect(null)
         if(view is PlayerView) {
             (view.videoSurfaceView as? TextureView)?.isOpaque=false
             (view.player as? ExoPlayer)?.let { player ->
-                if(compatibilityKeys[player]!=keyColor) {
-                    val effect=VideoBackgroundKey(keyColor)
+                if(compatibilityKeys[player] != (keyColor to tuning) || compatibilityLighting[player] !== lighting) {
+                    val effect=VideoBackgroundKey(keyColor,lighting,videoFrameClock(player),tuning)
                     fun updateColor(tracks: androidx.media3.common.Tracks) {
                         val formats=tracks.groups.filter { it.type==androidx.media3.common.C.TRACK_TYPE_VIDEO }
                             .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }.map { group.getTrackFormat(it) } }
@@ -692,14 +764,26 @@ internal fun applyBackgroundKey(view: View, keyColor: Int) {
                     updateColor(player.currentTracks)
                     player.addListener(listener);compatibilityColorListeners[player]=listener
                     player.setVideoEffects(listOf(effect))
-                    compatibilityKeys[player]=keyColor
+                    compatibilityKeys[player]=keyColor to tuning
+                    if(lighting==null)compatibilityLighting.remove(player) else compatibilityLighting[player]=lighting
                 }
             }
         }
         return // Still images are matted on their existing background IO jobs.
     }
+    if(view is PlayerView) (view.player as? ExoPlayer)?.let { player ->
+        if(compatibilityLighting.remove(player)!=null) {
+            player.setVideoEffects(emptyList());compatibilityKeys.remove(player)
+            compatibilityColorListeners.remove(player)?.let(player::removeListener)
+        }
+    }
     val shader = RuntimeShader(BACKGROUND_KEY_SHADER)
     shader.setColorUniform("keyColor", keyColor)
+    shader.setFloatUniform("keyLow", if (conservative) 0.02f else 0.10f)
+    shader.setFloatUniform("keyHigh", if (conservative) 0.09f else 0.42f)
+    shader.setFloatUniform("greenLow", tuning.low)
+    shader.setFloatUniform("greenHigh", tuning.high)
+    shader.setFloatUniform("greenAdaptive", if (tuning.adaptive) 1f else 0f)
     shader.setFloatUniform(
         "greenKey",
         if (
@@ -733,24 +817,44 @@ private fun LegacyPerformanceVideo(
     action: String?,
     interaction: PuppetInteraction,
     modifier: Modifier,
+    lighting: TiltLighting?,
+    fullClip: Boolean,
+    onAnimationVisible: ((String) -> Unit)?,
+    onPlaybackError: (() -> Unit)?,
+    playbackAllowed: Boolean,
 ) {
     val context = LocalContext.current
     val uri = remember(videoUrl) { mediaUri(videoUrl) }
     val keyColor by produceState<Int?>(null,videoUrl) { value=withContext(Dispatchers.IO){detectBackgroundColor(videoUrl)} }
+    var lightBinding by remember(videoUrl,lighting) { mutableStateOf<VideoLightingBinding?>(null) }
+    var lightReady by remember(videoUrl,lighting) { mutableStateOf(false) }
+    LaunchedEffect(videoUrl,lighting) {
+        lightBinding=if(lighting!=null)loadVideoLighting(context,videoUrl)?.let { VideoLightingBinding(it,lighting) } else null
+        lightReady=true
+    }
     var readySerial by remember(videoUrl) { mutableIntStateOf(0) }
+    val visibleCallback by rememberUpdatedState(onAnimationVisible)
+    val errorCallback by rememberUpdatedState(onPlaybackError)
     val player = remember(videoUrl) {
-        ExoPlayer.Builder(context).build().apply {
+        createMascotVideoPlayer(context).apply {
             volume = 0f
             repeatMode = Player.REPEAT_MODE_OFF
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) readySerial += 1
                 }
+                override fun onRenderedFirstFrame() {
+                    if (fullClip) visibleCallback?.invoke("reaction")
+                }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    if (fullClip) errorCallback?.invoke()
+                }
             })
         }
     }
     var reaction by remember(videoUrl) { mutableStateOf<String?>(null) }
     var reactionToken by remember(videoUrl) { mutableIntStateOf(0) }
+    var playbackView by remember(videoUrl) { mutableStateOf<PlayerView?>(null) }
 
     suspend fun showReaction(name: String) {
         val token = ++reactionToken
@@ -779,14 +883,29 @@ private fun LegacyPerformanceVideo(
             (LayoutInflater.from(viewContext).inflate(R.layout.mascot_video_player, null) as PlayerView)
                 .also { it.player = player;(it.videoSurfaceView as? TextureView)?.isOpaque=false }
         },
-        update = { view -> view.player=player;view.alpha=if(keyColor==null)0f else 1f;keyColor?.let { applyBackgroundKey(view,it) } },
+        update = { view ->
+            view.player=player
+            view.alpha=if(keyColor==null || !lightReady)0f else 1f
+            playbackView=view
+        },
+        onRelease = { if(playbackView===it)playbackView=null },
     )
-    LaunchedEffect(player,keyColor) {
-        if(keyColor!=null){player.setMediaItem(MediaItem.fromUri(uri));player.prepare()}
+    LaunchedEffect(player,keyColor,lightReady,lightBinding,playbackView) {
+        val key=keyColor;val view=playbackView
+        if(key!=null && lightReady && view!=null) {
+            applyBackgroundKey(view,key,lightBinding,conservative = fullClip)
+            player.setMediaItem(MediaItem.fromUri(uri));player.prepare()
+        }
     }
 
-    LaunchedEffect(player, readySerial, activeBeat) {
+    LaunchedEffect(player, readySerial, activeBeat, playbackAllowed) {
+        if (!playbackAllowed) { player.pause(); return@LaunchedEffect }
         if (player.playbackState != Player.STATE_READY) return@LaunchedEffect
+        if (fullClip) {
+            player.repeatMode = Player.REPEAT_MODE_ONE
+            player.play()
+            return@LaunchedEffect
+        }
         player.seekTo(activeBeat.startMs)
         player.play()
         while (isActive) {
@@ -798,5 +917,5 @@ private fun LegacyPerformanceVideo(
         }
     }
 
-    DisposableEffect(player) { onDispose { player.release() } }
+    DisposableEffect(player) { onDispose { releaseMascotVideoPlayer(player) } }
 }

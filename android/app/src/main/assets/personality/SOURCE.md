@@ -1,0 +1,1 @@
+Interactive colour field and four scenarios adapted from futuredb/prototype_slader_mascot, commit 51b89cec8e971c8d36929145f4b87670610c3888. The standalone page is local to the app; Android bridge handles selection and navigation.

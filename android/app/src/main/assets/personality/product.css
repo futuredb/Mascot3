@@ -1,0 +1,30 @@
+#demo{display:none}#surface{background:#eaebec}#content{padding:26px 25px 65px;display:flex;flex-direction:column;overflow:auto}.product-top{display:flex;justify-content:space-between;align-items:center}.wordmark{font-size:24px;letter-spacing:-1.3px;font-weight:650}.wordmark span{font-size:27px;margin-left:5px}.step{font-size:9px;letter-spacing:1.5px;color:#888b86}#characterTitle{font-size:35px;line-height:1.08;letter-spacing:-1.5px;margin:38px 0 14px;font-weight:550;min-height:76px}.intro{font-size:13px;line-height:1.6;color:#7f827e;margin:0;min-height:42px}.matrix-wrap{position:relative;margin:57px 23px 40px;flex-shrink:0}#field{position:relative;width:100%;aspect-ratio:1.15;touch-action:none;isolation:isolate;outline-offset:8px;background:radial-gradient(at 10% 20%,#eaffb8,transparent 65%),radial-gradient(at 80% 20%,#8770ff,transparent 65%),radial-gradient(at 20% 90%,#9fe4d4,transparent 65%),#f4a4df}#gradientCanvas{display:block;width:100%;height:100%}#fieldMarker{position:absolute;width:39px;height:39px;left:50%;top:50%;transform:translate(-50%,-50%);border:1px solid #ffffffe0;border-radius:50%;background:#ffffff26;box-shadow:0 2px 14px #42465a12;pointer-events:none}.axis{position:absolute;font-size:10px;color:#8e928d;white-space:nowrap}.top{right:-18px;top:-26px}.bottom{left:-23px;bottom:-29px}.right{right:-26px;top:12px;writing-mode:vertical-rl;transform:rotate(180deg)}.left{left:-26px;bottom:10px;writing-mode:vertical-rl;transform:rotate(180deg)}.selection{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:9px 0 30px;font-size:11px;min-height:30px}#selectionNumber{font-size:10px;color:#9b9e98;letter-spacing:1px}#selectionName{text-align:right;color:#6b7069}#buy{margin-top:auto;background:#252923;color:#fff;display:flex;justify-content:space-between;align-items:center;text-align:left;border-radius:50px;padding:18px 23px;font-size:13px;min-height:52px}#buy span{font-size:18px}.save-status{text-align:center;color:#9a9e96;font-size:10px;margin:14px 0 0}.dark #surface{background:#222521}.dark .intro,.dark .axis,.dark #selectionName{color:#b1b5af}.dark #buy{background:#e6dcfa;color:#252923}#editor>.row~.btn,#initial,#success{padding:0 23px;font-weight:500}#editor>div:first-child .btn{width:100%}
+@media(max-height:760px){#content{padding-top:16px}#characterTitle{margin-top:23px}.matrix-wrap{margin-top:42px;margin-bottom:35px}.selection{margin-bottom:18px}}
+.matrix-wrap{width:calc(100% - 46px);max-width:320px;align-self:center}#nav{background:linear-gradient(transparent,#eaebec 70%)}.dark #nav{background:linear-gradient(transparent,#222521 70%)}
+#content{max-width:393px;margin-inline:auto}#buy{flex-shrink:0}.selection{flex-shrink:0}body.preview #viewZoomControls{display:none}@media(max-width:767px) and (max-height:900px){body:not(.present) #characterTitle{margin-top:24px}body:not(.present) .matrix-wrap{margin-top:38px;margin-bottom:34px}body:not(.present) .selection{margin-top:4px;margin-bottom:18px}body:not(.present) #content{padding-top:20px}}
+/* A quiet selection lens over a continuous field of colour. */
+#field{border-radius:18px;overflow:hidden}#fieldMarker{width:30px;height:30px;border-color:#ffffff90;background:#ffffff12;box-shadow:0 0 20px #ffffff18}#field:focus-visible{outline:2px solid #a4aaa3}
+
+#field{background:transparent}
+/* Glass sits above the pigment and below the interactive cursor lens. */
+#field{border-radius:32px}
+#field::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;border-radius:32px;background:rgba(255,255,255,.1);box-shadow:inset 0 0 36px 0 #fff}
+.field-glass-outline{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none;overflow:hidden}
+#fieldMarker{width:50px;height:50px;border:0;border-radius:75px;z-index:3;background:linear-gradient(180deg,rgba(255,255,255,.2),rgba(255,255,255,.5));box-shadow:none}
+#fieldMarker::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:linear-gradient(180deg,#fff,rgba(255,255,255,0));mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask-composite:exclude;-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;pointer-events:none}
+/* Uniform 1px white dots at 90% opacity, spaced every 20px. */
+#field::before{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;background-image:radial-gradient(circle,rgba(255,255,255,.9) 0 .5px,transparent .5px);background-repeat:repeat;background-size:20px 20px;background-position:center;opacity:1}
+
+body:not(.present),body:not(.present) #stage,body:not(.present) #compactToolbar{background:#eaebec!important}
+
+/* Contextual direction hints follow the selected corner. */
+.matrix-wrap .axis{opacity:0;pointer-events:none;transition:opacity .45s ease,translate .45s ease;translate:0 3px}
+.matrix-wrap[data-active-corner$="left"] .top,.matrix-wrap[data-active-corner$="left"] .bottom{left:0;right:auto}
+.matrix-wrap[data-active-corner$="right"] .top,.matrix-wrap[data-active-corner$="right"] .bottom{left:auto;right:0}
+.matrix-wrap[data-active-corner^="top"] .left,.matrix-wrap[data-active-corner^="top"] .right{top:12px;bottom:auto}
+.matrix-wrap[data-active-corner^="bottom"] .left,.matrix-wrap[data-active-corner^="bottom"] .right{top:auto;bottom:12px}
+.matrix-wrap.hints-visible[data-active-corner^="top"] .top,
+.matrix-wrap.hints-visible[data-active-corner^="bottom"] .bottom,
+.matrix-wrap.hints-visible[data-active-corner$="left"] .left,
+.matrix-wrap.hints-visible[data-active-corner$="right"] .right{opacity:1;translate:0 0}
+@media(prefers-reduced-motion:reduce){.matrix-wrap .axis{transition:none}}

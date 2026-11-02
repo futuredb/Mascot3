@@ -77,9 +77,11 @@ data class AppUiState(
     val route: String = "knock",
     val cityName: String = MOSCOW_NAME,
     val creating: Boolean = false,
+    val newCreationFlow: Boolean = false,
     val generationLabel: String? = null,
     val greetingPending: Boolean = false,
     val error: String? = null,
+    val serverMessage: String? = null,
     val mascot: MascotDto? = null,
     val name: String = "",
     val context: ContextDto? = null,
@@ -124,8 +126,21 @@ class AppViewModel(
     private val acceptanceWorkflow = AcceptanceGreetingStore(session.appContext)
     private var greetingObserver: kotlinx.coroutines.Job? = null
     private var creationPrevious: MascotDto? = null
+    private var creationChoice: com.generativemascot.app.data.CharacterCreationChoice? = null
     private val behavior get() = (session.appContext as? com.generativemascot.app.MascotApp)?.behavior
     private var behaviorObserved = false
+    private var serverCheck: kotlinx.coroutines.Job? = null
+    private var connectionRevision = 0
+    private var foreground = false
+    private val connectivity = session.appContext.getSystemService(android.net.ConnectivityManager::class.java)
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) {
+            viewModelScope.launch { if (foreground) refreshServerConnection() }
+        }
+        override fun onLost(network: android.net.Network) {
+            viewModelScope.launch { if (foreground) refreshServerConnection() }
+        }
+    }
 
     fun observeBehavior() {
         if (behaviorObserved) return
@@ -141,12 +156,16 @@ class AppViewModel(
     }
 
     fun onAppForegrounded() {
+        foreground = true
+        refreshServerConnection()
         if (behavior != null) return // ProcessLifecycleOwner handles real app foreground, not menu/rotation.
         val request = foregroundWelcome.enter()
         _state.update { it.copy(welcomeRequestId = request) }
     }
 
     fun onAppBackgrounded() {
+        foreground = false
+        serverCheck?.cancel()
         if (behavior != null) return
         foregroundWelcome.leave()
         _state.update { it.copy(welcomeRequestId = null) }
@@ -172,7 +191,23 @@ class AppViewModel(
     }
 
     init {
+        runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
         viewModelScope.launch { bootstrap() }
+    }
+
+    override fun onCleared() {
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
+        super.onCleared()
+    }
+
+    private fun refreshServerConnection() {
+        serverCheck?.cancel()
+        val revision = ++connectionRevision
+        serverCheck = viewModelScope.launch {
+            delay(400) // Let a newly selected Wi-Fi/mobile/VPN route become ready.
+            val issue = if (directMode()) null else readServerIssue({ api.activeMascot().code() })
+            if (revision == connectionRevision) _state.update { it.copy(serverMessage = issue?.message) }
+        }
     }
 
     private suspend fun applyMoscow() {
@@ -220,6 +255,7 @@ class AppViewModel(
                         previewUrl = base?.toURI()?.toString())
                     _state.update { it.copy(ready = true, mascot = draft, creating = active != null,
                         busy = active != null, route = "knock", context = null,
+                        newCreationFlow = heroStore.characterChoice(draftId) != null,
                         generationLabel = if (active != null) "Создаём внешность героя…" else null) }
                     if (active != null) observeGeneration(active.id, null, animationsOnly = false)
                     return
@@ -326,8 +362,11 @@ class AppViewModel(
                 name = local.name.orEmpty(), error = bundledImportError,
                 animationPackReady = heroStore.animationPackReady(local.id)) }
         }
+        val connectionAtStartup = connectionRevision
         val remote = loadStartupHeroes(savedId, acceptedId, api::getMascot,
-            { api.activeMascot().takeIf { it.isSuccessful }?.body() })
+            { val response = api.activeMascot()
+                if (!response.isSuccessful && response.code() != 404) throw retrofit2.HttpException(response)
+                response.body() })
         // A menu or hero selection remains usable while the server is slow.
         if (selection != heroSelectionSeq || _state.value.greetingPending) return
         val shown = restoredHomeHero(remote.restored, remote.accepted, localAccepted, remote.active, localBundled)
@@ -343,7 +382,8 @@ class AppViewModel(
                 creating = waiting,
                 busy = false,
                 error = bundledImportError ?: if (shown?.status == "FAILED_FINAL") "Не удалось сгенерировать нового героя"
-                    else if (remote.unavailable) "Нет связи с сервером. Сохранённые герои доступны на телефоне." else null,
+                    else null,
+                serverMessage = if (connectionAtStartup == connectionRevision) remote.connectionIssue?.message else it.serverMessage,
                 context = it.context.takeIf { _ -> it.mascot?.id == shown?.id },
                 name = shown?.name.orEmpty(),
             )
@@ -370,22 +410,27 @@ class AppViewModel(
 
     fun replaceHero() = summonHero()
 
-    /** Opening the creation screen is free; the three knocks are the explicit request. */
-    fun startHeroCreation() {
-        if (_state.value.creating || _state.value.busy || _state.value.greetingPending) return
+    /** Confirming a type and character explicitly starts one new creation. */
+    fun startHeroCreation(choice: com.generativemascot.app.data.CharacterCreationChoice? = null): Boolean {
+        if (_state.value.creating || _state.value.busy || _state.value.greetingPending) return false
+        if (choice != null && !directMode()) return false
+        creationChoice = choice
         creationPrevious = _state.value.mascot
-        _state.update { it.copy(route = "create", mascot = null, context = null, error = null, name = "") }
+        _state.update { it.copy(route = "create", mascot = null, context = null, error = null, name = "", newCreationFlow = choice != null) }
+        if (choice != null) summonHero()
+        return true
     }
 
     fun cancelHeroCreation() {
         if (_state.value.creating || _state.value.greetingPending) return
+        creationChoice = null
         viewModelScope.launch {
             val id = session.acceptedMascotId() ?: return@launch
             val previous = creationPrevious?.takeIf { it.id == id }
                 ?: MascotDto(id = id, name = savedHeroName(id), status = "READY",
                     previewUrl = heroStore.baseFile(id)?.toURI()?.toString())
             val ctx = localContext(id)
-            _state.update { it.copy(mascot = previous, route = "knock", context = ctx, error = null) }
+            _state.update { it.copy(mascot = previous, route = "knock", context = ctx, error = null, newCreationFlow = false) }
         }
     }
 
@@ -467,6 +512,10 @@ class AppViewModel(
     private fun enqueueOnDeviceGeneration(previous: MascotDto?, animationsOnly: Boolean, actions: List<String>? = null) {
         val mascotId = if (animationsOnly) previous?.id ?: return else UUID.randomUUID().toString()
         val selected = if (animationsOnly) validateAnimationBatch(actions) else null
+        if (!animationsOnly) {
+            val choice = creationChoice ?: previous?.id?.let(heroStore::characterChoice)
+            choice?.let { heroStore.saveCharacterChoice(mascotId, it) }
+        }
         val input = androidx.work.Data.Builder()
             .putString(MascotGenerationWorker.KEY_REQUEST_TOKEN, UUID.randomUUID().toString())
             .putString(MascotGenerationWorker.KEY_MASCOT_ID, mascotId)
@@ -617,7 +666,7 @@ class AppViewModel(
                 creating = false,
                 busy = false,
                 generationLabel = null,
-                mascot = restored,
+                mascot = if (it.newCreationFlow && restored?.status == "READY") null else restored,
                 name = restored?.name.orEmpty(),
                 animationPackReady = previous?.id?.let(heroStore::animationPackReady) == true,
                 route = "knock",
@@ -679,7 +728,8 @@ class AppViewModel(
                 val persisted = acceptanceWorkflow.pending() != null
                 _state.update { it.copy(busy = false, creating = false,
                     mascot = if (persisted) it.mascot else current.mascot,
-                    greetingPending = persisted, route = "knock", error = error.message) }
+                    greetingPending = persisted, newCreationFlow = if (persisted) false else current.newCreationFlow,
+                    route = "knock", error = error.message) }
             }
         }
     }
@@ -849,6 +899,7 @@ class AppViewModel(
     }
 
     fun refreshQuietly() {
+        refreshServerConnection()
         if (_state.value.greetingPending) return
         viewModelScope.launch { loadContext(interact = false) }
     }
@@ -1003,7 +1054,10 @@ class AppViewModel(
             // picker on an empty loading screen.
             _state.update { it.copy(heroLibrary = localItems(heroStore.localMascotIds(), emptyMap())) }
             if (directMode()) return@launch
-            val remote = runCatching { api.mascotLibrary() }.getOrDefault(emptyList())
+            val remote = try {
+                api.mascotLibrary().also { _state.update { it.copy(serverMessage = null) } }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { emptyList() }
             val remoteById = remote.associateBy { it.id }
             val ids = (remote.map { it.id } + heroStore.localMascotIds()).distinct()
             _state.update { it.copy(heroLibrary = localItems(ids, remoteById)) }

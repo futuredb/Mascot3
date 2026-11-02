@@ -48,15 +48,17 @@ class OnDeviceMascotGenerator(
 
     suspend fun generateBase(mascotId: String): MascotDto = generationLock.withLock {
         ensureImageModelAvailable()
-        val creativeSeed = store.creativeContract(mascotId)?.seed
-            ?: selectDiverseCreativeSeed(mascotId.hashCode(), store.creativeContracts())
-        val characterContract = mobileCharacterContract(creativeSeed)
+        val choice = store.characterChoice(mascotId)
+        val savedCharacter = store.creativeContract(mascotId)
+        val creativeSeed = savedCharacter?.seed
+            ?: selectDiverseCreativeSeed(mascotId.hashCode(), store.creativeContracts(), choice = choice)
+        val characterContract = savedCharacter ?: mobileCharacterContract(creativeSeed, choice)
         store.saveCreativeContract(mascotId, characterContract.toPersistedJson())
         store.prepareNameWriter(mascotId)
         val requestId = UUID.randomUUID().toString()
         val body = JSONObject()
             .put("model", IMAGE_MODEL)
-            .put("prompt", buildCanonicalCharacterPrompt(creativeSeed))
+            .put("prompt", buildCanonicalCharacterPrompt(creativeSeed, choice, characterContract))
             .put("n", 1)
             .put("quality", "high")
             .put("aspect_ratio", "2:3")
@@ -80,7 +82,7 @@ class OnDeviceMascotGenerator(
         MascotDto(
             id = mascotId,
             status = "READY",
-            promptVersion = "openrouter-gpt-image-2-character-contract-v7",
+            promptVersion = "openrouter-gpt-image-2-character-contract-v8-relightable",
             previewUrl = file.toURI().toString(),
         )
     }
@@ -137,7 +139,11 @@ class OnDeviceMascotGenerator(
         val batchActions = validateAnimationBatch(actions)
         ensureVideoModelAvailable()
         val base = store.baseFile(mascotId) ?: error("Сначала нужно создать основного героя")
-        val creativeSeed = store.creativeContract(mascotId)?.seed ?: mascotId.hashCode()
+        val savedCharacter = store.creativeContract(mascotId)
+        val creativeSeed = savedCharacter?.seed ?: mascotId.hashCode()
+        // Reuse the actual character created by the art director. Rebuilding
+        // from the seed alone loses the user's human/animal/creature choice.
+        val character = savedCharacter ?: mobileCharacterContract(creativeSeed, store.characterChoice(mascotId))
         val hasExistingCoreVideo = HeroLocalStore.CORE_VIDEO_ACTIONS.any {
             store.actionVideoFile(mascotId, it) != null
         }
@@ -162,7 +168,7 @@ class OnDeviceMascotGenerator(
             onProgress(completedActions, batchActions.size)
             for (action in batchActions) {
                 if (store.actionVideoFile(mascotId, action) != null) continue
-                val direction = animationContract(action, creativeSeed)
+                val direction = animationContract(action, creativeSeed, character = character)
                 store.saveAnimationContract(mascotId, action, direction.toPersistedJson())
                 val actionReference = if (action == "sleep_loop") {
                     createSleepLoopReference(mascotId).let { anchor ->
@@ -178,6 +184,7 @@ class OnDeviceMascotGenerator(
                     seed = creativeSeed,
                     durationSeconds = durationSeconds,
                     matteHex = matteHex,
+                    character = character,
                 )
                 validateResolvedVideoPrompt(prompt, matteHex)
                 store.saveAnimationPromptRecord(
@@ -242,7 +249,7 @@ class OnDeviceMascotGenerator(
         MascotDto(
             id = mascotId,
             status = "READY",
-            promptVersion = "pet-generation-v2.5-seedance-2.0-mini-budget",
+            promptVersion = "pet-generation-v2.5-seedance-2.0-mini-relightable-v1",
             previewUrl = base.toURI().toString(),
             previewAnimationUrl = store.actionVideoFile(mascotId, "idle")?.toURI()?.toString(),
         )
@@ -478,11 +485,13 @@ class OnDeviceMascotGenerator(
     }
 
     private fun apiError(code: Int, raw: String): IOException {
-        val apiMessage = runCatching {
-            JSONObject(raw).optJSONObject("error")?.optString("message")
-        }.getOrNull().orEmpty()
+        val error = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
+        val apiMessage = error?.optString("message").orEmpty()
+        // The provider's detailed reason can be nested in metadata; inspect it
+        // for a known category but never show the raw response or credentials.
+        val accessReason = apiMessage + " " + error?.optJSONObject("metadata")?.optString("raw").orEmpty()
         val readable = when (code) {
-            401, 403 -> "Ключ OpenRouter не принят или ограничен политикой безопасности"
+            401, 403 -> describeOpenRouterAccessError(code, accessReason)
             402 -> "На балансе OpenRouter недостаточно средств"
             429 -> "Достигнут лимит API"
             in 500..599 -> "Сервис временно не смог обработать запрос. Автоматический повтор не запускался."
@@ -566,6 +575,21 @@ class OnDeviceMascotGenerator(
                     ?: throw IOException("OpenRouter вернул пустое изображение")
             }
         }
+    }
+}
+
+/** Do not label every 403 as a bad key: providers can reject region or policy. */
+internal fun describeOpenRouterAccessError(code: Int, message: String): String {
+    if (code == 401) return "OpenRouter не принял ключ. Проверьте выбранный ключ в настройках."
+    val reason = message.lowercase()
+    return when {
+        listOf("region", "country", "location", "geograph", "territor").any(reason::contains) ->
+            "Доступ к модели ограничен для текущего региона или сети. Проверьте подключение и VPN."
+        listOf("data policy", "privacy", "data collection", "zero data retention").any(reason::contains) ->
+            "Доступ к модели ограничен настройками приватности OpenRouter. Проверьте настройки аккаунта."
+        listOf("guardrail", "policy", "blocked", "allowlist", "not allowed").any(reason::contains) ->
+            "Запрос отклонён правилами доступа или ограничениями провайдера OpenRouter."
+        else -> "OpenRouter или провайдер отклонил доступ (HTTP 403). Проверьте VPN и доступ к модели."
     }
 }
 

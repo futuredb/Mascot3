@@ -7,6 +7,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StateResolverTest {
+    @Test fun shakingReusesOnlyAvailableClipsAndDoesNotLeaveAHeroScaredForMinutes() {
+        val now = 1_790_000_000_000L
+        val resolver = StateResolver(Random(42))
+        val sleeping = StateRecord(currentStateId = PetState.SLEEP, manualSleep = true)
+        val reaction = resolver.resolve(sleeping, now, event = StateEvent.SHAKE,
+            available = setOf("idle", "joyful"), durations = mapOf("joyful" to 3200L))
+        assertEquals(PetState.JOY, reaction.currentStateId)
+        assertFalse(reaction.manualSleep)
+        assertEquals(now + 3200L, reaction.stateExpiresAt)
+        assertEquals("phone_shake", reaction.triggerReason)
+        val withoutClips = resolver.resolve(sleeping, now, event = StateEvent.SHAKE, available = setOf("idle"))
+        assertEquals(PetState.SLEEP, withoutClips.currentStateId)
+    }
+
     private val now = Instant.parse("2026-09-21T12:00:00Z").toEpochMilli()
     private val all = PetState.entries.map { it.action }.toSet()
     private val config = StateConfig(rareFrequency = 0.0)

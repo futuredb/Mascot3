@@ -1,0 +1,61 @@
+package com.generativemascot.app.ui
+
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import java.io.File
+
+/** Optional correction for clips where the model shaded a green backdrop. */
+data class GreenMatteTuning(val low: Float = .07f, val high: Float = .22f, val adaptive: Boolean = false)
+
+internal fun chooseGreenMatteTuning(border: List<Int>, subject: List<Int>): GreenMatteTuning {
+    if (border.size < 36 || subject.size < 50) return GreenMatteTuning()
+    fun greenLike(color: Int): Boolean {
+        val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
+        return g > 40 && b < g * .72f && (g - maxOf(r, b)) / 255f > .035f
+    }
+    // Green/yellow-green material can be indistinguishable from a green screen.
+    // Do not apply the stronger key if the canonical character contains it.
+    if (subject.count(::greenLike).toFloat() / subject.size > .005f) return GreenMatteTuning()
+    if (border.count(::greenLike).toFloat() / border.size < .90f) return GreenMatteTuning()
+    val dominance = border.map { (Color.green(it) - maxOf(Color.red(it), Color.blue(it))) / 255f }.sorted()
+    val tenth = dominance[(dominance.size * .10f).toInt().coerceAtMost(dominance.lastIndex)]
+    if (tenth < .11f || tenth >= .23f) return GreenMatteTuning()
+    return GreenMatteTuning(low = .04f, high = (tenth - .01f).coerceIn(.10f, .14f), adaptive = true)
+}
+
+/** Local-only inspection; leaves the original files and their cached QA untouched. */
+internal fun detectAdaptiveGreenMatte(videoUrl: String, neutralUrl: String?): GreenMatteTuning = runCatching {
+    val video = Uri.parse(videoUrl.substringBefore('?'))
+    val neutral = neutralUrl?.let { Uri.parse(it.substringBefore('?')) }
+    if (video.scheme != "file" || neutral?.scheme != "file") return@runCatching GreenMatteTuning()
+    val anchor = File(requireNotNull(neutral.path))
+    val base = File(anchor.parentFile?.parentFile ?: return@runCatching GreenMatteTuning(), "base.png")
+    if (!base.isFile) return@runCatching GreenMatteTuning()
+    val subjectBitmap = BitmapFactory.decodeFile(base.path) ?: return@runCatching GreenMatteTuning()
+    val subject = mutableListOf<Int>()
+    try {
+        val step = maxOf(2, minOf(subjectBitmap.width, subjectBitmap.height) / 200)
+        for (y in 0 until subjectBitmap.height step step) for (x in 0 until subjectBitmap.width step step) {
+            val pixel = subjectBitmap.getPixel(x, y)
+            if (Color.alpha(pixel) >= 240) subject += pixel
+        }
+    } finally { subjectBitmap.recycle() }
+    val border = mutableListOf<Int>()
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(requireNotNull(video.path))
+        val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            ?: return@runCatching GreenMatteTuning()
+        for (fraction in listOf(.25, .5, .75)) {
+            val frame = retriever.getFrameAtTime((duration * fraction * 1000).toLong(), MediaMetadataRetriever.OPTION_CLOSEST) ?: continue
+            try {
+                for (x in listOf(.025f, .075f, .925f, .975f)) for (y in listOf(.04f, .18f, .36f, .64f, .82f, .96f)) {
+                    border += frame.getPixel((frame.width * x).toInt().coerceIn(0, frame.width - 1), (frame.height * y).toInt().coerceIn(0, frame.height - 1))
+                }
+            } finally { frame.recycle() }
+        }
+    } finally { retriever.release() }
+    chooseGreenMatteTuning(border, subject)
+}.getOrDefault(GreenMatteTuning())

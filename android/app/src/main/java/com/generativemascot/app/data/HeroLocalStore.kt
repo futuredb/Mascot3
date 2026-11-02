@@ -26,10 +26,18 @@ data class WidgetAnimationFrames(
     val fromVideoCache: Boolean = false,
 )
 
+data class ChatAnimationClip(val id: String, val title: String, val videoUrl: String, val createdAt: Long)
+
 class HeroLocalStore(context: Context) {
     private val appContext = context.applicationContext
     private val root = File(appContext.filesDir, "hero")
     private val json = Json { ignoreUnknownKeys = true }
+
+    private suspend fun prepareSavedLighting(id: String, source: File) {
+        try { LightingPreparation(appContext).enqueue(id, source) }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { /* The persisted opt-in is reconciled at next app launch. */ }
+    }
 
     fun resolve(url: String?): String? {
         val remote = rewriteHost(url) ?: return null
@@ -55,6 +63,51 @@ class HeroLocalStore(context: Context) {
 
     fun baseFile(mascotId: String): File? =
         File(root, "$mascotId/base.png").takeIf { it.isFile }
+
+    /** Dedicated chat activities are separate from the user's animation pack. */
+    fun chatActivityVideos(mascotId: String): Map<String, String> =
+        (listOf("idle-look", "idle-stretch", "idle-sway", "idle-ponder").mapNotNull { name ->
+            File(root, "$mascotId/chat-activity/$name.mp4").takeIf { it.isFile && it.length() > 1024 }
+                ?.let { name to it.toURI().toString() }
+        } + listOfNotNull(actionVideoFile(mascotId, "thinking")?.let { "thinking" to it.toURI().toString() })).toMap()
+
+    /** Chat clips live separately from the fixed-action animation pack. */
+    fun chatAnimationDirectory(mascotId: String): File {
+        require(Regex("^[A-Za-z0-9_-]{1,80}$").matches(mascotId)) { "Invalid hero ID" }
+        require(baseFile(mascotId) != null) { "Hero not found" }
+        return File(root, "$mascotId/chat-animations")
+    }
+
+    fun chatAnimations(mascotId: String): List<ChatAnimationClip> {
+        val folder = runCatching { chatAnimationDirectory(mascotId) }.getOrNull() ?: return emptyList()
+        return folder.listFiles().orEmpty().filter { it.isFile && it.name.matches(Regex("[a-f0-9]{32}\\.(mp4|webm)")) && it.length() > 1024 }
+            .map { file ->
+                val metadata = runCatching { org.json.JSONObject(File(folder, "${file.nameWithoutExtension}.json").readText()) }.getOrNull()
+                ChatAnimationClip(file.nameWithoutExtension, metadata?.optString("title")?.takeIf { it.isNotBlank() } ?: "Реакция из чата",
+                    file.toURI().toString(), metadata?.optLong("createdAt")?.takeIf { it > 0 } ?: file.lastModified())
+            }.sortedByDescending { it.createdAt }
+    }
+
+    fun saveCharacterChoice(mascotId: String, choice: CharacterCreationChoice) {
+        require(Regex("^[A-Za-z0-9_-]{1,80}$").matches(mascotId))
+        val editor = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
+            .putString("$mascotId:type", choice.type).putString("$mascotId:style", choice.style)
+        if (choice.positionX != null && choice.positionY != null) {
+            editor.putFloat("$mascotId:x", choice.positionX).putFloat("$mascotId:y", choice.positionY)
+        } else {
+            editor.remove("$mascotId:x").remove("$mascotId:y")
+        }
+        check(editor.commit())
+    }
+
+    fun characterChoice(mascotId: String): CharacterCreationChoice? {
+        val prefs = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE)
+        val type = prefs.getString("$mascotId:type", null) ?: return null
+        val style = prefs.getString("$mascotId:style", null) ?: return null
+        val x = if (prefs.contains("$mascotId:x")) prefs.getFloat("$mascotId:x", .5f) else null
+        val y = if (prefs.contains("$mascotId:y")) prefs.getFloat("$mascotId:y", .5f) else null
+        return runCatching { CharacterCreationChoice(type, style, x, y) }.getOrNull()
+    }
 
     fun mascotName(mascotId: String): String? = synchronized(nameFileLock) {
         val file = File(root, "$mascotId/name.txt")
@@ -245,12 +298,14 @@ class HeroLocalStore(context: Context) {
         require(mp4.size > 1024) { "OpenRouter вернул пустое видео" }
         val normalized = normalizeVideoAction(action)
         val destination = File(root, "$mascotId/videos/$normalized.mp4")
+        LightingPreparation(appContext).trackHero(mascotId)
         destination.parentFile?.mkdirs()
         val staging = File(destination.parentFile, "$normalized.pending.mp4")
         staging.writeBytes(mp4)
         if (destination.exists()) destination.delete()
         require(staging.renameTo(destination)) { "Не удалось сохранить анимацию $normalized" }
         costUsd?.let { File(destination.parentFile, "$normalized.cost-usd.txt").writeText(it.toString()) }
+        prepareSavedLighting(mascotId, destination)
         destination
     }
 
@@ -361,11 +416,13 @@ class HeroLocalStore(context: Context) {
     suspend fun savePerformanceVideo(mascotId: String, mp4: ByteArray): File = withContext(Dispatchers.IO) {
         require(mp4.size > 1024) { "Sora вернула пустое видео" }
         val destination = File(root, "$mascotId/performance.mp4")
+        LightingPreparation(appContext).trackHero(mascotId)
         destination.parentFile?.mkdirs()
         val staging = File(destination.parentFile, "performance.pending.mp4")
         staging.writeBytes(mp4)
         if (destination.exists()) destination.delete()
         require(staging.renameTo(destination)) { "Не удалось сохранить видео героя" }
+        prepareSavedLighting(mascotId, destination)
         destination
     }
 
@@ -433,6 +490,7 @@ class HeroLocalStore(context: Context) {
                 )
             }
             val destination = File(root, "$mascotId/base.png")
+            LightingPreparation(appContext).trackHero(mascotId)
             destination.parentFile?.mkdirs()
             val staging = File(destination.parentFile, "base.pending.png")
             staging.outputStream().use { output ->
@@ -442,6 +500,7 @@ class HeroLocalStore(context: Context) {
             }
             if (destination.exists()) destination.delete()
             require(staging.renameTo(destination)) { "Не удалось сохранить героя" }
+            prepareSavedLighting(mascotId, destination)
             destination
         } finally {
             bitmap.recycle()
@@ -1000,7 +1059,9 @@ class HeroLocalStore(context: Context) {
             dest.parentFile?.mkdirs()
             val bytes = runCatching { api.fetchBytes(remote).bytes() }.getOrNull() ?: continue
             if (bytes.isEmpty()) continue
+            if (dest.name == "base.png" || dest.extension == "mp4") LightingPreparation(appContext).trackHero(mascotId)
             dest.writeBytes(bytes)
+            if (dest.name == "base.png" || dest.extension == "mp4") prepareSavedLighting(mascotId, dest)
         }
         manifest.spritePack?.let { unpackSpriteAtlas(mascotId, it) }
         manifest.puppetPack?.let { pack ->

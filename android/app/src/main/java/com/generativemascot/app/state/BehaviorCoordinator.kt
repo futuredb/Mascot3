@@ -188,7 +188,7 @@ class BehaviorCoordinator(private val app: MascotApp) {
 
     private fun clipDurations(hero: String?, available: Set<String>): Map<String, Long> {
         if (hero == null) return emptyMap()
-        return listOf("greeting", "signature_move").filter { it in available }.associateWith { action ->
+        return listOf("greeting", "signature_move", "frightened", "curious", "joyful").filter { it in available }.associateWith { action ->
             val file = app.heroStore.actionVideoFile(hero, action) ?: return@associateWith 6000L
             val key = "$hero:$action"
             val cached = durationCache[key]

@@ -298,6 +298,19 @@ private val subjects = listOf(
     ),
 )
 
+// The type selector has no species picker. Choose one coherent, recognisable
+// species here and persist it with the rest of the character contract.
+private val animalSubjects = listOf(
+    SubjectTemplate("a small domestic cat", "one cat head, one torso, two pointed ears, four paws and one naturally attached tail", "torso, neck, ears, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small domestic dog", "one dog head, one torso, two ears, four paws and one naturally attached tail", "torso, neck, ears, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small red fox", "one fox head, one torso, two pointed ears, four paws and one bushy attached tail", "torso, neck, ears, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small rabbit", "one rabbit head, one torso, two long ears, four paws and one small attached tail", "torso, neck, ears, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small panda", "one panda head, one torso, two rounded ears, four paws and one small attached tail", "torso, neck, ears and four legs", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small river otter", "one otter head, one torso, two small ears, four paws and one long attached tail", "torso, neck, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small red panda", "one red-panda head, one torso, two rounded ears, four paws and one bushy attached tail", "torso, neck, ears, four legs and tail", "the face, muzzle and chest", "animal"),
+    SubjectTemplate("a small hedgehog", "one hedgehog head, one torso, four paws and a continuous coat of soft attached spines", "torso, head and four legs", "the face, muzzle and chest", "animal"),
+)
+
 private val behaviors = listOf(
     BehaviorTemplate(
         "It wants to appear self-sufficient but quietly checks whether its effort was noticed.",
@@ -446,8 +459,12 @@ private fun stableIndex(seed: Int, namespace: String, size: Int): Int {
 private fun <T> choose(seed: Int, namespace: String, values: List<T>): T =
     values[stableIndex(seed, namespace, values.size)]
 
-internal fun mobileCharacterContract(seed: Int): MobileCharacterContract {
-    val subject = choose(seed, "subject", subjects)
+internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice? = null): MobileCharacterContract {
+    val subject = when (choice?.type) {
+        "animal" -> choose(seed, "animal-species", animalSubjects)
+        "creature" -> choose(seed, "creature-species", subjects.filter { it.archetype == "creature" })
+        else -> choose(seed, "subject", subjects)
+    }
     val behavior = choose(seed, "behavior", behaviors)
     val body = BodyProfile(
         archetype = subject.archetype,
@@ -475,7 +492,7 @@ internal fun mobileCharacterContract(seed: Int): MobileCharacterContract {
     val fingerprint = MessageDigest.getInstance("SHA-256")
         .digest(selected.joinToString("|").toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
-    return MobileCharacterContract(
+    val base = MobileCharacterContract(
         seed = seed,
         fingerprint = fingerprint,
         body = body,
@@ -495,6 +512,18 @@ internal fun mobileCharacterContract(seed: Int): MobileCharacterContract {
         faceSystem = selected[6],
         plasticity = selected[7],
     )
+    if (choice == null) return base
+    val style = requireNotNull(characterPersonalityById(choice.style))
+    val chosenBody = when (choice.type) {
+        "person" -> BodyProfile("person", "an original stylized human character", "one human head, torso, two arms, two hands, two legs and two feet", "torso, arms and legs", "the face and chest", base.body.scale)
+        else -> base.body
+    }
+    val choiceFingerprint = MessageDigest.getInstance("SHA-256")
+        .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}".toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+    return base.copy(body = chosenBody, palette = style.palette, fingerprint = choiceFingerprint,
+        materialAndTechnique = if (choice.type == "person") "stylized three-dimensional animated-film character, dimensional sculpted forms, detailed but natural human face, soft realistic materials and lighting; not pixel art or flat illustration" else base.materialAndTechnique,
+        behavior = base.behavior.copy(motivation = "Express a ${style.name} personality: ${style.tone}", worldview = style.tone))
 }
 
 /**
@@ -507,13 +536,14 @@ internal fun selectDiverseCreativeSeed(
     baseSeed: Int,
     existing: List<MobileCharacterContract>,
     candidates: Int = 192,
+    choice: CharacterCreationChoice? = null,
 ): Int {
     if (existing.isEmpty()) return baseSeed
     val recent = existing.takeLast(80)
     val fingerprints = existing.mapTo(mutableSetOf()) { it.fingerprint }
     return (0 until candidates)
         .map { index -> baseSeed + index * 104_729 }
-        .map(::mobileCharacterContract)
+        .map { mobileCharacterContract(it, choice) }
         .filterNot { it.fingerprint in fingerprints }
         .minWithOrNull(
             compareBy<MobileCharacterContract> { candidate ->
@@ -539,8 +569,8 @@ internal fun animationContract(
     action: String,
     seed: Int,
     durationSeconds: Int = videoDurationSeconds(action),
+    character: MobileCharacterContract = mobileCharacterContract(seed),
 ): MobileAnimationContract {
-    val character = mobileCharacterContract(seed)
     val normalized = HeroLocalStore.normalizeVideoAction(action)
     val direction = when (normalized) {
         "joyful" -> MobileAnimationContract(
@@ -699,8 +729,30 @@ private fun performanceFreedom(character: MobileCharacterContract): List<String>
 private fun exactClosure(): String =
     "The final frame must restore the supplied first frame's pose, expression, breathing phase, orientation, scale, coordinates, silhouette and appendage placement without a cut or crossfade."
 
-internal fun buildCanonicalCharacterPrompt(seed: Int): String {
-    val character = mobileCharacterContract(seed)
+internal val relightableImageContract = """
+    RELIGHTABLE SURFACE
+    Use broad, neutral, soft diffuse studio illumination with gentle form shading and readable surface relief.
+    Preserve the designed material and texture, but keep its specular response restrained and broad.
+    No clipped highlights, sharp glossy hotspots, mirror reflections, hard directional shadows, dramatic rim
+    light, bloom or painted glow. Keep detail readable in light and dark areas. Do not flatten the form.
+""".trimIndent()
+
+internal val relightableAnimationContract = """
+    STABLE LIGHTING
+    Preserve the source's soft neutral diffuse illumination and material appearance throughout the clip.
+    Lock light direction, intensity, exposure, white balance and surface roughness across every frame,
+    including the loop seam. Shading may change naturally with the pose, never pulse or sparkle.
+    No moving lights, glossy hotspots, clipped highlights, rim-light flashes, bloom or animated glow.
+""".trimIndent()
+
+internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationChoice? = null,
+    character: MobileCharacterContract = mobileCharacterContract(seed, choice)): String {
+    val categoryDirection = when (choice?.type ?: character.body.archetype) {
+        "person" -> "Make an original stylized 3D human, with recognisably human anatomy and face; do not add animal ears, tail, muzzle or creature anatomy."
+        "animal" -> "The subject is the single recognisable real animal species named above, with its species-specific anatomy; do not turn it into a human, hybrid or imaginary creature."
+        "creature" -> "The subject is the original imaginary creature named above; retain its exact body plan and attached features rather than converting it into a human or a conventional pet."
+        else -> "Preserve the subject and its complete documented body plan."
+    }
     return """
         Create one original premium virtual-pet mascot for a mobile tamagotchi app.
 
@@ -714,12 +766,15 @@ internal fun buildCanonicalCharacterPrompt(seed: Int): String {
 
         CHARACTER-DESIGN CONTRACT
         Body profile: ${character.body.visibleParts}. The front is defined by ${character.body.front}.
+        Type-specific direction: $categoryDirection
         Primary silhouette cue: ${character.visualSignature.primarySilhouetteCue}.
         Secondary readable detail: ${character.visualSignature.secondaryReadableDetail}.
         Neutral body language: ${character.visualSignature.bodyLanguage}.
         Palette: ${character.palette}. Material and technique: ${character.materialAndTechnique}.
         Face system: ${character.faceSystem}. Animation plasticity: ${character.plasticity}.
         Treat these decisions as one coherent identity, not a list of optional ingredients.
+
+        $relightableImageContract
 
         CANONICAL ANCHOR
         Render exactly one complete original character in a calm neutral-positive home pose, centered in a direct
@@ -743,9 +798,9 @@ internal fun buildCharacterAnimationPrompt(
     seed: Int = 0,
     durationSeconds: Int = videoDurationSeconds(action),
     matteHex: String = "#00FF00",
+    character: MobileCharacterContract = mobileCharacterContract(seed),
 ): String {
-    val character = mobileCharacterContract(seed)
-    val direction = animationContract(action, seed, durationSeconds)
+    val direction = animationContract(action, seed, durationSeconds, character)
     val beats = direction.beats.mapIndexed { index, beat -> "${index + 1}. $beat" }.joinToString("\n")
     val protected = direction.protectedInvariants.joinToString(" ")
     val freedom = direction.performanceFreedom.joinToString(" ")
@@ -776,11 +831,17 @@ internal fun buildCharacterAnimationPrompt(
         Tempo: ${direction.tempo}. Gaze: ${direction.gaze}. Secondary motion: ${direction.secondaryMotion}.
         $phaseTiming
 
+        CHARACTER DEMEANOR
+        ${character.behavior.motivation} ${character.behavior.worldview}
+        Reflect the established personality subtly through expression and body language; do not add speech or text.
+
         PROTECTED INVARIANTS
         $protected
 
         ALLOWED PERFORMANCE FREEDOM
         $freedom
+
+        $relightableAnimationContract
 
         LOOP CLOSURE
         ${direction.closure}

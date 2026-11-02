@@ -17,6 +17,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
@@ -44,10 +46,36 @@ import com.generativemascot.app.data.resolveMediaUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+internal val MascotSmallActionSize = 54.dp
+
+@Composable
+internal fun MascotSmallCircleAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    background: Color,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    borderColor: Color = Color.Transparent,
+    enabled: Boolean = true,
+) {
+    Box(
+        modifier.size(MascotSmallActionSize).clip(CircleShape).background(background)
+            .border(2.dp, borderColor, CircleShape)
+            .mascotClickable(enabled = enabled, onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(27.dp))
+    }
+}
+
 internal val FigmaCanvas = Color(0xFFEAEBEC)
 internal val FigmaInk = Color(0xFF222222)
 internal val RubikOne = FontFamily(Font(R.font.rubik_one))
 internal val RubikBubbles = FontFamily(Font(R.font.rubik_bubbles))
+internal val SbSansTextRegular = FontFamily(Font(R.font.sb_sans_text_regular))
+internal val SbSansTextMedium = FontFamily(Font(R.font.sb_sans_text_medium, FontWeight.Medium))
+internal val SbSansDisplayExtendedSemibold = FontFamily(Font(R.font.sb_sans_display_extended_semibold, FontWeight.SemiBold))
 internal val SbSansDisplayMedium = FontFamily(
     Font(R.font.sb_sans_display_medium, FontWeight.Medium),
 )
@@ -64,6 +92,10 @@ internal fun MascotSystemBars(top: Color, bottom: Color = top) {
     val activity = LocalContext.current.hostActivity()
     SideEffect {
         activity?.window?.let { window ->
+            @Suppress("DEPRECATION")
+            window.statusBarColor = top.toArgb()
+            @Suppress("DEPRECATION")
+            window.navigationBarColor = bottom.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = top.luminance() > .45f
                 isAppearanceLightNavigationBars = bottom.luminance() > .45f

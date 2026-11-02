@@ -1,0 +1,66 @@
+package com.generativemascot.app.ui
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.res.ResourcesCompat
+import com.generativemascot.app.R
+
+internal val MascotChatIdentitySize = 136.dp
+internal val MascotChatPortraitSize = 110.dp
+internal val MascotChatIdentityTop = 29.dp
+
+/** The same borderless portrait and Figma typeface in chat and interaction settings. */
+@Composable
+internal fun MascotChatIdentity(name: String, modifier: Modifier = Modifier, circleBackground: Color? = null,
+    onClick: (() -> Unit)? = null,
+    content: @Composable BoxScope.() -> Unit) {
+    val context = LocalContext.current
+    val typeface = remember { ResourcesCompat.getFont(context, R.font.sb_sans_display_extended_semibold) }
+    Box(modifier) {
+        val portrait = if (circleBackground != null) Modifier.fillMaxSize().clip(CircleShape)
+            .background(circleBackground).border(1.dp, Color.White, CircleShape)
+        else Modifier.fillMaxSize().clipToBounds()
+        Box(portrait, contentAlignment = Alignment.Center) {
+            Box(Modifier.size(MascotChatPortraitSize), contentAlignment = Alignment.Center, content = content)
+        }
+        if (onClick != null) Box(Modifier.matchParentSize().clickable(onClickLabel = "Настроить общение", onClick = onClick))
+        Canvas(Modifier.fillMaxSize().semantics { contentDescription = name }) {
+            // Keep the text away from the edge while retaining room for the portrait.
+            val radius = size.minDimension * .32f
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val arc = android.graphics.Path().apply {
+                addArc(cx - radius, cy - radius, cx + radius, cy + radius, -145f, 120f)
+            }
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.BLACK
+                this.typeface = typeface
+                textSize = 14.4.sp.toPx()
+            }
+            val available = android.graphics.PathMeasure(arc, false).length
+            val fittedName = android.text.TextUtils.ellipsize(name, android.text.TextPaint(paint),
+                available, android.text.TextUtils.TruncateAt.END).toString()
+            drawContext.canvas.nativeCanvas.drawTextOnPath(fittedName, arc, 0f, 0f, paint)
+        }
+    }
+}

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mascots · Герой рядом</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f5f9;color:#282432;font:16px/1.5 system-ui,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:48px 32px;display:grid;grid-template-columns:1fr 400px;gap:64px;align-items:center;min-height:100vh}
+.eyebrow{font-size:12px;letter-spacing:.14em;color:#81758d}h1{font-size:52px;line-height:1.08;font-weight:600;letter-spacing:-2px;margin:16px 0 24px}
+p{color:#766c82;max-width:420px}.tags{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0}
+button{cursor:pointer;background:#fff;border:1px solid #e3dfeb;color:#554b67;border-radius:14px;padding:12px 15px;font:inherit;transition:background 150ms}
+button:active{background:#ede8fa}button[aria-pressed=true]{background:#e9e2fc;color:#5543a6;border-color:#cdbff0}
+button:focus-visible{outline:3px solid #a696dd;outline-offset:3px}.run{background:#6255d9;color:white;border:0;font-size:14px}
+.run:disabled{opacity:.6;cursor:wait}.status{font-size:13px;min-height:40px}.note{font-size:12px;color:#968b9f;margin-top:28px}
+.phone{position:relative;width:390px;max-width:100%;aspect-ratio:390/844;background:#e7dfef;border:7px solid #29232e;border-radius:44px;overflow:hidden;box-shadow:0 22px 60px #42324d15;display:flex;align-items:center;justify-content:center}
+.hit{position:absolute;background:transparent;border:0;border-radius:20px;padding:0}
+#react:disabled{cursor:default}#react:focus-visible{outline:2px solid #6255d9}
+.phone img,.phone canvas{width:100%;display:block}.phone.landscape{width:100%;aspect-ratio:844/390;border-radius:24px}
+[hidden]{display:none!important}
+select{font:inherit;border:1px solid #e3dfeb;border-radius:10px;padding:9px;background:white;color:#554b67;max-width:100%}
+.rule-controls{display:grid;gap:10px;margin:18px 0}.rule-controls label{font-size:13px;display:grid;gap:4px}
+.phone:not(.rules-hidden) #app-hidden{display:none}
+.phone.rules-hidden #animated,.phone.rules-hidden #render,.phone.rules-hidden .hit{display:none!important}
+details img{max-width:320px;width:100%;border-radius:16px}
+@media(max-width:800px){main{grid-template-columns:1fr;gap:28px;padding:28px 22px}h1{font-size:38px}.phone{margin:auto;max-width:350px}}
+</style>
+<main><section><div class="eyebrow">MASCOTS</div><h1>Герой рядом</h1>
+<p>Нажмите на маскота — он ответит одной из своих анимаций, а потом вернётся к спокойному движению. Попробуйте прямо здесь.</p>
+<div class="tags" aria-label="Сцены"><button data-scene="akim" aria-pressed="true">Аким</button><button data-scene="mars" aria-pressed="false">Марс</button><button data-scene="una" aria-pressed="false">Уна слева</button><button data-scene="una-right" aria-pressed="false">Уна справа</button><button data-scene="right" aria-pressed="false">Справа</button><button data-scene="landscape" aria-pressed="false">Поворот</button></div>
+<div class="tags" aria-label="Размер героя"><button data-size="70" aria-pressed="false">70%</button><button data-size="100" aria-pressed="true">100%</button><button data-size="150" aria-pressed="false">150%</button></div>
+<p>Меняйте размер двумя пальцами. «−» скрывает диалог, оставляя героя и колокольчик.</p>
+<details><summary>Дополнительные проверки</summary>
+<div class="rule-controls">
+<label>Где показывать героя<select id="app-mode"><option value="EVERYWHERE">Везде</option><option value="HIDE_SELECTED">Скрывать в выбранных</option><option value="ONLY_SELECTED">Только в выбранных</option></select></label>
+<label>Открытое приложение в примере<select id="active-app"><option value="chat">Мессенджер</option><option value="bank">Банк · выбран в списке</option><option value="home">Главный экран</option><option value="unknown">Доступ к данным не предоставлен</option></select></label>
+<span id="app-rule-status" class="note">В примере выбран банк. Решения берутся из проверок Android.</span>
+</div>
+<details><summary>Настройки на Android</summary><img src="/app-rules-settings.png" alt="Настоящий экран настройки автоматического показа на Android"></details>
+<details><summary>Виджет при включении оверлея</summary>
+<p>Персонаж остаётся в оверлее. Виджет становится прозрачным; нажатие на его место разворачивает оверлей.</p>
+<div style="display:flex;gap:12px"><figure style="margin:0;flex:1"><img src="/widget-overlay-off.png" alt="Виджет с героем, оверлей выключен"><figcaption>Оверлей выключен</figcaption></figure><figure style="margin:0;flex:1"><img src="/widget-overlay-on.png" alt="Прозрачный виджет, оверлей включён"><figcaption>Оверлей включён</figcaption></figure></div>
+</details>
+<details><summary>Окно разрешений при первом входе</summary><img src="/permissions.png" alt="Разрешения для героя: поверх приложений, доступ к использованию и уведомления"></details>
+<details><summary>Блок «Пример» на телефоне</summary>
+<img id="settings-example" src="/settings-akim-100.png" alt="Настоящий Android-блок Пример с привязкой подсказки к герою">
+</details>
+<p>Нажатие на виджет главного экрана разворачивает героя с подсказкой. Если доступов не хватает, появляется окно разрешений.</p>
+</details>
+<details open><summary>Новый экран настроек</summary><img src="/overlay-settings.png" alt="Упрощённые настройки Герой рядом"></details>
+<button class="run" id="check">Проверить MVP и собрать APK</button><p class="status" id="status" role="status">Готов к проверке</p>
+<button id="motion">Пауза анимации</button><p class="status" id="motion-status">Загружаем сохранённый ролик…</p>
+<p class="note">В превью — существующие ролики с удалённым фоном и карточка Android. На телефоне видео воспроизводится аппаратно; при блокировке проигрыватель освобождается. Проверки сервиса и сборка запускаются здесь. Плавность поверх приложений One UI проверяется отдельно на телефоне.</p>
+</section><div class="phone" id="phone"><img id="render" alt="Превью плавающего героя и подсказки" hidden><canvas id="animated" aria-label="Анимированный герой поверх демонстрационного экрана" hidden></canvas><button class="hit" id="react" aria-label="Погладить героя" title="Нажмите — герой отреагирует" hidden></button><button class="hit" id="collapse" aria-label="Свернуть диалог" hidden></button><button class="hit" id="expand" aria-label="Развернуть диалог" hidden></button><span id="empty">Превью появится после проверки</span></div></main>
+<script>
+let selected='akim';const render=document.querySelector('#render'),phone=document.querySelector('#phone'),statusText=document.querySelector('#status');
+const appHidden=document.createElement('img');appHidden.id='app-hidden';appHidden.alt='Герой скрыт по правилу приложения';phone.append(appHidden);
+async function applyAppRule(){
+ try{
+  const rules=await(await fetch('/app-rules.json')).json();
+  const visible=rules[document.querySelector('#app-mode').value][document.querySelector('#active-app').value];
+  appHidden.src='/'+sceneName()+'-empty.png';
+  phone.classList.toggle('rules-hidden',!visible);
+  document.querySelector('#app-rule-status').textContent=visible?'Герой виден в этом приложении':'Герой и подсказка скрыты';
+ }catch{}
+}
+document.querySelector('#app-mode').onchange=applyAppRule;document.querySelector('#active-app').onchange=applyAppRule;
+const animated=document.querySelector('#animated'),ctx=animated.getContext('2d'),motionStatus=document.querySelector('#motion-status');
+const video=document.createElement('video');video.muted=true;video.loop=true;video.playsInline=true;video.preload='auto';
+const frame=document.createElement('canvas'),fc=frame.getContext('2d',{willReadFrequently:true});
+let backdrop=null,layout=null,bounds=null,key=null,generation=0,frames=0,playing=true,callback;
+let activeAction='idle',reactionBag=[],availableReactions=[],lastReaction=null,loadingClip=false;
+let sizePercent=100,collapsed=false,layoutRequest=0;
+const actionNames={idle:'Спокойное движение',joyful:'Радость',greeting:'Приветствие',curious:'Любопытство',tender:'Нежность',dancing:'Танец'};
+const reactButton=document.querySelector('#react');
+const collapseButton=document.querySelector('#collapse'),expandButton=document.querySelector('#expand');
+function sceneName(){return selected+'-'+sizePercent}
+function heroName(){return selected==='una-right'?'una':['right','landscape'].includes(selected)?'akim':selected}
+function positionHit(button,rect){
+ Object.assign(button.style,{left:rect.x/animated.width*100+'%',top:rect.y/animated.height*100+'%',width:rect.width/animated.width*100+'%',height:rect.height/animated.height*100+'%'});
+}
+function placeButtons(){
+ positionHit(reactButton,layout);positionHit(collapseButton,layout.collapse);positionHit(expandButton,layout.compact);
+ reactButton.hidden=false;collapseButton.hidden=collapsed;expandButton.hidden=!collapsed;
+}
+function collapsedImage(){placeButtons();paint();}
+collapseButton.onclick=()=>{collapsed=true;collapsedImage()};
+expandButton.onclick=()=>{collapsed=false;placeButtons();paint()};
+function smooth(a,b,x){const t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t)}
+function matte(){
+ fc.drawImage(video,0,0,frame.width,frame.height);const pixels=fc.getImageData(0,0,frame.width,frame.height),p=pixels.data;
+ if(!key){const channels=[[],[],[]];for(const x of [.025,.075,.925,.975])for(const y of [.04,.18,.36,.64,.82,.96]){
+  const i=(Math.floor(y*frame.height)*frame.width+Math.floor(x*frame.width))*4;
+  channels.forEach((a,c)=>a.push(p[i+c]));
+ }key=channels.map(a=>a.sort((a,b)=>a-b)[a.length/2]);}
+ const green=key[1]>=90&&key[1]>=key[0]+45&&key[1]>=key[2]+35;
+ let l=frame.width,t=frame.height,r=-1,b=-1;
+ for(let i=0;i<p.length;i+=4){
+  const red=p[i]/255,g=p[i+1]/255,blue=p[i+2]/255;
+  const alpha=green?1-smooth(.07,.22,g-Math.max(red,blue)):smooth(.1,.42,Math.hypot(red-key[0]/255,g-key[1]/255,blue-key[2]/255));
+  p[i+3]=Math.round(255*alpha);
+  if(green)p[i+1]=Math.round(255*(g+(Math.min(g,Math.max(red,blue)+.045)-g)*(1-smooth(.70,.98,alpha))));
+  if(!bounds&&p[i+3]>12){const x=(i/4)%frame.width,y=Math.floor(i/4/frame.width);l=Math.min(l,x);r=Math.max(r,x);t=Math.min(t,y);b=Math.max(b,y)}
+ }
+ if(!bounds){const dx=Math.floor((r-l+1)*.12),dy=Math.floor((b-t+1)*.06);bounds={l:Math.max(0,l-dx),t:Math.max(0,t-dy),r:Math.min(frame.width,r+1+dx),b:Math.min(frame.height,b+1+dy)};}
+ fc.putImageData(pixels,0,0);
+}
+let cardForeground=null,bellImage=null;
+function paint(){
+ if(!backdrop||!layout||video.readyState<2)return;
+ matte();ctx.clearRect(0,0,animated.width,animated.height);ctx.drawImage(backdrop,0,0);
+ const slot=layout.frame,fit=Math.min(slot.width/frame.width,slot.height/frame.height);
+ ctx.drawImage(frame,slot.x+(slot.width-frame.width*fit)/2,slot.y+(slot.height-frame.height*fit)/2,frame.width*fit,frame.height*fit);
+ if(!collapsed&&cardForeground)ctx.drawImage(cardForeground,0,0);
+ if(collapsed&&bellImage){const b=layout.compact;ctx.drawImage(bellImage,b.x,b.y,b.width,b.height,b.x,b.y,b.width,b.height);}
+ animated.hidden=false;render.hidden=true;document.querySelector('#empty').hidden=true;
+ frames++;motionStatus.textContent=(playing?actionNames[activeAction]:'Пауза')+' · '+video.currentTime.toFixed(1)+' с · '+frames+' кадров';
+}
+function tick(){paint();if(playing&&!video.ended)callback=video.requestVideoFrameCallback(tick)}
+function playClip(action,token=generation){
+ video.pause();if(callback)video.cancelVideoFrameCallback(callback);key=null;activeAction=action;loadingClip=true;reactButton.disabled=true;
+ video.onloadeddata=()=>{
+  if(token!==generation)return;
+  const scale=Math.min(1,320/Math.max(video.videoWidth,video.videoHeight));
+  frame.width=Math.max(1,Math.floor(video.videoWidth*scale));frame.height=Math.max(1,Math.floor(video.videoHeight*scale));
+  loadingClip=false;reactButton.disabled=activeAction!=='idle'||!availableReactions.length;paint();
+  if(playing)video.play().then(()=>{if(token===generation)callback=video.requestVideoFrameCallback(tick)}).catch(()=>{
+   motionStatus.textContent='Нажмите «Продолжить анимацию»';playing=false;document.querySelector('#motion').textContent='Продолжить анимацию';
+  });
+ };
+ video.onended=()=>{if(token===generation&&activeAction!=='idle')playClip('idle',token)};
+ video.onerror=()=>{if(token!==generation)return;if(activeAction!=='idle'){
+  availableReactions=availableReactions.filter(x=>x!==activeAction);reactionBag=reactionBag.filter(x=>x!==activeAction);playClip('idle',token);
+ }else{loadingClip=false;motionStatus.textContent='Ролик недоступен'}};
+ video.loop=action==='idle';
+ video.src='/'+heroName()+'/'+action+'.mp4';
+}
+reactButton.onclick=()=>{
+ if(loadingClip||!playing||activeAction!=='idle'||!availableReactions.length)return;
+ if(!reactionBag.length){
+  reactionBag=[...availableReactions];
+  for(let i=reactionBag.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[reactionBag[i],reactionBag[j]]=[reactionBag[j],reactionBag[i]]}
+  if(reactionBag.length>1&&reactionBag[0]===lastReaction)[reactionBag[0],reactionBag[1]]=[reactionBag[1],reactionBag[0]];
+ }
+ lastReaction=reactionBag.shift();playClip(lastReaction);
+};
+async function show(){
+applyAppRule();
+ document.querySelector('#settings-example').src='/settings-'+heroName()+'-'+sizePercent+'.png?t='+Date.now();
+ const token=++generation;video.pause();if(callback)video.cancelVideoFrameCallback(callback);
+ backdrop=null;layout=null;bounds=null;key=null;frames=0;animated.hidden=true;reactButton.hidden=true;
+ activeAction='idle';reactionBag=[];lastReaction=null;
+ collapseButton.hidden=true;expandButton.hidden=true;
+ render.src='/'+sceneName()+'.png?t='+Date.now();phone.classList.toggle('landscape',selected==='landscape');
+ const bg=new Image();bg.src='/'+sceneName()+'-empty.png?t='+Date.now();
+ const fg=new Image();fg.src='/'+sceneName()+'-card.png?t='+Date.now();
+ await fg.decode();cardForeground=fg;
+ const bell=new Image();bell.src='/'+sceneName()+'-bell.png?t='+Date.now();await bell.decode();bellImage=bell;
+ try{const [_,geometry,clips]=await Promise.all([bg.decode(),fetch('/'+sceneName()+'-layout.json').then(r=>{if(!r.ok)throw Error();return r.json()}),
+  fetch('/clips/'+heroName()).then(r=>r.json())]);
+  if(token!==generation)return;backdrop=bg;layout=geometry;animated.width=bg.width;animated.height=bg.height;
+  availableReactions=clips.reactions;placeButtons();
+  playClip('idle',token);
+ }catch{motionStatus.textContent='Сначала запустите проверку MVP';}
+}
+render.onload=()=>{render.hidden=!animated.hidden;document.querySelector('#empty').hidden=true};render.onerror=()=>{render.hidden=true;document.querySelector('#empty').hidden=false};
+document.querySelectorAll('[data-scene]').forEach(b=>b.onclick=()=>{selected=b.dataset.scene;document.querySelectorAll('[data-scene]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));show()});
+document.querySelectorAll('[data-size]').forEach(b=>b.onclick=async()=>{
+ sizePercent=Number(b.dataset.size);document.querySelectorAll('[data-size]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+ document.querySelector('#settings-example').src='/settings-'+heroName()+'-'+sizePercent+'.png?t='+Date.now();
+ const request=++layoutRequest,token=generation,bg=new Image();bg.src='/'+sceneName()+'-empty.png';
+ const fg=new Image();fg.src='/'+sceneName()+'-card.png';
+ await fg.decode();cardForeground=fg;
+ const bell=new Image();bell.src='/'+sceneName()+'-bell.png?t='+Date.now();await bell.decode();bellImage=bell;
+ try{const [_,geometry]=await Promise.all([bg.decode(),fetch('/'+sceneName()+'-layout.json').then(r=>{if(!r.ok)throw Error();return r.json()})]);
+  if(request!==layoutRequest||token!==generation)return;
+  backdrop=bg;layout=geometry;placeButtons();if(collapsed)collapsedImage();else paint();
+ }catch{motionStatus.textContent='Сначала запустите проверку MVP'}
+});
+document.querySelector('#motion').onclick=async()=>{playing=!playing;document.querySelector('#motion').textContent=playing?'Пауза анимации':'Продолжить анимацию';if(playing){await video.play();callback=video.requestVideoFrameCallback(tick)}else{video.pause();if(callback)video.cancelVideoFrameCallback(callback);paint()}};
+document.addEventListener('visibilitychange',()=>{if(document.hidden){video.pause();if(callback)video.cancelVideoFrameCallback(callback)}else if(playing&&backdrop){video.play();callback=video.requestVideoFrameCallback(tick)}});
+let previous='';async function poll(){const s=await(await fetch('/state')).json();document.querySelector('#check').disabled=s.status==='running';statusText.textContent=s.message||'Готов к проверке';if(s.status==='passed')statusText.textContent+=' · '+s.tests+' проверок';if(s.status!==previous&&s.status==='passed')show();previous=s.status;}
+document.querySelector('#check').onclick=async()=>{await fetch('/check',{method:'POST'});await poll()};setInterval(poll,2500);poll();show();
+</script></html>

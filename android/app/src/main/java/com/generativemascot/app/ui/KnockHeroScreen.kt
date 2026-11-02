@@ -36,6 +36,8 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.SentimentSatisfiedAlt
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +59,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
@@ -207,11 +210,14 @@ fun KnockHeroScreen(
     onSelectHero: (String) -> Unit = {},
     onNewHero: () -> Unit = {},
     onAnimations: () -> Unit = {},
+    onChat: () -> Unit = {},
     onGenerate: () -> Unit = {},
     onPoll: () -> Unit,
     onRefresh: () -> Unit = {},
     onRefreshHeroes: () -> Unit = {},
     onGenerationSettings: () -> Unit = {},
+    onOverlaySettings: () -> Unit = {},
+    screenActive: Boolean = true,
     acceptEnabled: Boolean,
     onStateGesture: ((com.generativemascot.app.state.StateEvent) -> Unit)? = null,
     onAnimationVisible: ((String) -> Unit)? = null,
@@ -226,7 +232,9 @@ fun KnockHeroScreen(
             context.getSystemService(Vibrator::class.java)
         }
     }
-    var now by remember { mutableLongStateOf(0L) }
+    var now by remember { mutableLongStateOf(SystemClock.uptimeMillis()) }
+    val foreground = rememberAppResumed()
+    val visible = screenActive && foreground
     var tapCount by remember { mutableIntStateOf(0) }
     var revealAt by remember { mutableLongStateOf(if (generating) 1L else 0L) }
     var blinkAt by remember { mutableLongStateOf(-1L) }
@@ -253,7 +261,6 @@ fun KnockHeroScreen(
     var navigationReady by remember(mascotId) { mutableStateOf(false) }
     var heroPickerExpanded by remember { mutableStateOf(false) }
     var pickerSelectedId by remember { mutableStateOf<String?>(null) }
-    var confirmNewHero by remember { mutableStateOf(false) }
     val heroStrip = rememberLazyListState()
     val dragX by animateFloatAsState(rawDragX, spring(dampingRatio = .68f, stiffness = 360f), label = "puppet-x")
     val dragY by animateFloatAsState(rawDragY, spring(dampingRatio = .68f, stiffness = 360f), label = "puppet-y")
@@ -282,6 +289,7 @@ fun KnockHeroScreen(
     }
     val showWaiting = !accepted && generating && visualPreviewUrl.isNullOrBlank()
     val heroReady = visualHeroLoading || (!visualPreviewUrl.isNullOrBlank() && !showWaiting)
+    var hasPreparedPhysics by remember(visualMascotId) { mutableStateOf(false) }
     val displayName = remember(visualMascotId, heroName, pickerHero?.name) {
         heroHeadingName(
             visualMascotId?.let { HeroLocalStore.current?.mascotName(it) },
@@ -319,6 +327,14 @@ fun KnockHeroScreen(
         quoteIndex = 0
     }
 
+    val phoneInteraction = rememberHeroPhoneInteraction(
+        visualMascotId, enabled = visible && accepted && heroReady && !visualHeroLoading && !heroPickerExpanded && !generating,
+    ) {
+        postponeAmbientAction()
+        if (onStateGesture != null) onStateGesture(com.generativemascot.app.state.StateEvent.SHAKE)
+        else listOf("frightened", "curious", "joyful").firstOrNull { it in animationVideoUrls }?.let(::playMainAction)
+    }
+
     LaunchedEffect(welcomeRequestId, mascotId, accepted, heroReady, heroPickerExpanded, visualHeroLoading) {
         if (onStateGesture != null) return@LaunchedEffect
         val request = welcomeRequestId ?: return@LaunchedEffect
@@ -352,8 +368,8 @@ fun KnockHeroScreen(
             onPoll()
         }
     }
-    LaunchedEffect(accepted) {
-        if (!accepted) return@LaunchedEffect
+    LaunchedEffect(accepted, visible) {
+        if (!accepted || !visible) return@LaunchedEffect
         onRefreshHeroes()
         onRefresh()
         while (true) {
@@ -406,8 +422,8 @@ fun KnockHeroScreen(
             quoteIndex = 0
         }
     }
-    LaunchedEffect(mascotId, accepted, quoteAction) {
-        if (!accepted) return@LaunchedEffect
+    LaunchedEffect(mascotId, accepted, quoteAction, visible) {
+        if (!accepted || !visible) return@LaunchedEffect
         while (true) {
             delay(if (quoteAction == "idle" || quoteAction == "sleep_loop" || quoteAction == "sleeping") 9_000 else 8_000)
             if (onStateGesture != null) { quoteIndex += 1; continue }
@@ -419,9 +435,9 @@ fun KnockHeroScreen(
             quoteIndex += 1
         }
     }
-    LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool, visualHeroLoading) {
+    LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool, visualHeroLoading, visible) {
         if (onStateGesture != null) return@LaunchedEffect
-        if (!accepted || visualHeroLoading || heroPickerExpanded || mainActionPool.isEmpty()) return@LaunchedEffect
+        if (!visible || !accepted || visualHeroLoading || heroPickerExpanded || mainActionPool.isEmpty()) return@LaunchedEffect
         while (true) {
             delay(500)
             val elapsedNow = SystemClock.elapsedRealtime()
@@ -434,9 +450,11 @@ fun KnockHeroScreen(
     LaunchedEffect(heroPickerExpanded) {
         if (accepted) postponeAmbientAction()
     }
-    LaunchedEffect(Unit) {
-        while (true) {
+    LaunchedEffect(visible, showWaiting, ripples.size) {
+        if (!visible) return@LaunchedEffect
+        while (showWaiting || ripples.isNotEmpty()) {
             now = withInfiniteAnimationFrameMillis { it }
+            ripples.removeAll { now - it.startedAt > RippleMs }
         }
     }
 
@@ -447,7 +465,7 @@ fun KnockHeroScreen(
     }
 
     fun knock(x: Float, y: Float) {
-        val t = now
+        val t = SystemClock.uptimeMillis()
         if (showWaiting) {
             ripples += KnockRipple(x, y, t, false)
             blinkAt = t + 80
@@ -484,6 +502,11 @@ fun KnockHeroScreen(
         val heroTop = 104.dp
         val heroHeight = (maxHeight - heroTop - 240.dp).coerceAtLeast(1.dp)
         val density = LocalDensity.current
+        if (accepted && heroReady && !visualHeroLoading) {
+            HeroSpaceGrid(palette, { phoneInteraction.pose },
+                Modifier.align(Alignment.TopCenter).padding(top = heroTop)
+                    .size(width = maxWidth, height = heroHeight + 24.dp))
+        }
         if (!accepted) {
             Image(
                 painter = painterResource(if (showWaiting) R.drawable.figma_waiting_bg else R.drawable.figma_mascot_bg),
@@ -526,31 +549,17 @@ fun KnockHeroScreen(
                     .padding(top = if (heroReady) 78.dp else 180.dp, start = 24.dp, end = 24.dp),
             )
         } else {
-            Text(
-                displayName.uppercase(),
-                fontSize = 48.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontFamily = RubikBubbles,
-                textAlign = TextAlign.Center,
-                style = TextStyle(
-                    brush = Brush.verticalGradient(
-                        listOf(Color.White.copy(alpha = .50f), Color.Transparent),
-                    ),
-                ),
-                modifier = Modifier.align(Alignment.TopCenter)
-                    .padding(top = 24.dp, start = 72.dp, end = 72.dp)
-                    .fillMaxWidth()
-                    .mascotClickable(
-                        enabled = navigationReady,
-                        onClickLabel = "Эмоции и имя героя",
-                        onClick = onAnimations,
-                    ),
-            )
+            MascotTopBar(displayName, modifier = Modifier.align(Alignment.TopCenter),
+                lightTitle = true, onTitleClick = if (navigationReady && !heroPickerExpanded && visualMascotId == mascotId) onAnimations else null,
+                leading = { AnimatedVisibility(visible = !heroPickerExpanded && visualMascotId == mascotId, enter = fadeIn(), exit = fadeOut()) {
+                    MascotTopAction(Icons.Rounded.ChatBubbleOutline, "Открыть чат", onChat, navigationReady && !heroLoading && !heroPickerExpanded && visualMascotId == mascotId, light = true)
+                } },
+                trailing = { AnimatedVisibility(visible = !heroPickerExpanded && visualMascotId == mascotId, enter = fadeIn(), exit = fadeOut()) {
+                    MascotTopAction(Icons.Rounded.PictureInPictureAlt, "Герой поверх приложений", onOverlaySettings, navigationReady && !heroLoading && !heroPickerExpanded && visualMascotId == mascotId, light = true)
+                } })
         }
         Canvas(Modifier.fillMaxSize()) {
             val t = now
-            ripples.removeAll { t - it.startedAt > RippleMs }
             if (!showWaiting && !accepted) {
                 val marksY = size.height * if (heroReady) 0.79f else 0.31f
                 val gap = 27.dp.toPx()
@@ -631,8 +640,18 @@ fun KnockHeroScreen(
                 .then(if (accepted) Modifier.padding(top = heroTop) else Modifier)
                 .size(width = contentWidth, height = if (accepted) heroHeight else maxHeight * .52f)
                 .graphicsLayer {
-                    scaleX = heroPressScale
-                    scaleY = heroPressScale
+                    val movement = phoneInteraction.pose.artwork(hasPreparedPhysics)
+                    scaleX = heroPressScale * movement.scaleX
+                    scaleY = heroPressScale * movement.scaleY
+                    // Prepared packs own all tilt in GL. Only shake feedback is
+                    // shared here, so the outer view cannot double the tilt.
+                    translationX = movement.translationX.dp.toPx()
+                    translationY = movement.translationY.dp.toPx()
+                    rotationY = movement.rotationY
+                    rotationX = movement.rotationX
+                    cameraDistance = size.width.coerceAtLeast(1f) * 2.5f
+                    rotationZ = movement.rotationZ
+                    transformOrigin = TransformOrigin(.5f, .8f)
                 }
                 .pointerInteropFilter { event ->
                     if (visualHeroLoading) return@pointerInteropFilter true
@@ -720,7 +739,7 @@ fun KnockHeroScreen(
                         // the transparent footage produces a second silhouette when
                         // the authored poses differ. Retain the fallback only for
                         // legacy single-video characters which have no anchor.
-                        if (visualVideoUrls.isEmpty()) {
+                        if (visualVideoUrls.isEmpty() && !hasPreparedPhysics) {
                             AsyncImage(
                                 model = resolveMediaUrl(visualPreviewUrl),
                                 contentDescription = null,
@@ -736,15 +755,21 @@ fun KnockHeroScreen(
                             interaction = interaction,
                             onAnimationVisible = onAnimationVisible,
                             onOneShotFinished = onOneShotFinished,
+                            phoneMotion = phoneInteraction.motion,
+                            lighting = phoneInteraction.lighting,
+                            onPhysicsActive = { hasPreparedPhysics = it },
+                            playbackEnabled = visible,
                             modifier = Modifier.fillMaxSize(),
                         ) { SoraMascotVideo(
                             videoUrl = visualAnimationVideoUrl,
+                            lighting = phoneInteraction.lighting,
                             videoUrls = visualVideoUrls,
                             onAnimationVisible = onAnimationVisible,
                             onOneShotFinished = onOneShotFinished,
                             neutralFrameUrl = visualNeutralFrameUrl,
                             action = stateKey ?: "idle",
                             interaction = interaction,
+                            playbackEnabled = visible,
                             modifier = Modifier.fillMaxSize(),
                         ) }
                     }
@@ -759,6 +784,7 @@ fun KnockHeroScreen(
                 interaction = interaction,
                 contentDescription = "Герой",
                 modifier = heroModifier,
+                playbackEnabled = visible,
             )
         }
         if (!accepted) {
@@ -978,24 +1004,15 @@ fun KnockHeroScreen(
                     )
                 }
                 AnimatedVisibility(visible = !heroPickerExpanded, enter = fadeIn(), exit = fadeOut()) {
-                    Box(
-                        Modifier.size(54.dp).clip(CircleShape)
-                            .background(Color.White.copy(alpha = .30f))
-                            .border(2.dp, Color.White.copy(alpha = .46f), CircleShape)
-                            .mascotClickable(
-                                enabled = navigationReady && !heroLoading,
-                                onClickLabel = "Создать нового героя",
-                                onClick = { confirmNewHero = true },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Rounded.Add,
-                            "Создать нового героя",
-                            tint = palette.top.copy(alpha = .82f),
-                            modifier = Modifier.size(27.dp),
-                        )
-                    }
+                    MascotSmallCircleAction(
+                        icon = Icons.Rounded.Add,
+                        label = "Создать нового героя",
+                        onClick = onNewHero,
+                        background = Color.White.copy(alpha = .30f),
+                        borderColor = Color.White.copy(alpha = .46f),
+                        tint = palette.top.copy(alpha = .82f),
+                        enabled = navigationReady && !heroLoading,
+                    )
                 }
             }
         }
@@ -1037,36 +1054,7 @@ fun KnockHeroScreen(
             },
         )
     }
-    if (confirmNewHero) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmNewHero = false },
-            title = { Text("Создать нового героя?") },
-            text = {
-                Text(
-                    "Источник: $generationSourceLabel.\n\nОткроется экран «Постучи». После трёх стуков начнётся платная генерация внешности. «Оставим» затем создаст одну анимацию-приветствие. Остальные анимации можно заказать отдельно.",
-                )
-            },
-            dismissButton = {
-                Row {
-                    androidx.compose.material3.TextButton(
-                        onClick = { confirmNewHero = false; onGenerationSettings() },
-                    ) {
-                        Text("Источник")
-                    }
-                    androidx.compose.material3.TextButton(onClick = { confirmNewHero = false }) {
-                        Text("Отмена")
-                    }
-                }
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = { confirmNewHero = false; onNewHero() },
-                ) {
-                    Text("Продолжить")
-                }
-            },
-        )
-    }
+
 }
 
 private fun blinkAmount(now: Long, blinkAt: Long, revealAt: Long): Float {

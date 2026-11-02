@@ -65,7 +65,7 @@ class PhysicsSolverTest {
         // gravity projected onto the display changes noticeably.
         repeat(240) { solver.advance(1.0/120,0f,0f,gravityX=.5f) }
         assertTrue(solver.angleX>.15f)
-        assertTrue(solver.bodyX>.03f)
+        assertTrue(solver.bodyX in .008f.. .011f)
         assertEquals(0f,solver.bodyY,1e-6f)
         solver.neutral=true
         repeat(600) { solver.advance(1.0/120,0f,0f,gravityX=.5f) }
@@ -75,11 +75,11 @@ class PhysicsSolverTest {
 
     @Test fun smallPhoneTiltIsVisibleButStationaryNoiseDoesNotMoveBody() {
         val solver=PhysicsSolver(pack().copy(maxBodyOffset=.035f,maxLeanDegrees=8f))
-        // Five degrees of screen-plane roll gives a clear lean without needing
-        // to approach Android's autorotation threshold.
-        repeat(240) { solver.advance(1.0/120,0f,0f,gravityX=kotlin.math.sin(Math.toRadians(5.0)).toFloat()) }
-        assertTrue(solver.bodyX>.025f)
-        assertTrue(solver.leanAngle>Math.toRadians(6.0))
+        // Five degrees must no longer throw the whole character to its limit.
+        repeat(240) { solver.advance(1.0/120,Math.toRadians(5.0).toFloat(),0f) }
+        assertTrue(solver.bodyX in .002f.. .004f)
+        assertTrue(solver.leanAngle in Math.toRadians(.25).toFloat()..Math.toRadians(.65).toFloat())
+        assertTrue(solver.angleX in Math.toRadians(2.5).toFloat()..Math.toRadians(4.0).toFloat())
         solver.reset()
         repeat(1200) { i ->
             val noise=if(i%2==0) .001f else -.001f
@@ -87,6 +87,32 @@ class PhysicsSolverTest {
         }
         assertEquals(0f,solver.bodyX,1e-6f);assertEquals(0f,solver.bodyY,1e-6f)
         assertEquals(0f,solver.leanAngle,1e-6f)
+    }
+
+    @Test fun bothRenderLayersFollowTiltPromptlyAndReturnToCenter() {
+        for(fps in listOf(30,60,120)) {
+            val solver=PhysicsSolver(pack().copy(maxBodyOffset=.035f))
+            val movement=PhoneInteractionMotion()
+            repeat(fps/5) { solver.advance(1.0/fps,.1f,0f);movement.advance(1f/fps,PhoneSample(tiltX=.1f)) }
+            val target=TiltResponse.angle(.1f)
+            assertTrue("Body reaches the gentler target in 200ms",solver.bodyX>target/Math.toRadians(12.0)*.035f*.3f*.85f)
+            assertTrue("Relief follows promptly without an input lag",solver.angleX>target*.90f)
+            assertTrue("Floor and fallback use the same relaxed input",movement.pose.x>target/Math.toRadians(12.0)*.90f)
+            repeat(fps/3) { solver.advance(1.0/fps,0f,0f);movement.advance(1f/fps,PhoneSample()) }
+            assertEquals(0f,solver.bodyX,.0008f);assertEquals(0f,solver.angleX,.003f)
+            assertEquals(0f,movement.pose.x,.015f)
+        }
+    }
+
+    @Test fun relaxedTiltHasQuietCenterAndDoesNotSaturateAtSmallAngles() {
+        assertEquals(0f,TiltResponse.angle(Math.toRadians(1.0).toFloat()),0f)
+        var previous=0f
+        for(degrees in listOf(3.0,5.0,10.0,15.0,25.0,45.0)) {
+            val input=Math.toRadians(degrees).toFloat();val angle=TiltResponse.angle(input)
+            assertTrue(angle>previous);assertTrue(angle<Math.toRadians(12.0))
+            assertEquals(-angle,TiltResponse.angle(-input),1e-7f);previous=angle
+        }
+        assertEquals(0f,TiltResponse.angle(Float.NaN),0f)
     }
 
     @Test fun sameRecordedInputsAt30_60_120Fps() {

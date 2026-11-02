@@ -28,8 +28,10 @@ interface PhysicsRenderObserver {
 }
 
 /** GL objects are owned exclusively by the render thread, including teardown. */
-class PhysicsView(context: Context, private val installed: InstalledPhysics, private val observer: PhysicsRenderObserver? = null) : TextureView(context), TextureView.SurfaceTextureListener {
-    private val motion = PhoneMotion(context)
+class PhysicsView(context: Context, private val installed: InstalledPhysics, private val observer: PhysicsRenderObserver? = null,
+    sharedMotion: PhoneMotion? = null, private val sharedLighting: TiltLighting? = null) : TextureView(context), TextureView.SurfaceTextureListener {
+    private val motion = sharedMotion ?: PhoneMotion(context)
+    private val ownsMotion = sharedMotion == null
     private class SurfaceSession(val texture: SurfaceTexture) {
         val cancelled = AtomicBoolean(false)
         @Volatile var dispose: (() -> Unit)? = null
@@ -48,10 +50,10 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
     fun recalibrate() { motion.recalibrate() }
     init { isOpaque = false; surfaceTextureListener = this }
     fun resume() {
-        active = motion.start()
+        active = if (ownsMotion) motion.start() else motion.available
         if (!active) post { onFailure("Не удалось включить датчики движения") }
     }
-    fun pause() { active = false; motion.stop() }
+    fun pause() { active = false; if (ownsMotion) motion.stop() }
     override fun onDetachedFromWindow() { pause(); super.onDetachedFromWindow() }
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) { viewportWidth = width; viewportHeight = height }
     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
@@ -96,7 +98,8 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
             if (owner.cancelled.get()) { dispose(); return@post }
             try {
                 val solver = PhysicsSolver(installed.pack)
-                var angle = -1; var fit = -1; var breath = -1; var bodyOffset = -1; var lean = -1
+                val relief = ReliefSurface(installed.pack)
+                var angle = -1; var fit = -1; var breath = -1; var bodyOffset = -1; var lean = -1; var lightTilt = -1
                 fun initializeGraphics() {
                 display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
                 check(EGL14.eglInitialize(display, IntArray(2), 0, IntArray(2), 0))
@@ -109,8 +112,9 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
                 program = makeProgram(); GLES30.glUseProgram(program)
                 GLES30.glEnable(GLES30.GL_BLEND); GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
                 GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-                solver.states.sortedBy { it.layer.order }.forEach { state -> resources += GlLayer(state, File(installed.directory, installed.pack.assets.getValue(state.layer.texture).file)) }
+                solver.states.sortedBy { it.layer.order }.forEach { state -> resources += GlLayer(state, File(installed.directory, installed.pack.assets.getValue(state.layer.texture).file), relief.depths.getValue(state.layer.id), relief.normals.getValue(state.layer.id)) }
                 angle = GLES30.glGetUniformLocation(program, "angle")
+                lightTilt = GLES30.glGetUniformLocation(program, "lightTilt")
                 fit = GLES30.glGetUniformLocation(program, "fit")
                 val aspect = GLES30.glGetUniformLocation(program, "aspect")
                 breath = GLES30.glGetUniformLocation(program, "breath")
@@ -143,6 +147,8 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
                             val pixels = minOf(w.toFloat() / installed.pack.width, h.toFloat() / installed.pack.height) * installed.pack.width
                             GLES30.glViewport(0, 0, w, h); GLES30.glClearColor(0f, 0f, 0f, 0f); GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
                             GLES30.glUniform2f(angle, solver.angleX, solver.angleY)
+                            val lighting = sharedLighting?.tilt ?: LightTilt(solver.angleX, solver.angleY)
+                            GLES30.glUniform2f(lightTilt, lighting.x, lighting.y)
                             GLES30.glUniform2f(fit, 2 * pixels / w, 2 * pixels / h)
                             GLES30.glUniform1f(breath, solver.breathingOffset)
                             GLES30.glUniform2f(bodyOffset, solver.bodyX, solver.bodyY)
@@ -188,10 +194,10 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         return false // The render thread releases this texture after EGL teardown.
     }
 
-    private class GlLayer(val state: PhysicsSolver.LayerState, file: File) {
+    private class GlLayer(val state: PhysicsSolver.LayerState, file: File, private val relief: FloatArray, private val normals: FloatArray) {
         val texture: Int
         private val buffers = IntArray(2)
-        private val vertices: FloatBuffer = ByteBuffer.allocateDirect(state.x.size * 5 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private val vertices: FloatBuffer = ByteBuffer.allocateDirect(state.x.size * 8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         private val indices: ShortBuffer = ByteBuffer.allocateDirect(state.layer.triangles.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer().apply { state.layer.triangles.forEach { put(it.toShort()) }; position(0) }
         init {
             val ids = IntArray(1); GLES30.glGenTextures(1, ids, 0); texture = ids[0]
@@ -209,11 +215,16 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         }
         fun draw() {
             vertices.position(0)
-            state.x.indices.forEach { i -> val v = state.layer.vertices[i]; vertices.put(state.x[i]); vertices.put(state.y[i]); vertices.put(v[2]); vertices.put(v[3]); vertices.put(v[4]) }
+            state.x.indices.forEach { i ->
+                val v = state.layer.vertices[i]
+                vertices.put(state.x[i]); vertices.put(state.y[i]); vertices.put(relief[i]); vertices.put(v[3]); vertices.put(v[4])
+                vertices.put(normals[i*3]); vertices.put(normals[i*3+1]); vertices.put(normals[i*3+2])
+            }
             vertices.position(0)
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, buffers[0]); GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, vertices.capacity() * 4, vertices)
-            GLES30.glEnableVertexAttribArray(0); GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 20, 0)
-            GLES30.glEnableVertexAttribArray(1); GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 20, 12)
+            GLES30.glEnableVertexAttribArray(0); GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 32, 0)
+            GLES30.glEnableVertexAttribArray(1); GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 32, 12)
+            GLES30.glEnableVertexAttribArray(2); GLES30.glVertexAttribPointer(2, 3, GLES30.GL_FLOAT, false, 32, 20)
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, buffers[1])
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture); GLES30.glDrawElements(GLES30.GL_TRIANGLES, state.layer.triangles.size, GLES30.GL_UNSIGNED_SHORT, 0)
         }
@@ -226,7 +237,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         val file = runCatching {
             val folder = File(context.getExternalFilesDir(null) ?: context.filesDir, "physics-metrics").apply { mkdirs() }
             folder.listFiles()?.filter { it.extension == "csv" }?.sortedByDescending { it.lastModified() }?.drop(4)?.forEach { it.delete() }
-            File(folder,"frames-${System.currentTimeMillis()}.csv").apply { writeText("time_ms,frames,fps,render_mean_ms,render_p95_ms,java_heap_bytes,native_heap_bytes,tilt_x_peak,tilt_y_peak,gravity_x_peak,gravity_y_peak,angle_x_peak,angle_y_peak,body_x_peak,body_y_peak,neutral_frames,rotation_events,gravity_events,acceleration_events,calibrated,tilt_x,tilt_y,body_x,body_y\n") }
+            File(folder,"frames-${System.currentTimeMillis()}.csv").apply { writeText("time_ms,frames,fps,render_mean_ms,render_p95_ms,java_heap_bytes,native_heap_bytes,tilt_x_peak,tilt_y_peak,gravity_x_peak,gravity_y_peak,angle_x_peak,angle_y_peak,body_x_peak,body_y_peak,neutral_frames,rotation_events,acceleration_events,calibrated,tilt_x,tilt_y,body_x,body_y\n") }
         }.getOrNull()
         fun add(time: Long, elapsed: Long, input: PhoneSample, solver: PhysicsSolver) {
             fun peak(i: Int, value: Float) { peaks[i] = maxOf(peaks[i], kotlin.math.abs(value)) }
@@ -239,7 +250,7 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
             samples.sort()
             val runtime=Runtime.getRuntime()
             val logFile=file
-            if (logFile != null && logFile.length() < 256 * 1024) runCatching { logFile.appendText("${System.currentTimeMillis()},$count,${if(interval>0) intervals*1e9/interval else 0.0},${samples.average()/1e6},${samples[569]/1e6},${runtime.totalMemory()-runtime.freeMemory()},${android.os.Debug.getNativeHeapAllocatedSize()},${peaks.joinToString(",")},$neutralFrames,${motion.rotationEvents},${motion.gravityEvents},${motion.accelerationEvents},${motion.calibrated},${input.tiltX},${input.tiltY},${solver.bodyX},${solver.bodyY}\n") }
+            if (logFile != null && logFile.length() < 256 * 1024) runCatching { logFile.appendText("${System.currentTimeMillis()},$count,${if(interval>0) intervals*1e9/interval else 0.0},${samples.average()/1e6},${samples[569]/1e6},${runtime.totalMemory()-runtime.freeMemory()},${android.os.Debug.getNativeHeapAllocatedSize()},${peaks.joinToString(",")},$neutralFrames,${motion.rotationEvents},${motion.accelerationEvents},${motion.calibrated},${input.tiltX},${input.tiltY},${solver.bodyX},${solver.bodyY}\n") }
             count=0; interval=0; intervals=0
             peaks.fill(0f); neutralFrames=0
         }
@@ -252,9 +263,17 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         val vertex = shader(GLES30.GL_VERTEX_SHADER, """#version 300 es
             layout(location=0) in vec3 position;
             layout(location=1) in vec2 texcoord;
+            layout(location=2) in vec3 surfaceNormal;
             uniform vec2 angle; uniform vec2 fit; uniform vec2 bodyOffset; uniform vec2 lean; uniform float aspect; uniform float breath;
             out vec2 uv;
+            out vec3 restNormal; out vec3 viewNormal; out vec3 flatNormal;
+            vec3 rotateSurface(vec3 n) {
+                vec3 yaw = vec3(n.x*cos(angle.x)+n.z*sin(angle.x), n.y, -n.x*sin(angle.x)+n.z*cos(angle.x));
+                vec3 pitch = vec3(yaw.x, yaw.y*cos(angle.y)-yaw.z*sin(angle.y), yaw.y*sin(angle.y)+yaw.z*cos(angle.y));
+                return vec3(pitch.x*cos(lean.x)-pitch.y*sin(lean.x), pitch.x*sin(lean.x)+pitch.y*cos(lean.x), pitch.z);
+            }
             void main() {
+                restNormal=surfaceNormal; viewNormal=rotateSurface(surfaceNormal); flatNormal=rotateSurface(vec3(0.0,0.0,1.0));
                 vec3 p = position - vec3(0.5, aspect * 0.5, 0.0);
                 float x = p.x*cos(angle.x) + p.z*sin(angle.x);
                 float z = -p.x*sin(angle.x) + p.z*cos(angle.x);
@@ -267,8 +286,37 @@ class PhysicsView(context: Context, private val installed: InstalledPhysics, pri
         val fragment = shader(GLES30.GL_FRAGMENT_SHADER, """#version 300 es
             precision mediump float; uniform sampler2D image; in vec2 uv; out vec4 color;
             uniform float chroma;
+            in vec3 restNormal; in vec3 viewNormal; in vec3 flatNormal;
+            uniform vec2 lightTilt;
+            uniform float lightingDisabled;
+            // Light travels over the depth-derived surface independently of the
+            // small body rotation. A damped sensor signal makes the diffuse fill
+            // settle without a spring bounce or inheriting a shake impulse.
+            // Subtract the flat response to avoid flashing the whole picture.
+            uniform float materialMode;
             void main() {
                 color=texture(image,uv);
+                vec3 baseLight=vec3(-0.25,-0.35,1.2);
+                vec3 originalLight=normalize(baseLight);
+                vec2 lightTravel=vec2(-lightTilt.x,lightTilt.y)*4.2;
+                lightTravel*=min(1.0,0.7/max(length(lightTravel),0.0001));
+                vec3 light=normalize(baseLight+vec3(lightTravel,0.0));
+                vec3 softRest=normalize(restNormal*vec3(0.9,0.9,1.0));
+                vec3 softView=normalize(viewNormal*vec3(0.9,0.9,1.0));
+                vec3 softFlat=normalize(flatNormal*vec3(0.9,0.9,1.0));
+                float original=dot(softRest,originalLight);
+                float current=dot(softView,light);
+                float flatChange=dot(softFlat,light)-originalLight.z;
+                float delta=1.1*(current-original-flatChange);
+                delta=delta/sqrt(1.0+(delta/0.22)*(delta/0.22));
+                vec3 straight=color.rgb/max(color.a,0.0001);
+                float highlight=smoothstep(0.55,1.0,max(max(straight.r,straight.g),straight.b));
+                delta*=1.0-highlight*smoothstep(0.0,0.025,delta);
+                float reliefLight=1.0+delta;
+                if(lightingDisabled>0.5 || all(equal(lightTilt,vec2(0.0)))) reliefLight=1.0;
+                color.rgb=min(color.rgb*reliefLight,vec3(color.a));
+                // Diagnostic clay view is selected only in the Codex preview.
+                if(materialMode>0.5) color.rgb=vec3(0.67,0.65,0.60)*(0.35+0.85*current)*color.a;
                 // PNG textures are premultiplied. Despill only partial-alpha
                 // pixels, using the background detected by asset preparation.
                 if(color.a>0.0 && color.a<0.999) {

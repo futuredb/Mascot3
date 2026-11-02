@@ -32,6 +32,8 @@ import com.generativemascot.app.data.HeroLocalStore
 import com.generativemascot.app.physics.InstalledPhysics
 import com.generativemascot.app.physics.PhysicsStore
 import com.generativemascot.app.physics.PhysicsView
+import com.generativemascot.app.physics.PhoneMotion
+import com.generativemascot.app.physics.TiltLighting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -44,6 +46,10 @@ fun PhysicsMascot(
     mascotId: String, videoUrls: Map<String, String>, neutralFrameUrl: String?,
     action: String, interaction: PuppetInteraction, modifier: Modifier = Modifier,
     onAnimationVisible: ((String) -> Unit)?, onOneShotFinished: ((String) -> Unit)?,
+    phoneMotion: PhoneMotion? = null,
+    lighting: TiltLighting? = null,
+    onPhysicsActive: (Boolean) -> Unit = {},
+    playbackEnabled: Boolean = true,
     fallback: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -51,8 +57,9 @@ fun PhysicsMascot(
     var installed by remember(mascotId) { mutableStateOf<InstalledPhysics?>(null) }
     var status by remember(mascotId) { mutableStateOf<String?>(null) }
     var failure by remember(mascotId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(mascotId) {
-        var revision: String? = null
+    var revision by remember(mascotId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(mascotId, playbackEnabled) {
+        if (!playbackEnabled) return@LaunchedEffect
         while (isActive) {
             val next = withContext(Dispatchers.IO) { store.revision(mascotId) }
             if (next != revision) {
@@ -64,14 +71,19 @@ fun PhysicsMascot(
             delay(2000)
         }
     }
+    val activeCallback by rememberUpdatedState(onPhysicsActive)
+    DisposableEffect(installed, failure) {
+        activeCallback(installed != null && failure == null)
+        onDispose { activeCallback(false) }
+    }
     Box(modifier) {
         val pack = installed
         if (pack != null && failure == null) {
             key(mascotId, pack.directory.name) {
-                PhysicsPlayback(pack, videoUrls, neutralFrameUrl, action, interaction, onAnimationVisible, onOneShotFinished, { failure = it })
+                PhysicsPlayback(pack, videoUrls, neutralFrameUrl, action, interaction, onAnimationVisible, onOneShotFinished, { failure = it }, phoneMotion, lighting, playbackEnabled)
             }
         } else fallback()
-        if (mascotId == PhysicsStore.PILOT_ID && (pack == null || failure != null)) {
+        if (mascotId == PhysicsStore.PILOT_ID && failure != null) {
             Column(Modifier.align(Alignment.BottomCenter).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 (failure ?: status)?.let { Text(it, fontSize = 12.sp) }
                 TextButton(onClick = {
@@ -86,6 +98,7 @@ fun PhysicsMascot(
 private fun PhysicsPlayback(
     installed: InstalledPhysics, videoUrls: Map<String, String>, neutralFrameUrl: String?, action: String,
     interaction: PuppetInteraction, visible: ((String) -> Unit)?, finished: ((String) -> Unit)?, failed: (String) -> Unit,
+    phoneMotion: PhoneMotion?, lighting: TiltLighting?, playbackEnabled: Boolean,
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
@@ -101,13 +114,6 @@ private fun PhysicsPlayback(
     var settleToken by remember { mutableIntStateOf(0) }
     var playbackSerial by remember { mutableIntStateOf(0) }
     var physicsView by remember { mutableStateOf<PhysicsView?>(null) }
-    var calibrated by remember { mutableStateOf(false) }
-    LaunchedEffect(physicsView, foreground) {
-        while (foreground && isActive) {
-            calibrated = physicsView?.calibrated == true
-            delay(100)
-        }
-    }
     val urls = remember(videoUrls) { videoUrls.mapKeys { HeroLocalStore.normalizeVideoAction(it.key) } }
     val visibleCallback by rememberUpdatedState(visible)
     val finishedCallback by rememberUpdatedState(finished)
@@ -130,14 +136,19 @@ private fun PhysicsPlayback(
     LaunchedEffect(interaction.spinSerial) { if (interaction.spinSerial > 0) request("dancing") }
     LaunchedEffect(interaction.danceSerial) { if (interaction.danceSerial > 0) request("dancing") }
     fun ended() { phase = PhysicsPhase.RETURNING; settleToken++ }
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().graphicsLayer {
+        val framing = installed.framing
+        val fittedWidth = minOf(size.width / installed.pack.width, size.height / installed.pack.height) * installed.pack.width
+        scaleX = framing.scale; scaleY = framing.scale
+        translationX = framing.offsetX * fittedWidth; translationY = framing.offsetY * fittedWidth
+    }) {
         AndroidView(
             // TextureView must be consumed while the neutral frame is prepared.
             // An alpha-zero parent can stop SurfaceTexture consumption, blocking
             // eglSwapBuffers and the callback that is meant to reveal physics.
             // The final video frame remains above it until onSettled fires.
             modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible && phase == PhysicsPhase.VIDEO) 0f else 1f },
-            factory = { ctx -> PhysicsView(ctx, installed).also { view ->
+            factory = { ctx -> PhysicsView(ctx, installed, sharedMotion = phoneMotion, sharedLighting = lighting).also { view ->
                 physicsView = view
                 if (!view.sensorsAvailable) failureCallback("На устройстве недоступны датчики движения")
             } },
@@ -157,7 +168,7 @@ private fun PhysicsPlayback(
                         else -> Unit
                     }
                 }
-                if (foreground && (phase != PhysicsPhase.VIDEO || !videoVisible)) view.resume() else view.pause()
+                if (foreground && playbackEnabled && (phase != PhysicsPhase.VIDEO || !videoVisible)) view.resume() else view.pause()
             },
             onRelease = { it.pause(); if (physicsView === it) physicsView = null },
         )
@@ -166,24 +177,16 @@ private fun PhysicsPlayback(
             key(current, playbackSerial) {
                 val videoModifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible) 1f else 0f }
                 if (current == "sleeping") {
-                    SoraMascotVideo(videoUrls = urls, neutralFrameUrl = neutralFrameUrl,
-                        action = if (waking) "idle" else "sleeping", modifier = videoModifier,
+                    SoraMascotVideo(videoUrls = urls, neutralFrameUrl = neutralFrameUrl, lighting = lighting,
+                        action = if (waking) "idle" else "sleeping", modifier = videoModifier, playbackEnabled = playbackEnabled,
                         onAnimationVisible = { name ->
                             if (waking && name == "idle") ended()
                             else { videoVisible = true; visibleCallback?.invoke(name) }
                         })
                 } else {
-                    PhysicsActionVideo(urls.getValue(current), neutralFrameUrl, foreground && phase == PhysicsPhase.VIDEO, videoModifier,
+                    PhysicsActionVideo(urls.getValue(current), neutralFrameUrl, foreground && playbackEnabled && phase == PhysicsPhase.VIDEO, videoModifier, lighting,
                         onVisible = { videoVisible = true; visibleCallback?.invoke(current) },
                         onEnded = { if (current in setOf("greeting", "signature")) finishedCallback?.invoke(current); ended() }, onFailure = failureCallback)
-                }
-            }
-        }
-        if (phase == PhysicsPhase.IDLE && foreground) {
-            Column(Modifier.align(Alignment.BottomCenter).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!calibrated) Text("Подержите телефон неподвижно", fontSize = 12.sp)
-                TextButton(onClick = { physicsView?.recalibrate(); calibrated = false }, enabled = calibrated) {
-                    Text("Выровнять по телефону", fontSize = 12.sp)
                 }
             }
         }
@@ -192,13 +195,20 @@ private fun PhysicsPlayback(
 
 /** One complete authored action. The last decoded frame remains until physics is ready. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-@Composable private fun PhysicsActionVideo(url: String, neutralFrameUrl: String?, running: Boolean, modifier: Modifier, onVisible: () -> Unit, onEnded: () -> Unit, onFailure: (String) -> Unit) {
+@Composable private fun PhysicsActionVideo(url: String, neutralFrameUrl: String?, running: Boolean, modifier: Modifier, lighting: TiltLighting?, onVisible: () -> Unit, onEnded: () -> Unit, onFailure: (String) -> Unit) {
     val context = LocalContext.current
     val visible by rememberUpdatedState(onVisible); val ended by rememberUpdatedState(onEnded); val failed by rememberUpdatedState(onFailure)
-    val player = remember(url) { ExoPlayer.Builder(context).build().apply { volume = 0f; repeatMode = Player.REPEAT_MODE_OFF } }
+    val player = remember(url) { createMascotVideoPlayer(context).apply { volume = 0f; repeatMode = Player.REPEAT_MODE_OFF } }
     var playbackView by remember(url) { mutableStateOf<PlayerView?>(null) }
     var keyColor by remember(url) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(url,neutralFrameUrl) { keyColor = withContext(Dispatchers.IO) { detectBackgroundColor(neutralFrameUrl ?: url) } }
+    var matteTuning by remember(url) { mutableStateOf(GreenMatteTuning()) }
+    LaunchedEffect(url,neutralFrameUrl) {
+        val (key, tuning) = withContext(Dispatchers.IO) {
+            detectBackgroundColor(neutralFrameUrl ?: url) to detectAdaptiveGreenMatte(url, neutralFrameUrl)
+        }
+        matteTuning = tuning
+        keyColor = key
+    }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() { visible() }
@@ -206,7 +216,7 @@ private fun PhysicsPlayback(
             override fun onPlayerError(error: PlaybackException) { failed("Не удалось воспроизвести действие") }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener); player.release() }
+        onDispose { player.removeListener(listener); releaseMascotVideoPlayer(player) }
     }
     AndroidView(modifier = modifier, factory = { ctx ->
         (LayoutInflater.from(ctx).inflate(R.layout.mascot_video_player, FrameLayout(ctx), false) as PlayerView).apply {
@@ -214,12 +224,13 @@ private fun PhysicsPlayback(
             (videoSurfaceView as? TextureView)?.isOpaque = false
         }.also { playbackView=it }
     })
-    LaunchedEffect(player, keyColor, playbackView) {
+    LaunchedEffect(player, keyColor, matteTuning, playbackView) {
         val key=keyColor;val view=playbackView
         if (key != null && view != null) {
             // Video effects must be installed before prepare. AndroidView's
             // asynchronous update can otherwise lose the first-clip race.
-            applyBackgroundKey(view,key)
+            val lightPack=if(lighting!=null)loadVideoLighting(context,url) else null
+            applyBackgroundKey(view,key,lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }, tuning = matteTuning)
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url.substringBefore('?')))); player.prepare()
         }
     }

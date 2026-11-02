@@ -28,6 +28,8 @@ val embeddedOpenRouterKey = providers.gradleProperty("MASCOT3_OPENROUTER_API_KEY
     ?: ""
 
 // Release keys/passwords are supplied by the build host, never committed to this repository.
+val embeddedReactorKey = providers.gradleProperty("TEAM_REACTOR_KEY").orElse("").get()
+
 val releaseStorePath = providers.environmentVariable("MASCOT3_RELEASE_STORE_FILE").orNull
 val releaseStorePassword = providers.environmentVariable("MASCOT3_RELEASE_STORE_PASSWORD").orNull
 val releaseAlias = providers.environmentVariable("MASCOT3_RELEASE_KEY_ALIAS").orElse("mascots-release").get()
@@ -43,13 +45,14 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 50
-        versionName = "0.1.49"
+        versionCode = 93
+        versionName = "0.1.92-chat-portrait"
         val serverUrl = providers.gradleProperty("MASCOT3_SERVER_URL").orElse("http://127.0.0.1:8788")
         val clientToken = providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orElse("")
         buildConfigField("String", "API_BASE_URL", quotedBuildConfig(serverUrl.get()))
         buildConfigField("String", "MASCOT3_CLIENT_TOKEN", quotedBuildConfig(clientToken.get()))
         buildConfigField("String", "OPENROUTER_API_KEY", quotedBuildConfig(embeddedOpenRouterKey))
+        buildConfigField("String", "REACTOR_API_KEY", quotedBuildConfig(embeddedReactorKey))
     }
 
     signingConfigs {
@@ -74,6 +77,7 @@ android {
             resValue("string", "app_name", "Маскот · Демо")
             // Offline preview must never inherit the production credentials from .env.
             buildConfigField("String", "OPENROUTER_API_KEY", "\"\"")
+            buildConfigField("String", "REACTOR_API_KEY", "\"\"")
             buildConfigField("String", "MASCOT3_CLIENT_TOKEN", "\"\"")
             buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:1\"")
         }

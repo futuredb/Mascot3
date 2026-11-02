@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -32,10 +33,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.ChatAnimationClip
 import com.generativemascot.app.data.GenerationRoute
 import com.generativemascot.app.data.defaultAnimationBatchSize
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 val ANIMATION_STATE_KEYS = HeroLocalStore.LIBRARY_VIDEO_ACTIONS
 val ANIMATION_PACK_SIZE = ANIMATION_STATE_KEYS.size
@@ -89,7 +94,18 @@ fun AnimationLibraryScreen(
     }
     var confirmPack by remember { mutableStateOf(false) }
     var selectedAction by remember { mutableStateOf<String?>(null) }
+    var selectedChatClip by remember(mascotId) { mutableStateOf<ChatAnimationClip?>(null) }
+    var chatClips by remember(mascotId) { mutableStateOf(emptyList<ChatAnimationClip>()) }
+    val foreground = rememberAppResumed()
+    LaunchedEffect(mascotId, foreground, selectedAction, selectedChatClip?.id) {
+        if (!foreground || selectedAction != null || selectedChatClip != null) return@LaunchedEffect
+        while (isActive && mascotId != null) {
+            chatClips = withContext(Dispatchers.IO) { HeroLocalStore.current?.chatAnimations(mascotId).orEmpty() }
+            delay(10_000)
+        }
+    }
     var editingName by rememberSaveable(mascotId) { mutableStateOf(false) }
+    var nameDraft by rememberSaveable(mascotId) { mutableStateOf("") }
     val context = LocalContext.current
     val receiptPrefs = remember(context) {
         context.getSharedPreferences("mascot_ui_receipts", Context.MODE_PRIVATE)
@@ -136,18 +152,28 @@ fun AnimationLibraryScreen(
             dismissedBanner = bannerSignature
         }
     }
-    LaunchedEffect(inProgress, syncing, packReady) {
-        while ((inProgress || syncing) && !packReady) {
+    LaunchedEffect(inProgress, syncing, packReady, foreground) {
+        while (foreground && (inProgress || syncing) && !packReady) {
             delay(5_000)
             onRefresh()
         }
     }
-    BackHandler { if (selectedAction != null) selectedAction = null else onBack() }
+    BackHandler { if (selectedChatClip != null) selectedChatClip = null else if (selectedAction != null) selectedAction = null else onBack() }
     val baseStill = remember(mascotId) { mascotId?.let { HeroLocalStore.current?.baseFile(it)?.toURI()?.toString() } }
     val palette = heroPalette(baseStill ?: neutralFrameUrl)
-    MascotSystemBars(if (selectedAction == null) FigmaCanvas else palette.top,
-        if (selectedAction == null) FigmaCanvas else palette.end)
-    MascotTransition(selectedAction, Modifier.fillMaxSize()) { action ->
+    MascotSystemBars(if (selectedAction == null && selectedChatClip == null) FigmaCanvas else palette.top,
+        if (selectedAction == null && selectedChatClip == null) FigmaCanvas else palette.end)
+    if (selectedChatClip != null) {
+        val clip = selectedChatClip!!
+        Column(Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+            MascotTopBar(displayName, onBack = { selectedChatClip = null }, backArrow = true, lightTitle = true)
+            Spacer(Modifier.height(8.dp))
+            Text(clip.title, fontFamily = SbSansDisplayMedium, color = Color.White.copy(alpha = .85f), fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
+            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
+                SoraMascotVideo(videoUrl = clip.videoUrl, action = "idle", fullClip = true, modifier = Modifier.fillMaxSize())
+            }
+        }
+    } else MascotTransition(selectedAction, Modifier.fillMaxSize()) { action ->
         if (action != null) {
             ActionDetail(
                 mascotId, action, displayName, animations[action].orEmpty(),
@@ -157,43 +183,14 @@ fun AnimationLibraryScreen(
             )
         } else {
             Column(
-                Modifier.fillMaxSize().background(FigmaCanvas).safeDrawingPadding()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                Modifier.fillMaxSize().background(FigmaCanvas).safeDrawingPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (editingName) {
-                    HeroNameInput(
-                        value = editableName,
-                        onValueChange = onNameChange,
-                        onSave = { onSaveName(); editingName = false },
-                    )
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            displayName.uppercase(),
-                            color = FigmaInk,
-                            fontSize = 28.sp,
-                            fontFamily = RubikOne,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        IconButton(onClick = { editingName = true }, modifier = Modifier.size(34.dp)) {
-                            Icon(
-                                Icons.Rounded.Edit,
-                                "Изменить имя",
-                                tint = FigmaInk.copy(alpha = .48f),
-                                modifier = Modifier.size(17.dp),
-                            )
-                        }
-                    }
-                }
+                MascotTopBar(displayName, onBack = onBack,
+                    trailing = { MascotTopAction(Icons.Rounded.Edit, "Изменить имя", { nameDraft = displayName; editingName = true }) })
                 if (showStatusBanner) {
                     Spacer(Modifier.height(16.dp))
+                    Box(Modifier.padding(horizontal = 24.dp)) {
                     AnimationPackStatus(
                         readyCount = readyCount,
                         batchReadyCount = batchReadyCount,
@@ -213,6 +210,7 @@ fun AnimationLibraryScreen(
                             }
                         },
                     )
+                    }
                 }
                 if (!generationError.isNullOrBlank()) {
                     Spacer(Modifier.height(8.dp))
@@ -221,11 +219,30 @@ fun AnimationLibraryScreen(
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp).clipToBounds(),
                     contentPadding = PaddingValues(vertical = 32.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
+                    if (chatClips.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "chat-header") {
+                            Text("ИЗ ЧАТА", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
+                        }
+                        items(chatClips, key = { "chat-${it.id}" }) { clip ->
+                            Column(Modifier.fillMaxWidth().mascotClickable(onClickLabel = "Посмотреть реакцию из чата") { selectedChatClip = clip }, horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
+                                    .background(Color.White.copy(alpha = .48f)).border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp))) {
+                                    ActionThumbnail(clip.videoUrl, baseStill, clip.title, Modifier.fillMaxSize().padding(8.dp))
+                                    Icon(Icons.Rounded.PlayArrow, null, tint = FigmaInk.copy(alpha = .70f), modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp))
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Text(clip.title, fontFamily = SbSansDisplayMedium, fontSize = 13.sp, color = FigmaInk, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "actions-header") {
+                            Text("ЭМОЦИИ", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
+                        }
+                    }
                     items(ANIMATION_STATE_KEYS, key = { it }) { stateKey ->
                         val frames = animations[stateKey].orEmpty()
                         val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS }
@@ -300,7 +317,7 @@ fun AnimationLibraryScreen(
                         }, enabled = !inProgress && !syncing && progress.remainingCount > 0,
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(48.dp),
                     ) {
                         Text(
                             when {
@@ -315,9 +332,18 @@ fun AnimationLibraryScreen(
                     }
                     Spacer(Modifier.height(16.dp))
                 }
-                CloseControl("Закрыть действия", onBack)
             }
         }
+    }
+    if (editingName) {
+        AlertDialog(
+            onDismissRequest = { editingName = false },
+            title = { Text("Имя персонажа") },
+            text = { OutlinedTextField(value = nameDraft, onValueChange = { nameDraft = it }, singleLine = true,
+                label = { Text("Имя") }, modifier = Modifier.fillMaxWidth()) },
+            confirmButton = { TextButton(onClick = { onNameChange(nameDraft.trim()); onSaveName(); editingName = false }, enabled = nameDraft.isNotBlank()) { Text("Сохранить") } },
+            dismissButton = { TextButton(onClick = { editingName = false }) { Text("Отмена") } },
+        )
     }
     if (confirmPack && progress.remainingCount > 0) {
         AlertDialog(
@@ -460,27 +486,22 @@ private fun ActionDetail(
     var play by remember(action) { mutableStateOf(false) }
     LaunchedEffect(action) { delay(300); play = true }
     val videoUrl = videoUrls[action]
+    val phoneInteraction=rememberHeroPhoneInteraction(mascotId,play) {}
     Column(
-        Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+        Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            heroName?.takeIf { it.isNotBlank() }?.uppercase() ?: "ГЕРОЙ",
-            fontFamily = RubikBubbles, fontSize = 40.sp,
-            color = Color.White.copy(alpha = .64f), textAlign = TextAlign.Center,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
-        )
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        MascotTopBar(heroName?.takeIf { it.isNotBlank() } ?: "Герой", onBack = onClose, backArrow = true, lightTitle = true)
+        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
             if (play && videoUrl != null) {
                 SoraMascotVideo(
                     videoUrls = mapOf(action to videoUrl),
+                    lighting = phoneInteraction.lighting,
                     neutralFrameUrl = neutralFrameUrl, action = action,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (play && legacyVideoUrl != null) {
-                SoraMascotVideo(videoUrl = legacyVideoUrl, action = action, modifier = Modifier.fillMaxSize())
+                SoraMascotVideo(videoUrl = legacyVideoUrl, action = action, modifier = Modifier.fillMaxSize(), lighting = phoneInteraction.lighting)
             } else if (play && frames.isNotEmpty()) {
                 PngSequence(frames = frames, fps = HeroLocalStore.FULL_FRAME_FPS, decodeSize = 500, fallback = baseStill,
                     mascotIdHint = mascotId, puppetAction = action, contentDescription = stateTitle(action),
@@ -488,7 +509,7 @@ private fun ActionDetail(
             } else ActionThumbnail(videoUrl, baseStill, stateTitle(action), Modifier.fillMaxSize())
         }
         Column(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp))
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).clip(RoundedCornerShape(32.dp))
                 .background(Color.White.copy(alpha = .32f))
                 .border(1.dp, Color.White.copy(alpha = .24f), RoundedCornerShape(32.dp))
                 .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -505,7 +526,7 @@ private fun ActionDetail(
             Modifier.fillMaxWidth().height(64.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
-            contentPadding = PaddingValues(horizontal = 4.dp),
+            contentPadding = PaddingValues(horizontal = 24.dp),
         ) {
             lazyRowItems(ANIMATION_STATE_KEYS, key = { it }) { key ->
                 val available = videoUrls[key] != null || key == action
@@ -519,8 +540,7 @@ private fun ActionDetail(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        CloseControl("Назад к действиям", onClose)
+        Spacer(Modifier.height(16.dp))
     }
 }
 

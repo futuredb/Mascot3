@@ -1,0 +1,12 @@
+{
+  "method": "local monocular relative depth estimation",
+  "model": "depth-anything/Depth-Anything-V2-Small-hf",
+  "model_revision": "5426e4f0f36572d16453bbda7a8389317b1bef99",
+  "model_license": "Apache-2.0",
+  "original_rgba_unchanged": true,
+  "generated_pixels": 0,
+  "depth_scale": 0.16,
+  "minimum_projected_area_ratio": 0.4632367080630092,
+  "maximum_local_depth_slope": 1.2,
+  "limitation": "Visible surface relief only; no hidden surfaces are reconstructed."
+}

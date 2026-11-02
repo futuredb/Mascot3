@@ -18,6 +18,7 @@ import com.generativemascot.app.worker.ContextRefreshWorker
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -54,6 +55,7 @@ class MascotApp : Application(), ImageLoaderFactory {
         heroStore = HeroLocalStore(this)
         openRouterSettings = OpenRouterSettingsStore(this)
         HeroLocalStore.attach(heroStore)
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO).launchLightingRecovery()
         behavior = com.generativemascot.app.state.BehaviorCoordinator(this)
         behavior.start()
         val work = PeriodicWorkRequestBuilder<ContextRefreshWorker>(behavior.config.get().refreshMinutes.toLong(), TimeUnit.MINUTES).build()
@@ -62,6 +64,10 @@ class MascotApp : Application(), ImageLoaderFactory {
             ExistingPeriodicWorkPolicy.UPDATE,
             work,
         )
+    }
+
+    private fun kotlinx.coroutines.CoroutineScope.launchLightingRecovery() = launch {
+        runCatching { com.generativemascot.app.data.LightingPreparation(this@MascotApp).resume() }
     }
 
     /**

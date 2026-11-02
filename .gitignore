@@ -17,4 +17,5 @@ output/
 tmp/
 .playwright-cli/
 *.log
+__pycache__/
 /AGENTS.md

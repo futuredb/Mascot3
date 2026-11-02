@@ -13,12 +13,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import android.widget.Toast
 import androidx.core.content.FileProvider
-import com.generativemascot.app.MainActivity
+import com.generativemascot.app.overlay.OverlayLaunchActivity
+import com.generativemascot.app.overlay.OverlaySession
 import com.generativemascot.app.MascotApp
 import com.generativemascot.app.R
 import com.generativemascot.app.data.WIDGET_SUPPORTED_INTERVALS
@@ -39,7 +41,39 @@ private const val TAG = "MascotWidget"
 private const val WIDGET_RENDER_PREFS = "widget_render_state"
 private const val WIDGET_RENDER_SIGNATURE = "animation_signature"
 private const val WIDGET_RENDER_ALTERNATE = "alternate_layout"
+private const val OVERLAY_WIDGET_SIGNATURE = "overlay-hidden-v1:"
+private const val ACTION_OVERLAY_CHANGED = "app.mascot3.widget.OVERLAY_CHANGED"
 private val widgetUpdateLock = Mutex()
+
+internal fun refreshWidgetsForOverlay(context: Context) {
+    val manager = AppWidgetManager.getInstance(context)
+    val provider = ComponentName(context, MascotWidgetReceiver::class.java)
+    if (manager.getAppWidgetIds(provider).isNotEmpty())
+        context.sendBroadcast(Intent(context, MascotWidgetReceiver::class.java).setAction(ACTION_OVERLAY_CHANGED))
+}
+
+private fun widgetOverlayHero(context: Context): String? =
+    OverlaySession.hero(context)?.takeIf { Settings.canDrawOverlays(context) }
+
+/** A distinct empty layout removes the launcher flipper rather than animating it invisibly. */
+private fun showOverlayWidgets(context: Context, manager: AppWidgetManager, ids: IntArray, heroId: String, force: Boolean) {
+    val prefs = context.getSharedPreferences(WIDGET_RENDER_PREFS, Context.MODE_PRIVATE)
+    val signature = OVERLAY_WIDGET_SIGNATURE + heroId
+    ids.forEach { id ->
+        if (!widgetNeedsUpdate(prefs.getString("$WIDGET_RENDER_SIGNATURE:$id", null), signature, force)) return@forEach
+        if (widgetOverlayHero(context) != heroId) return
+        val open = PendingIntent.getActivity(context, id, OverlayLaunchActivity.intent(context, heroId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val views = RemoteViews(context.packageName, R.layout.mascot_widget_overlay).apply {
+            setImageViewResource(R.id.widget_static_image, 0)
+            setOnClickPendingIntent(R.id.widget_static_image, open)
+        }
+        try {
+            manager.updateAppWidget(id, views)
+            prefs.edit().putString("$WIDGET_RENDER_SIGNATURE:$id", signature).putString("mascot:$id", heroId).apply()
+        } catch (error: Exception) { Log.e(TAG, "Cannot hide duplicate hero in widget $id", error) }
+    }
+}
 
 internal fun requestWidgetState(context: Context, mascotId: String, state: String) {
     context.getSharedPreferences(WIDGET_RENDER_PREFS, Context.MODE_PRIVATE).edit()
@@ -148,11 +182,16 @@ suspend fun updateMascotWidgets(
     force: Boolean = false,
     preparedMascotId: String? = null,
 ) = widgetUpdateLock.withLock { withContext(Dispatchers.IO) {
-    val app = context.applicationContext as MascotApp
     val manager = AppWidgetManager.getInstance(context)
     val provider = ComponentName(context, MascotWidgetReceiver::class.java)
     val widgetIds = manager.getAppWidgetIds(provider)
     if (widgetIds.isEmpty()) return@withContext
+
+    widgetOverlayHero(context)?.let { heroId ->
+        showOverlayWidgets(context, manager, widgetIds, heroId, force)
+        return@withContext
+    }
+    val app = context.applicationContext as MascotApp
 
     val mascotId = app.session.acceptedMascotId() ?: app.session.mascotId()
     // A widget update must remain local and fast. ContextRefreshWorker resolves weather/state later.
@@ -181,6 +220,7 @@ suspend fun updateMascotWidgets(
     val fallbackFile = mascotId?.let { app.heroStore.stateFile(it, state) }
         ?: mascotId?.let { app.heroStore.baseFile(it) }
     val animationSignature = listOf(
+        "overlay-click-v1",
         mascotId.orEmpty(),
         firstFrame?.parentFile?.absolutePath.orEmpty(),
         firstFrame?.lastModified()?.toString().orEmpty(),
@@ -206,17 +246,15 @@ suspend fun updateMascotWidgets(
     } else {
         emptyList()
     } }
-    val openIntent = Intent(context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        putExtra("widget_interact", true)
-    }
+    val openIntent = OverlayLaunchActivity.intent(context, mascotId)
     widgetIds.forEach { widgetId ->
         val options = manager.getAppWidgetOptions(widgetId)
         val sizeKey = listOf(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
             AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT).joinToString(":") { options.getInt(it).toString() }
         val signature = "$animationSignature:$preloadFrames:$fixedCollection:$sizeKey"
         val previous = renderPrefs.getString("$WIDGET_RENDER_SIGNATURE:$widgetId", null)
-        if (needsPreparation && previous != null && renderPrefs.getString("mascot:$widgetId", null) == mascotId && !force) {
+        val wasHidden = previous?.startsWith(OVERLAY_WIDGET_SIGNATURE) == true
+        if (needsPreparation && previous != null && !wasHidden && renderPrefs.getString("mascot:$widgetId", null) == mascotId && !force) {
             // Keep the current animation visible until the requested replacement is fully prepared.
             return@forEach
         }
@@ -268,13 +306,19 @@ suspend fun updateMascotWidgets(
             staticWidgetViews(context, fallbackFile, widgetFrameSizePx(context, widgetId), open)
         } } catch (error: Exception) {
             Log.e(TAG, "Cannot build widget $widgetId animation; retaining the previous image", error)
-            if (previous != null && renderPrefs.getString("mascot:$widgetId", null) == mascotId) return@forEach
+            if (previous != null && !wasHidden && renderPrefs.getString("mascot:$widgetId", null) == mascotId) return@forEach
             renderedAnimation = false
             runCatching { staticWidgetViews(context, fallbackFile, widgetFrameSizePx(context, widgetId), open) }
                 .getOrNull() ?: return@forEach
         }
         if (mascotId != (app.session.acceptedMascotId() ?: app.session.mascotId())) return@forEach
         if (mascotId != null && requestedWidgetState(context, mascotId) != state) return@forEach
+        // An overlay can start while cached frames are being decoded. Never
+        // publish that now-stale animation over the hidden widget state.
+        widgetOverlayHero(context)?.let { heroId ->
+            showOverlayWidgets(context, manager, widgetIds, heroId, force = true)
+            return@withContext
+        }
         try {
             manager.updateAppWidget(widgetId, views)
             if (renderedAnimation && frameCount > 0) app.behavior.observed("widget", state)
@@ -404,6 +448,15 @@ private fun cancelWidgetMoodRotation(context: Context) {
 class MascotWidgetReceiver : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
+        if (intent.action == ACTION_OVERLAY_CHANGED) {
+            val pending = goAsync()
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    updateMascotWidgets(context, prepareAnimation = widgetOverlayHero(context) == null, force = true)
+                } catch (error: Exception) { Log.e(TAG, "Cannot sync widget with overlay", error) }
+                finally { pending.finish() }
+            }
+        }
         if (intent.action == ACTION_ROTATE_WIDGET_MOOD) {
             WidgetMoodWorker.enqueue(context)
         }
@@ -423,7 +476,7 @@ class MascotWidgetReceiver : AppWidgetProvider() {
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                (context.applicationContext as MascotApp).behavior.refresh()
+                if (widgetOverlayHero(context) == null) (context.applicationContext as MascotApp).behavior.refresh()
                 updateMascotWidgets(context, force = true)
             } catch (error: Exception) {
                 Log.e(TAG, "Cannot refresh widget", error)

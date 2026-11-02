@@ -126,7 +126,7 @@ data class StateRecord(
 
 data class StateSignals(val networkType: String? = null, val charging: Boolean? = null,
     val weather: WeatherObservation? = null, val health: HealthSnapshot? = null)
-enum class StateEvent { AUTO, TAP, HOLD, JOY, ENTER, CREATED, CLIP_FINISHED }
+enum class StateEvent { AUTO, TAP, HOLD, JOY, SHAKE, ENTER, CREATED, CLIP_FINISHED }
 
 /** Pure resolver: no network, model calls, Android globals or UI-specific selection. */
 class StateResolver(private val random: Random = Random.Default) {
@@ -143,6 +143,13 @@ class StateResolver(private val random: Random = Random.Default) {
         val active = r.stateStartedAt <= now && now < r.stateExpiresAt
         fun allowed(s: PetState) = r.lastTriggerAt[s]?.let { now - it >= (config.cooldownMinutes[s] ?: 0) * MINUTE } ?: true
         fun healthAllowed(key: String) = key !in r.lastHealthEventAt
+        if (event == StateEvent.SHAKE) {
+            val reaction = listOf(PetState.SCARED, PetState.CURIOUS, PetState.JOY).firstOrNull { it.action in available }
+            // Reuse only a saved action. The visual wobble still works without videos.
+            if (reaction == null) return r
+            return choose(r.copy(manualSleep = false), Candidate(reaction, "phone_shake", 2), now,
+                now + (durations[reaction.action] ?: 4_000L).coerceIn(1_000L, 12_000L), false)
+        }
         if (event == StateEvent.TAP) r = r.copy(manualSleep = false)
         if (event == StateEvent.HOLD || r.manualSleep) {
             if (r.manualSleep && active && event != StateEvent.HOLD) return r

@@ -62,6 +62,28 @@ class PhysicsStoreTest {
             assertEquals(remoteHash,store.revision(id))
         } finally { hero.deleteRecursively() }
     }
+    @Test fun transparentMarginsUseOneSharedFramingForMeshAndVideo() = runBlocking<Unit> {
+        val output=System.getenv("MASCOT3_PREVIEW_OUTPUT")?.let(::File)
+        val exported=mutableListOf<String>()
+        val ids=listOf(PhysicsStore.PILOT_ID,"9f226b89-df35-4d3a-9b36-96c28ea1bb62","a83e9d30-1270-40e6-902c-b44774e84c17")
+        for(id in ids) {
+            val source="bundled-heroes/$id";val hero=File(context.filesDir,"hero/$id").apply { mkdirs() }
+            fun copy(asset:String,destination:File) {
+                val children=context.assets.list(asset).orEmpty()
+                if(children.isNotEmpty()) { destination.mkdirs();children.forEach { copy("$asset/$it",File(destination,it)) } }
+                else { destination.parentFile!!.mkdirs();context.assets.open(asset).use { input->destination.outputStream().use(input::copyTo) } }
+            }
+            try {
+                copy("$source/base.png",File(hero,"base.png"));copy("$source/physics",File(hero,"physics"))
+                val installed=PhysicsStore(context).load(id)!!;val f=installed.framing
+                if(id==PhysicsStore.PILOT_ID) assertEquals(1.259f,f.scale,.005f)
+                else assertTrue(f.scale in .99f..1.02f)
+                assertTrue(kotlin.math.abs(f.offsetX)<.005f);assertTrue(kotlin.math.abs(f.offsetY)<.005f)
+                exported += "\"$id\": [${f.scale},${f.offsetX},${f.offsetY}]"
+            } finally { hero.deleteRecursively() }
+        }
+        output?.let { File(it,"framing.json").writeText(exported.joinToString(",","{","}")) }
+    }
     @Test fun interruptedOrRejectedDownloadNeverReplacesTheWorkingPackage() = runBlocking {
         val id="physics-test-${UUID.randomUUID()}"; val store=PhysicsStore(context)
         val base=png(Color.RED); val second=png(Color.BLUE)
