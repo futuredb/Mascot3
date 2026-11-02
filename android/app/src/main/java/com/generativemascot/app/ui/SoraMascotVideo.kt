@@ -49,7 +49,7 @@ private const val CROSSFADE_MS = 360L
 private const val REACTION_HANDOFF_MS = 90L
 private const val PREPARE_BEFORE_END_MS = 500L
 private const val TRANSITION_BEFORE_END_MS = 220L
-private const val SEAMLESS_SWAP_BEFORE_END_MS = 35L
+private const val SEAMLESS_SWAP_BEFORE_END_MS = 350L
 private const val SLEEP_ANCHOR_MS = 6_000L
 private const val DERIVED_SLEEP_ANCHOR_MS = 2_100L
 private const val DERIVED_SLEEP_START_MS = 1_600L
@@ -185,7 +185,6 @@ fun SoraMascotVideo(
         }
     }
     val idleAction = defaultHomeVideoAction(normalizedUrls.keys)
-    val greetingOnly = greetingIsOnlyVideo(normalizedUrls.keys)
     var requestedAction by remember(normalizedUrls) {
         mutableStateOf(resolveAvailableHomeAction(action ?: "idle", normalizedUrls.keys))
     }
@@ -344,7 +343,7 @@ fun SoraMascotVideo(
                 stop()
                 clearMediaItems()
                 applyBackgroundKey(playerViews[index],backgroundKeys[actionName] ?: Color.rgb(232,244,252),binding, tuning = tuning)
-                repeatMode = if (greetingOnly) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                repeatMode = Player.REPEAT_MODE_OFF
                 setMediaItem(item)
                 prepare()
             }
@@ -436,13 +435,6 @@ fun SoraMascotVideo(
 
             val active = players[activeIndex]
             val inactiveIndex = 1 - activeIndex
-            // Until other clips are ready, the saved greeting is the baseline.
-            // Repeat in the active player, without neutral-frame freezes or decoder swaps.
-            if (greetingOnly) {
-                queuedAction = null
-                delay(32)
-                continue
-            }
             // Direct-key packs contain the paid catalog clips. In
             // that mode `sleeping` itself is the closed breathing loop, so keep
             // repeating it until the user interacts instead of buying an
@@ -663,14 +655,22 @@ fun SoraMascotVideo(
                     }
                     anchor.alpha = 0f
                 } else {
-                    // Seamless assets end on their own first frame. Wait until
-                    // the incoming texture actually has that frame, then swap
-                    // atomically; an alpha blend would show both bodies at once.
+                    // Existing clips do not necessarily end on the exact first
+                    // frame. Keep the last decoded frame underneath the new one
+                    // and fade the new frame in, avoiding an abrupt colour jump.
                     if (!waitForFirstFrame(inactiveIndex)) {
                         incoming.pause(); preparedAction = null; queuedAction = null
                         active.seekTo(0); active.play(); delay(250); continue
                     }
                     if (!isActive) break
+                    active.pause()
+                    outgoingView.translationZ = 0f
+                    incomingView.translationZ = 1f
+                    neutralView?.translationZ = 2f
+                    repeat(steps) { step ->
+                        incomingView.alpha = (step + 1f) / steps
+                        delay(CROSSFADE_MS / steps)
+                    }
                 }
                 active.pause()
                 active.seekTo(0)

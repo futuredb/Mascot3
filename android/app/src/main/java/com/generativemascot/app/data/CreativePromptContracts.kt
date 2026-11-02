@@ -742,6 +742,8 @@ internal val relightableAnimationContract = """
     Preserve the source's soft neutral diffuse illumination and material appearance throughout the clip.
     Lock light direction, intensity, exposure, white balance and surface roughness across every frame,
     including the loop seam. Shading may change naturally with the pose, never pulse or sparkle.
+    Match the reference image's exact character palette and saturation in the first, middle and final frames;
+    do not gradually recolor, tint or change the brightness of the character as it moves.
     No moving lights, glossy hotspots, clipped highlights, rim-light flashes, bloom or animated glow.
 """.trimIndent()
 
