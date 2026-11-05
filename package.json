@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js && node --check physics/contracts.js && node --check physics/providers.js && node --check physics/assets.js && node --check physics/segmentation.js && node --check physics/jobs.js && node --check scripts/prepare-physics.cjs && node --check physics/costs.js && node --check scripts/reconcile-physics-costs.cjs && node --check scripts/physics-acceptance-server.cjs && node --check physics/edges.js && node --check physics/seed.js",
+    "check": "node --check server/server.js && node --check pipeline/run_character_pipeline.js && node --check pipeline/scripts/character_cli.js && node --check physics/contracts.js && node --check physics/providers.js && node --check physics/assets.js && node --check physics/segmentation.js && node --check physics/jobs.js && node --check scripts/prepare-physics.cjs && node --check physics/costs.js && node --check scripts/reconcile-physics-costs.cjs && node --check scripts/physics-acceptance-server.cjs && node --check physics/edges.js && node --check physics/seed.js && node --check lighting/jobs.js && node --check lighting/routes.js",
     "build": "npm run check",
-    "test": "node --test pipeline/*.test.js server/*.test.js physics/*.test.js",
+    "test": "node --test pipeline/*.test.js server/*.test.js physics/*.test.js lighting/*.test.js",
     "test:physics": "node --test physics/*.test.js",
     "physics:prepare": "node scripts/prepare-physics.cjs",
     "test:pipeline": "node --test pipeline/*.test.js",

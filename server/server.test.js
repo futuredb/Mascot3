@@ -45,6 +45,13 @@ test("health stays public while mutations require the client token", async (t) =
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
 
+  // Catch deployments that retain a healthy server but omit the depth service.
+  const lighting = `http://127.0.0.1:${port}/v1/lighting/sources/image/${"0".repeat(64)}`;
+  assert.equal((await fetch(lighting)).status, 401);
+  const missingLighting = await fetch(lighting, { headers: { "x-mascot-client-token": "test-client-token" } });
+  assert.equal(missingLighting.status, 404);
+  assert.equal((await missingLighting.json()).error, "lighting_not_found");
+
   const diagnostics = await fetch(`http://127.0.0.1:${port}/api/health`).then((response) => response.json());
   assert.equal(diagnostics.profile.videoModel, "bytedance/seedance-2.0-mini");
   assert.equal(diagnostics.profile.pipelineAnimations.length, 17);
