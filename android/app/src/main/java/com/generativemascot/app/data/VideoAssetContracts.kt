@@ -4,8 +4,10 @@ import java.security.MessageDigest
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-internal const val VIDEO_PROMPT_CATALOG_VERSION = 4
+internal const val VIDEO_PROMPT_CATALOG_VERSION = 5
 internal const val VIDEO_PACK_MANIFEST_VERSION = 1
+internal const val DERIVED_SLEEP_START_MS = 1_600L
+internal const val DERIVED_SLEEP_END_MS = 4_400L
 
 @Serializable
 internal data class CanonicalImageQa(
@@ -35,7 +37,38 @@ internal data class VideoClipQa(
     @SerialName("minimum_frame_margin") val minimumFrameMargin: Double,
     @SerialName("endpoint_delta") val endpointDelta: Double,
     @SerialName("matte_hex") val matteHex: String,
+    @SerialName("loop_seam") val loopSeam: VideoLoopSeam? = null,
+    @SerialName("sleep_loop_seam") val sleepLoopSeam: VideoLoopSeam? = null,
 )
+
+@Serializable
+internal data class VideoLoopSeam(
+    @SerialName("endpoint_delta") val endpointDelta: Double,
+    @SerialName("first_step_delta") val firstStepDelta: Double,
+    @SerialName("last_step_delta") val lastStepDelta: Double,
+    @SerialName("typical_step_delta") val typicalStepDelta: Double,
+    @SerialName("peak_edge_step_delta") val peakEdgeStepDelta: Double = 0.0,
+    @SerialName("motion_mismatch") val motionMismatch: Double = 0.0,
+)
+
+internal fun loopSeamIssue(seam: VideoLoopSeam?): String? {
+    if (seam == null || listOf(seam.endpointDelta, seam.firstStepDelta, seam.lastStepDelta,
+            seam.typicalStepDelta, seam.peakEdgeStepDelta, seam.motionMismatch).any { !it.isFinite() || it < 0.0 }) {
+        return "Не удалось проверить стык анимации"
+    }
+    val edgeStep = maxOf(seam.firstStepDelta, seam.lastStepDelta, seam.peakEdgeStepDelta)
+    if (seam.endpointDelta > 0.035 ||
+        (seam.endpointDelta > 0.02 && seam.endpointDelta > edgeStep * 2.0 + 0.005)) {
+        return "Начало и конец анимации заметно различаются"
+    }
+    if (edgeStep > 0.06 && edgeStep > seam.typicalStepDelta * 5.0) {
+        return "В начале или конце анимации обнаружен резкий скачок"
+    }
+    if (seam.motionMismatch > 0.06 && seam.motionMismatch > seam.typicalStepDelta * 3.0) {
+        return "Направление движения резко меняется на стыке"
+    }
+    return null
+}
 
 @Serializable
 internal data class VideoClipManifest(
@@ -121,6 +154,9 @@ internal fun evaluateVideoQa(
     minimumFrameMargin: Double,
     endpointDelta: Double,
     matteHex: String,
+    enforceLoop: Boolean = false,
+    loopSeam: VideoLoopSeam? = null,
+    sleepLoopSeam: VideoLoopSeam? = null,
 ): VideoClipQa {
     val issues = mutableListOf<String>()
     val warnings = mutableListOf<String>()
@@ -130,10 +166,14 @@ internal fun evaluateVideoQa(
     }
     if (width < 640 || height < 640) issues += "Слишком низкое разрешение: ${width}×${height}"
     if (sampleCount < 5) issues += "Не удалось прочитать контрольные кадры"
-    // The provider has already charged for the clip by the time visual QA runs.
-    // Chroma spill, framing and loop mismatch are recoverable in the player, so
-    // retain the paid asset and report them as diagnostics instead of forcing a
-    // second paid generation. Only unreadable/technically invalid files block.
+    if (enforceLoop) {
+        loopSeamIssue(loopSeam)?.let { issues += it }
+        if (HeroLocalStore.normalizeVideoAction(action) == "sleeping") {
+            loopSeamIssue(sleepLoopSeam)?.let { issues += "Петля сна: $it" }
+        }
+    }
+    // The paid source is retained even if a new clip fails loop validation.
+    // Never silently submit a replacement request after visual QA.
     if (minimumBorderKeyRatio < 0.82) {
         warnings += "Фон меняется или содержит объекты у края кадра; клип сохранён"
     } else if (minimumBorderKeyRatio < 0.92) {
@@ -144,13 +184,11 @@ internal fun evaluateVideoQa(
     } else if (minimumFrameMargin < 0.04) {
         warnings += "У персонажа слишком маленький запас до края"
     }
-    // Every action, including persistent sleep, is bridged by the two-player
-    // compositor. A moderate endpoint delta is useful diagnostic information,
-    // not a reason to discard an already-paid and otherwise healthy clip.
+    // Preserve the older five-sample diagnostic for compatibility with saved QA.
     if (endpointDelta > 0.20) {
-        warnings += "Финальная поза сильно отличается от начальной; переход будет сглажен видеоплеером"
+        warnings += "Финальная поза сильно отличается от начальной"
     } else if (endpointDelta > 0.08) {
-        warnings += "Финал отличается от начала; переход будет сглажен видеоплеером"
+        warnings += "Финал отличается от начала"
     }
     return VideoClipQa(
         action = action,
@@ -165,6 +203,8 @@ internal fun evaluateVideoQa(
         minimumFrameMargin = minimumFrameMargin,
         endpointDelta = endpointDelta,
         matteHex = matteHex,
+        loopSeam = loopSeam,
+        sleepLoopSeam = sleepLoopSeam,
     )
 }
 

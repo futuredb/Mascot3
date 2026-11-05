@@ -5,14 +5,19 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -21,13 +26,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -40,12 +48,14 @@ import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.snapshotFlow
@@ -55,10 +65,14 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -68,6 +82,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.res.painterResource
 import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
@@ -79,6 +98,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -134,6 +154,14 @@ private val heroLines = mapOf(
 
 private const val AMBIENT_MIN_DELAY_MS = 12_000L
 private const val AMBIENT_MAX_DELAY_MS = 19_000L
+
+private val greetingLoadingLines = listOf(
+    "Создаём первое приветствие персонажа.",
+    "Скоро персонаж оживёт и поздоровается с тобой.",
+    "Готовим первые движения — это может занять несколько минут.",
+    "Всё ещё работаем над приветствием.",
+    "Персонаж готовится к вашей первой встрече.",
+)
 
 /**
  * Idle is already the baseline and sleep belongs to a deliberate long press.
@@ -194,6 +222,7 @@ fun KnockHeroScreen(
     accepted: Boolean,
     heroLoading: Boolean = false,
     greetingInterrupted: Boolean = false,
+    greetingCanResume: Boolean = true,
     onResumeGreeting: () -> Unit = {},
     onDeferGreeting: () -> Unit = {},
     mascotId: String? = null,
@@ -208,15 +237,20 @@ fun KnockHeroScreen(
     onKnockComplete: () -> Unit,
     onAccept: () -> Unit,
     onSelectHero: (String) -> Unit = {},
+    onDeleteHero: () -> Unit = {},
+    onRenameHero: (String, String) -> Unit = { _, _ -> },
     onNewHero: () -> Unit = {},
-    onAnimations: () -> Unit = {},
+    onAnimations: (String?) -> Unit = {},
     onChat: () -> Unit = {},
+    onCapabilities: () -> Unit = onChat,
+    onBehavior: () -> Unit = onChat,
     onGenerate: () -> Unit = {},
     onPoll: () -> Unit,
     onRefresh: () -> Unit = {},
     onRefreshHeroes: () -> Unit = {},
     onGenerationSettings: () -> Unit = {},
     onOverlaySettings: () -> Unit = {},
+    onPinWidget: () -> Unit = {},
     screenActive: Boolean = true,
     acceptEnabled: Boolean,
     onStateGesture: ((com.generativemascot.app.state.StateEvent) -> Unit)? = null,
@@ -224,6 +258,7 @@ fun KnockHeroScreen(
     onOneShotFinished: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val vibrator = remember {
         if (Build.VERSION.SDK_INT >= 31) {
             context.getSystemService(VibratorManager::class.java).defaultVibrator
@@ -258,9 +293,43 @@ fun KnockHeroScreen(
         mutableStateOf(HeroLocalStore.normalizeVideoAction(stateKey ?: "idle"))
     }
     var quoteIndex by remember(mascotId) { mutableIntStateOf(0) }
+    var greetingLoadingLineIndex by remember(mascotId) { mutableIntStateOf(0) }
     var navigationReady by remember(mascotId) { mutableStateOf(false) }
     var heroPickerExpanded by remember { mutableStateOf(false) }
+    var showHomeSettings by remember { mutableStateOf(false) }
+    val menuScope = rememberCoroutineScope()
+    val menuBlur by animateDpAsState(
+        targetValue = if (showHomeSettings) 20.dp else 0.dp,
+        animationSpec = tween(if (showHomeSettings) 220 else 180),
+        label = "menu background blur",
+    )
+    val menuSystemBarAlpha by animateFloatAsState(
+        targetValue = if (showHomeSettings) 1f else 0f,
+        animationSpec = tween(if (showHomeSettings) 220 else 180),
+        label = "menu system bars",
+    )
+    fun closeHomeSettings(afterClose: (() -> Unit)? = null) {
+        if (!showHomeSettings) return
+        showHomeSettings = false
+        if (afterClose != null) menuScope.launch { delay(180); afterClose() }
+    }
+    val offerPreferences = remember { context.getSharedPreferences("home_capabilities_offer", android.content.Context.MODE_PRIVATE) }
+    var offerDismissed by remember(mascotId) {
+        mutableStateOf(offerPreferences.getBoolean(mascotId.orEmpty(), false))
+    }
     var pickerSelectedId by remember { mutableStateOf<String?>(null) }
+    var editingHeroName by remember { mutableStateOf(false) }
+    var heroNameDraft by remember { mutableStateOf(TextFieldValue()) }
+    val heroNameFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    BackHandler(enabled = editingHeroName) {
+        editingHeroName = false
+        keyboard?.hide()
+    }
+    BackHandler(enabled = heroPickerExpanded && !editingHeroName) {
+        pickerSelectedId = mascotId
+        heroPickerExpanded = false
+    }
     val heroStrip = rememberLazyListState()
     val dragX by animateFloatAsState(rawDragX, spring(dampingRatio = .68f, stiffness = 360f), label = "puppet-x")
     val dragY by animateFloatAsState(rawDragY, spring(dampingRatio = .68f, stiffness = 360f), label = "puppet-y")
@@ -297,9 +366,30 @@ fun KnockHeroScreen(
             pickerHero?.name,
         )
     }
+    fun beginNameEditing() {
+        heroNameDraft = TextFieldValue(displayName, selection = TextRange(displayName.length))
+        editingHeroName = true
+    }
+    fun saveEditedName() {
+        val id = visualMascotId ?: return
+        val name = heroNameDraft.text.trim()
+        if (name.isBlank()) return
+        onRenameHero(id, name)
+        editingHeroName = false
+        keyboard?.hide()
+    }
+    LaunchedEffect(editingHeroName) {
+        if (editingHeroName) { heroNameFocus.requestFocus(); keyboard?.show() }
+    }
     val palette = heroPalette(visualPreviewUrl)
-    MascotSystemBars(if (accepted) palette.top else FigmaCanvas, if (accepted) palette.end else FigmaCanvas)
-    val currentLine = heroLine(quoteAction, quoteIndex)
+    val menuTopBar = lerp(palette.top, FigmaCanvas, .90f)
+    val menuBottomBar = lerp(palette.end, FigmaCanvas, .90f)
+    MascotSystemBars(
+        if (showHomeSettings) menuTopBar else if (accepted) palette.top else FigmaCanvas,
+        if (showHomeSettings) menuBottomBar else if (accepted) palette.end else FigmaCanvas,
+    )
+    val currentLine = if (visualHeroLoading) greetingLoadingLines[greetingLoadingLineIndex % greetingLoadingLines.size]
+        else heroLine(quoteAction, quoteIndex)
 
     fun postponeAmbientAction() {
         nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
@@ -391,14 +481,12 @@ fun KnockHeroScreen(
             pickerSelectedId = mascotId
         }
     }
-    LaunchedEffect(heroLibrary.map { it.id }, heroPickerExpanded) {
-        if (heroPickerExpanded) {
-            val index = heroLibrary.indexOfFirst { it.id == pickerSelectedId }
-            if (index >= 0) heroStrip.scrollToItem(index)
-        }
-    }
-    LaunchedEffect(heroStrip, heroPickerExpanded, heroLibrary) {
+    LaunchedEffect(heroStrip, heroPickerExpanded, heroLibrary.map { it.id }) {
         if (!heroPickerExpanded) return@LaunchedEffect
+        val initialId = pickerSelectedId
+        val initialIndex = heroLibrary.indexOfFirst { it.id == initialId }
+        if (initialIndex >= 0) heroStrip.scrollToItem(initialIndex + 1)
+        var hapticsReady = initialIndex < 0
         snapshotFlow {
             val info = heroStrip.layoutInfo
             val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2
@@ -406,7 +494,12 @@ fun KnockHeroScreen(
                 kotlin.math.abs(item.offset + item.size / 2 - viewportCenter)
             }?.key as? String
         }.filterNotNull().distinctUntilChanged().collect { centeredId ->
-            if (heroLibrary.any { it.id == centeredId }) pickerSelectedId = centeredId
+            if (!hapticsReady) {
+                if (centeredId == initialId) hapticsReady = true
+            } else if (heroLibrary.any { it.id == centeredId } && centeredId != pickerSelectedId) {
+                pickerSelectedId = centeredId
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            }
         }
     }
     LaunchedEffect(mascotId) {
@@ -433,6 +526,14 @@ fun KnockHeroScreen(
                 return@LaunchedEffect
             }
             quoteIndex += 1
+        }
+    }
+    LaunchedEffect(mascotId, visualHeroLoading, visible) {
+        if (!visualHeroLoading) { greetingLoadingLineIndex = 0; return@LaunchedEffect }
+        if (!visible) return@LaunchedEffect
+        while (true) {
+            delay(9_000)
+            greetingLoadingLineIndex = (greetingLoadingLineIndex + 1) % greetingLoadingLines.size
         }
     }
     LaunchedEffect(accepted, mascotId, heroPickerExpanded, mainActionPool, visualHeroLoading, visible) {
@@ -492,21 +593,41 @@ fun KnockHeroScreen(
     }
     val onKnock = rememberUpdatedState { x: Float, y: Float -> knock(x, y) }
 
+    val systemDensity = LocalDensity.current
+    val statusBarHeight = WindowInsets.statusBars.getTop(systemDensity).toFloat()
+    val navigationBarHeight = WindowInsets.navigationBars.getBottom(systemDensity).toFloat()
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(if (accepted) heroGradient(palette) else Brush.linearGradient(listOf(KnockBg, KnockBg)))
+            .drawWithContent {
+                drawContent()
+                if (menuSystemBarAlpha > 0f) {
+                    drawRect(menuTopBar.copy(alpha = menuSystemBarAlpha), size = Size(size.width, statusBarHeight))
+                    drawRect(menuBottomBar.copy(alpha = menuSystemBarAlpha), topLeft = Offset(0f, size.height - navigationBarHeight),
+                        size = Size(size.width, navigationBarHeight))
+                }
+            }
             .safeDrawingPadding(),
     ) {
-        val contentWidth = (maxWidth - 48.dp).coerceAtLeast(1.dp)
-        val heroTop = 104.dp
-        val heroHeight = (maxHeight - heroTop - 240.dp).coerceAtLeast(1.dp)
+        val screenWidth = maxWidth
+        val screenHeight = maxHeight
+        var originalHeight by remember { mutableStateOf(maxHeight) }
+        if (!editingHeroName && originalHeight != maxHeight) SideEffect { originalHeight = maxHeight }
+        val layoutHeight = if (editingHeroName) originalHeight else screenHeight
+        val contentWidth = (screenWidth - 48.dp).coerceAtLeast(1.dp)
+        val heroTop by animateDpAsState(layoutHeight * if (heroPickerExpanded) .235f else .15f,
+            tween(240, easing = MascotEase), label = "hero screen top")
+        val heroHeight by animateDpAsState((layoutHeight * if (heroPickerExpanded) .50f else .60f).coerceAtLeast(1.dp),
+            tween(240, easing = MascotEase), label = "hero screen height")
+        val heroWidth by animateDpAsState(screenWidth * if (heroPickerExpanded) .99f else 1.22f,
+            tween(240, easing = MascotEase), label = "hero screen width")
+        val headingTop by animateDpAsState(layoutHeight * if (heroPickerExpanded) .115f else .155f,
+            tween(240, easing = MascotEase), label = "hero heading top")
+        val chatBottom = screenHeight * .041f
+        val quoteBottom = chatBottom + 50.dp + screenHeight * .06f
         val density = LocalDensity.current
-        if (accepted && heroReady && !visualHeroLoading) {
-            HeroSpaceGrid(palette, { phoneInteraction.pose },
-                Modifier.align(Alignment.TopCenter).padding(top = heroTop)
-                    .size(width = maxWidth, height = heroHeight + 24.dp))
-        }
+        Box(Modifier.fillMaxSize().blur(menuBlur)) {
         if (!accepted) {
             Image(
                 painter = painterResource(if (showWaiting) R.drawable.figma_waiting_bg else R.drawable.figma_mascot_bg),
@@ -549,14 +670,44 @@ fun KnockHeroScreen(
                     .padding(top = if (heroReady) 78.dp else 180.dp, start = 24.dp, end = 24.dp),
             )
         } else {
-            MascotTopBar(displayName, modifier = Modifier.align(Alignment.TopCenter),
-                lightTitle = true, onTitleClick = if (navigationReady && !heroPickerExpanded && visualMascotId == mascotId) onAnimations else null,
-                leading = { AnimatedVisibility(visible = !heroPickerExpanded && visualMascotId == mascotId, enter = fadeIn(), exit = fadeOut()) {
-                    MascotTopAction(Icons.Rounded.ChatBubbleOutline, "Открыть чат", onChat, navigationReady && !heroLoading && !heroPickerExpanded && visualMascotId == mascotId, light = true)
-                } },
-                trailing = { AnimatedVisibility(visible = !heroPickerExpanded && visualMascotId == mascotId, enter = fadeIn(), exit = fadeOut()) {
-                    MascotTopAction(Icons.Rounded.PictureInPictureAlt, "Герой поверх приложений", onOverlaySettings, navigationReady && !heroLoading && !heroPickerExpanded && visualMascotId == mascotId, light = true)
-                } })
+            val nameModifier = Modifier.align(Alignment.TopCenter).zIndex(2f)
+                .padding(top = headingTop, start = 24.dp, end = 24.dp).fillMaxWidth()
+            if (editingHeroName) HomeNameEditor(heroNameDraft, { heroNameDraft = it }, ::saveEditedName, heroNameFocus, nameModifier)
+            else HomeHeading(displayName, nameModifier.then(if (heroPickerExpanded) Modifier.mascotClickable(
+                enabled = visualMascotId != null, onClickLabel = "Изменить имя", onClick = ::beginNameEditing) else Modifier))
+            AnimatedVisibility(visible = !heroPickerExpanded,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 32.dp, end = 28.dp).zIndex(2f),
+                enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                HomeSettingsButton(onClick = { showHomeSettings = true }, enabled = navigationReady)
+            }
+            AnimatedVisibility(visible = heroPickerExpanded && !editingHeroName,
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 15.dp, top = 33.dp).zIndex(2f),
+                enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                Box(Modifier.size(48.dp).mascotClickable(onClickLabel = "Назад") {
+                    pickerSelectedId = mascotId; heroPickerExpanded = false
+                }, contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-back", null, size = 24.dp) }
+            }
+            AnimatedVisibility(visible = heroPickerExpanded && !editingHeroName,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 32.dp, end = 28.dp).zIndex(2f),
+                enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                Box(Modifier.size(50.dp).clip(CircleShape)
+                    .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = .06f), Color.White.copy(alpha = .4f))))
+                    .border(2.dp, Color.White.copy(alpha = .16f), CircleShape)
+                    .mascotClickable(enabled = navigationReady && !heroLoading, onClickLabel = "Анимации героя") {
+                        heroPickerExpanded = false; onAnimations(visualMascotId)
+                    }, contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-grid", null, size = 24.dp) }
+            }
+            AnimatedVisibility(visible = heroPickerExpanded,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = layoutHeight * .19f).zIndex(3f),
+                enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Color(0xff222222))
+                    .mascotClickable(enabled = visualMascotId != null && (!editingHeroName || heroNameDraft.text.isNotBlank()),
+                        onClickLabel = if (editingHeroName) "Сохранить имя" else "Изменить имя") {
+                        if (editingHeroName) saveEditedName() else beginNameEditing()
+                    }, contentAlignment = Alignment.Center) {
+                    HomeFigmaIcon(if (editingHeroName) "hero-confirm" else "hero-edit", null, size = if (editingHeroName) 18.dp else 19.dp)
+                }
+            }
         }
         Canvas(Modifier.fillMaxSize()) {
             val t = now
@@ -638,7 +789,8 @@ fun KnockHeroScreen(
                 .testTag("hero-interaction")
                 .align(if (accepted) Alignment.TopCenter else Alignment.Center)
                 .then(if (accepted) Modifier.padding(top = heroTop) else Modifier)
-                .size(width = contentWidth, height = if (accepted) heroHeight else maxHeight * .52f)
+                .then(if (accepted) Modifier.requiredSize(width = heroWidth, height = heroHeight)
+                    else Modifier.size(width = contentWidth, height = screenHeight * .52f))
                 .graphicsLayer {
                     val movement = phoneInteraction.pose.artwork(hasPreparedPhysics)
                     scaleX = heroPressScale * movement.scaleX
@@ -715,18 +867,29 @@ fun KnockHeroScreen(
                 dragX = dragX,
                 dragY = dragY,
             )
-            if (visualHeroLoading) {
+            if (visualHeroLoading && !visualPreviewUrl.isNullOrBlank()) {
+                Box(heroModifier) {
+                    GroundedHeroArtwork(visualPreviewUrl, Modifier.fillMaxSize()) {
+                        AsyncImage(model = resolveMediaUrl(visualPreviewUrl), contentDescription = "Герой",
+                            contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    }
+                    CircularProgressIndicator(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp).size(20.dp),
+                        color = Color.White.copy(alpha = .75f), strokeWidth = 2.dp)
+                }
+            } else if (visualHeroLoading) {
                 HeroAnimationLoader(modifier = heroModifier)
             } else if (accepted && visualMascotId != mascotId) {
                 // Carousel previews switch immediately, but stay as one still.
                 // Starting a decoder for every item crossed during a swipe made
                 // old and new Android video surfaces overlap and feel stuck.
-                AsyncImage(
-                    model = resolveMediaUrl(visualPreviewUrl),
-                    contentDescription = "Предпросмотр $displayName",
-                    contentScale = ContentScale.Fit,
-                    modifier = heroModifier,
-                )
+                GroundedHeroArtwork(visualPreviewUrl, heroModifier) {
+                    AsyncImage(
+                        model = resolveMediaUrl(visualPreviewUrl),
+                        contentDescription = "Предпросмотр $displayName",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             } else if (accepted && (visualVideoUrls.isNotEmpty() || !visualAnimationVideoUrl.isNullOrBlank())) {
                 // Recreate the complete player subtree when the carousel changes
                 // hero. Reusing AndroidView here leaves the previous neutral image
@@ -734,19 +897,6 @@ fun KnockHeroScreen(
                 // can be visible at once.
                 key(visualMascotId) {
                     Box(heroModifier) {
-                        // Multi-action packs already carry a keyed neutral anchor
-                        // inside SoraMascotVideo. Keeping the preview still beneath
-                        // the transparent footage produces a second silhouette when
-                        // the authored poses differ. Retain the fallback only for
-                        // legacy single-video characters which have no anchor.
-                        if (visualVideoUrls.isEmpty() && !hasPreparedPhysics) {
-                            AsyncImage(
-                                model = resolveMediaUrl(visualPreviewUrl),
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
                         PhysicsMascot(
                             mascotId = visualMascotId ?: mascotId.orEmpty(),
                             videoUrls = visualVideoUrls,
@@ -760,21 +910,31 @@ fun KnockHeroScreen(
                             onPhysicsActive = { hasPreparedPhysics = it },
                             playbackEnabled = visible,
                             modifier = Modifier.fillMaxSize(),
-                        ) { SoraMascotVideo(
-                            videoUrl = visualAnimationVideoUrl,
-                            lighting = phoneInteraction.lighting,
-                            videoUrls = visualVideoUrls,
-                            onAnimationVisible = onAnimationVisible,
-                            onOneShotFinished = onOneShotFinished,
-                            neutralFrameUrl = visualNeutralFrameUrl,
-                            action = stateKey ?: "idle",
-                            interaction = interaction,
-                            playbackEnabled = visible,
-                            modifier = Modifier.fillMaxSize(),
-                        ) }
+                        ) {
+                            GroundedHeroArtwork(visualNeutralFrameUrl ?: visualPreviewUrl, Modifier.fillMaxSize()) {
+                                // Legacy footage has no built-in neutral still.
+                                // Its underlay shares the exact same floor transform.
+                                if (visualVideoUrls.isEmpty()) {
+                                    AsyncImage(model = resolveMediaUrl(visualPreviewUrl), contentDescription = null,
+                                        contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                                }
+                                SoraMascotVideo(
+                                    videoUrl = visualAnimationVideoUrl,
+                                    lighting = phoneInteraction.lighting,
+                                    videoUrls = visualVideoUrls,
+                                    onAnimationVisible = onAnimationVisible,
+                                    onOneShotFinished = onOneShotFinished,
+                                    neutralFrameUrl = visualNeutralFrameUrl,
+                                    action = stateKey ?: "idle",
+                                    interaction = interaction,
+                                    playbackEnabled = visible,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                        }
                     }
                 }
-            } else PngSequence(
+            } else GroundedHeroArtwork(visualPreviewUrl, heroModifier, enabled = accepted) { PngSequence(
                 frames = if (accepted) visualFrames else emptyList(),
                 fps = animationFps,
                 decodeSize = 500,
@@ -783,15 +943,59 @@ fun KnockHeroScreen(
                 puppetAction = stateKey ?: "content",
                 interaction = interaction,
                 contentDescription = "Герой",
-                modifier = heroModifier,
+                modifier = Modifier.fillMaxSize(),
                 playbackEnabled = visible,
-            )
+            ) }
         }
         if (!accepted) {
             Box(
                 Modifier.matchParentSize().pointerInput(Unit) {
                     detectTapGestures { offset -> onKnock.value(offset.x, offset.y) }
                 },
+            )
+        }
+        if (accepted && heroPickerExpanded && !editingHeroName && heroLibrary.size > 1) {
+            // Use the same carousel state as the thumbnails, so dragging the
+            // character and dragging the strip always select the same hero.
+            Box(
+                Modifier.align(Alignment.TopCenter)
+                    .padding(top = layoutHeight * .21f)
+                    .fillMaxWidth()
+                    .height(layoutHeight * .55f)
+                    .zIndex(1f)
+                    .testTag("hero-picker-swipe-area")
+                    .pointerInput(heroPickerExpanded, heroLibrary.map { it.id }) {
+                        var startIndex = -1
+                        var totalDrag = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = {
+                                startIndex = heroLibrary.indexOfFirst { it.id == pickerSelectedId }
+                                totalDrag = 0f
+                            },
+                            onHorizontalDrag = { change, amount ->
+                                change.consume()
+                                totalDrag += amount
+                                heroStrip.dispatchRawDelta(-amount)
+                            },
+                            onDragEnd = {
+                                val info = heroStrip.layoutInfo
+                                val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+                                val nearest = info.visibleItemsInfo
+                                    .filter { item -> heroLibrary.any { it.id == item.key } }
+                                    .minByOrNull { item -> kotlin.math.abs(item.offset + item.size / 2 - center) }
+                                val nearestIndex = heroLibrary.indexOfFirst { it.id == nearest?.key }
+                                val base = startIndex.coerceIn(0, heroLibrary.lastIndex)
+                                val target = if (nearestIndex == base && kotlin.math.abs(totalDrag) >= 32.dp.toPx()) {
+                                    base + if (totalDrag < 0f) 1 else -1
+                                } else if (nearestIndex >= 0) nearestIndex else base
+                                menuScope.launch { heroStrip.animateScrollToItem(target.coerceIn(0, heroLibrary.lastIndex) + 1) }
+                            },
+                            onDragCancel = {
+                                val index = heroLibrary.indexOfFirst { it.id == pickerSelectedId }
+                                if (index >= 0) menuScope.launch { heroStrip.animateScrollToItem(index + 1) }
+                            },
+                        )
+                    },
             )
         }
         if (!accepted && !heroReady && !showWaiting && error == null) {
@@ -847,42 +1051,31 @@ fun KnockHeroScreen(
             }
         }
         if (accepted) {
-            if (!heroPickerExpanded) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 128.dp)
-                        .size(width = contentWidth, height = 112.dp)
-                        .testTag("hero-quote")
-                        .clip(RoundedCornerShape(32.dp))
-                        .background(Color.White.copy(alpha = .32f))
-                        .border(2.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(32.dp)),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.quote_mark_vector),
-                        contentDescription = null,
-                        tint = palette.top,
-                        modifier = Modifier.size(width = 22.dp, height = 13.dp),
-                    )
-                    Text(
-                        currentLine,
-                        color = palette.top.copy(alpha = .88f),
-                        fontFamily = SbSansDisplayMedium,
-                        fontSize = 16.sp,
-                        lineHeight = 20.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
-                    )
-                }
+            val showOffer = !offerDismissed && !visualHeroLoading && visualMascotId == mascotId
+            fun dismissOffer() {
+                offerDismissed = true
+                offerPreferences.edit().putBoolean(mascotId.orEmpty(), true).apply()
+            }
+            AnimatedVisibility(visible = !heroPickerExpanded,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = quoteBottom),
+                enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = MascotEase)) { it / 6 },
+                exit = fadeOut(tween(120))) {
+                HomeQuoteCard(
+                    line = if (showOffer) "Давай расширим мои возможности" else currentLine,
+                    palette = palette, offer = showOffer,
+                    onAcceptOffer = { dismissOffer(); onCapabilities() },
+                    onDismissOffer = ::dismissOffer,
+                    modifier = Modifier.size(width = screenWidth * .817f,
+                        height = if (showOffer) (screenHeight * .18f).coerceIn(120.dp, 144.dp)
+                        else (screenHeight * .14f).coerceIn(96.dp, 112.dp)).testTag("hero-quote"),
+                )
             }
             AnimatedVisibility(
-                visible = heroPickerExpanded,
+                visible = heroPickerExpanded && !editingHeroName,
                 modifier = Modifier.align(Alignment.BottomCenter)
-                    .padding(bottom = 94.dp)
+                    .padding(bottom = screenHeight * .153f)
                     .width(contentWidth)
-                    .height(112.dp),
+                    .height(80.dp),
                 enter = fadeIn(tween(150)) + slideInVertically(tween(220, easing = MascotEase)) { it / 3 },
                 exit = fadeOut(tween(100)) + slideOutVertically(tween(160, easing = MascotEase)) { it / 4 },
             ) {
@@ -896,7 +1089,16 @@ fun KnockHeroScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     flingBehavior = rememberSnapFlingBehavior(lazyListState = heroStrip),
                 ) {
-                    items(heroLibrary, key = { it.id }) { hero ->
+                    item(key = "add-new-hero") {
+                        Box(Modifier.width(itemWidth).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            Box(Modifier.offset(y = 12.dp).size(54.dp).clip(CircleShape)
+                                .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = .06f), Color.White.copy(alpha = .4f))))
+                                .border(2.dp, Color.White.copy(alpha = .16f), CircleShape)
+                                .mascotClickable(enabled = navigationReady && !heroLoading, onClickLabel = "Создать нового героя", onClick = onNewHero),
+                                contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-plus", null, size = 24.dp) }
+                        }
+                    }
+                    itemsIndexed(heroLibrary, key = { _, hero -> hero.id }) { index, hero ->
                         val layoutInfo = heroStrip.layoutInfo
                         val itemInfo = layoutInfo.visibleItemsInfo.firstOrNull { it.key == hero.id }
                         val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
@@ -906,7 +1108,7 @@ fun KnockHeroScreen(
                         val distance = ((itemCenter - viewportCenter) / halfViewport).coerceIn(-1f, 1f)
                         val focus = 1f - kotlin.math.abs(distance)
                         val depthScale by animateFloatAsState(
-                            targetValue = .72f + focus * .28f,
+                            targetValue = .93f + focus * .07f,
                             animationSpec = tween(90, easing = MascotEase),
                             label = "hero carousel depth",
                         )
@@ -916,13 +1118,13 @@ fun KnockHeroScreen(
                         ) {
                             HeroThumbnail(
                                 hero,
-                                Modifier.size(68.dp)
+                                Modifier.size(58.dp)
                                     .graphicsLayer {
                                         scaleX = depthScale
                                         scaleY = depthScale
                                         translationY = (1f - focus) * 15.dp.toPx()
                                         rotationY = -distance * 15f
-                                        alpha = .44f + focus * .56f
+                                        alpha = .55f + focus * .45f
                                     cameraDistance = 18f * density.density
                                     }
                                     .border(
@@ -933,9 +1135,7 @@ fun KnockHeroScreen(
                                     )
                                     .mascotClickable(onClickLabel = "Выбрать ${hero.name ?: "героя"}") {
                                         if (!heroStrip.isScrollInProgress) {
-                                            pickerSelectedId = hero.id
-                                            if (hero.id != mascotId) onSelectHero(hero.id)
-                                            heroPickerExpanded = false
+                                            menuScope.launch { heroStrip.animateScrollToItem(index + 1) }
                                         }
                                     },
                             )
@@ -943,77 +1143,20 @@ fun KnockHeroScreen(
                     }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 30.dp),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AnimatedVisibility(visible = !heroPickerExpanded, enter = fadeIn(), exit = fadeOut()) {
-                    Box(
-                        Modifier.size(54.dp).clip(CircleShape)
-                            .background(Color.White.copy(alpha = .30f))
-                            .border(2.dp, Color.White.copy(alpha = .46f), CircleShape)
-                            .mascotClickable(
-                                enabled = navigationReady,
-                                onClickLabel = "Эмоции героя",
-                                onClick = {
-                                    welcomeRequestId?.let(onConsumeWelcome)
-                                    onAnimations()
-                                },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Rounded.SentimentSatisfiedAlt,
-                            "Эмоции героя",
-                            tint = palette.top.copy(alpha = .82f),
-                            modifier = Modifier.size(26.dp),
-                        )
-                    }
-                }
-                Box(
-                    Modifier.size(62.dp).clip(CircleShape)
-                        .background(
-                            if (heroPickerExpanded) palette.top.copy(alpha = .82f)
-                            else Color.White.copy(alpha = .30f),
-                        )
-                        .border(2.dp, Color.White.copy(alpha = .46f), CircleShape)
-                        .mascotClickable(
-                            enabled = navigationReady && !heroLoading,
-                            onClickLabel = if (heroPickerExpanded) "Выбрать героя" else "Мои герои",
-                            onClick = {
-                                welcomeRequestId?.let(onConsumeWelcome)
-                                if (heroPickerExpanded) {
-                                    pickerSelectedId?.takeIf { it != mascotId }?.let(onSelectHero)
-                                    heroPickerExpanded = false
-                                } else {
-                                    pickerSelectedId = mascotId
-                                    heroPickerExpanded = true
-                                }
-                            },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (heroPickerExpanded) Icons.Rounded.Check else Icons.Rounded.Groups,
-                        contentDescription = if (heroPickerExpanded) "Выбрать героя" else "Открыть моих героев",
-                        tint = if (heroPickerExpanded) Color.White else palette.top.copy(alpha = .82f),
-                        modifier = Modifier.size(28.dp),
-                    )
-                }
-                AnimatedVisibility(visible = !heroPickerExpanded, enter = fadeIn(), exit = fadeOut()) {
-                    MascotSmallCircleAction(
-                        icon = Icons.Rounded.Add,
-                        label = "Создать нового героя",
-                        onClick = onNewHero,
-                        background = Color.White.copy(alpha = .30f),
-                        borderColor = Color.White.copy(alpha = .46f),
-                        tint = palette.top.copy(alpha = .82f),
-                        enabled = navigationReady && !heroLoading,
-                    )
-                }
+            AnimatedVisibility(visible = !heroPickerExpanded,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = chatBottom),
+                enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = MascotEase)) { it / 6 },
+                exit = fadeOut(tween(120))) {
+                HomeChatButton(onClick = onChat, enabled = navigationReady)
+            }
+            AnimatedVisibility(visible = heroPickerExpanded && !editingHeroName,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = screenHeight * .066f),
+                enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                Box(Modifier.size(50.dp).clip(CircleShape).background(Color(0xff222222))
+                    .mascotClickable(enabled = navigationReady && !heroLoading, onClickLabel = "Выбрать героя") {
+                        pickerSelectedId?.takeIf { it != mascotId }?.let(onSelectHero)
+                        heroPickerExpanded = false
+                    }, contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-confirm", null, size = 18.dp) }
             }
         }
         if (error != null && !greetingInterrupted) {
@@ -1040,18 +1183,42 @@ fun KnockHeroScreen(
                 )
             }
         }
+        }
+        val menuEase = CubicBezierEasing(.23f, 1f, .32f, 1f)
+        AnimatedVisibility(
+            visible = accepted && showHomeSettings,
+            enter = fadeIn(tween(220, easing = menuEase)),
+            exit = fadeOut(tween(180, easing = menuEase)),
+            modifier = Modifier.fillMaxSize().zIndex(3f),
+        ) {
+            HomeSettingsMenu(
+                onClose = { closeHomeSettings() },
+                onHeroes = { closeHomeSettings { pickerSelectedId = mascotId; heroPickerExpanded = true } },
+                onAnimations = { closeHomeSettings { onAnimations(mascotId) } },
+                onOverlay = { closeHomeSettings(onOverlaySettings) },
+                onBehavior = { closeHomeSettings(onBehavior) },
+                onCapabilities = { closeHomeSettings(onCapabilities) },
+                onPinWidget = { closeHomeSettings(onPinWidget) },
+                onDelete = { closeHomeSettings(onDeleteHero) },
+                contentModifier = Modifier.animateEnterExit(
+                    enter = fadeIn(tween(220, easing = menuEase)) +
+                        slideInVertically(tween(220, easing = menuEase)) { it.coerceAtMost(24) },
+                    exit = fadeOut(tween(160, easing = menuEase)) +
+                        slideOutVertically(tween(180, easing = menuEase)) { it.coerceAtMost(16) },
+                ),
+            )
+        }
     }
     if (greetingInterrupted) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Приветствие прервалось") },
-            text = { Text(error ?: "Герой и готовые результаты сохранены. Можно продолжить прежнее задание.") },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = onResumeGreeting) { Text("Продолжить") }
-            },
-            dismissButton = {
-                androidx.compose.material3.TextButton(onClick = onDeferGreeting) { Text("Пока без приветствия") }
-            },
+        MascotConfirmationSheet(
+            title = "Приветствие прервалось",
+            message = error ?: "Герой и готовые результаты сохранены. Можно продолжить прежнее задание.",
+            confirmLabel = "Продолжить",
+            dismissLabel = "Пока без приветствия",
+            dismissible = false,
+            enabled = greetingCanResume,
+            onConfirm = onResumeGreeting,
+            onDismiss = onDeferGreeting,
         )
     }
 

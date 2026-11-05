@@ -35,14 +35,14 @@ internal val personalityOrbAssets = mapOf(
     "direct" to PersonalityOrbAsset(R.drawable.personality_direct, R.raw.personality_direct_motion),
     "friendly" to PersonalityOrbAsset(R.drawable.personality_friendly, R.raw.personality_friendly_motion),
     "concise" to PersonalityOrbAsset(R.drawable.personality_concise, R.raw.personality_concise_motion),
-    "expert" to PersonalityOrbAsset(R.drawable.personality_expert),
-    "socratic" to PersonalityOrbAsset(R.drawable.personality_socratic),
-    "strategic" to PersonalityOrbAsset(R.drawable.personality_strategic),
-    "mentor" to PersonalityOrbAsset(R.drawable.personality_mentor),
-    "skeptic" to PersonalityOrbAsset(R.drawable.personality_skeptic),
-    "humorous" to PersonalityOrbAsset(R.drawable.personality_humorous),
+    "expert" to PersonalityOrbAsset(R.drawable.personality_expert, R.raw.personality_expert_motion),
+    "socratic" to PersonalityOrbAsset(R.drawable.personality_socratic, R.raw.personality_socratic_motion),
+    "strategic" to PersonalityOrbAsset(R.drawable.personality_strategic, R.raw.personality_strategic_motion),
+    "mentor" to PersonalityOrbAsset(R.drawable.personality_mentor, R.raw.personality_mentor_motion),
+    "skeptic" to PersonalityOrbAsset(R.drawable.personality_skeptic, R.raw.personality_skeptic_motion),
+    "humorous" to PersonalityOrbAsset(R.drawable.personality_humorous, R.raw.personality_humorous_motion),
     "executive" to PersonalityOrbAsset(R.drawable.personality_executive, R.raw.personality_executive_motion),
-    "intellectual" to PersonalityOrbAsset(R.drawable.personality_intellectual),
+    "intellectual" to PersonalityOrbAsset(R.drawable.personality_intellectual, R.raw.personality_intellectual_motion),
 )
 
 /** One muted player for the selected, settled row; the still stays underneath until a frame is ready. */

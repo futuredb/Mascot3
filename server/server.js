@@ -784,6 +784,24 @@ const server = http.createServer(async (req, res) => {
       if (!mascot) return send(res, 404, { detail: "mascot_not_found" });
       const action = mascotMatch[2];
       if (req.method === "GET" && !action) return send(res, 200, mascotDto(mascot));
+      if (req.method === "DELETE" && !action) {
+        if (mascot.status !== "READY" || mascot.stages?.animations === "running" || animationWorkers.has(mascot.id) || animationStartLocks.has(mascot.id)) {
+          return send(res, 409, { detail: "mascot_generation_in_progress" });
+        }
+        const previousActive = [...mascots.values()].find((item) => item.active);
+        mascots.delete(mascot.id);
+        if (mascot.active) {
+          const next = [...mascots.values()].find((item) => item.acceptedAt && item.status === "READY");
+          if (next) next.active = true;
+        }
+        try { await saveMascots(); }
+        catch (error) {
+          for (const item of mascots.values()) item.active = item === previousActive;
+          mascots.set(mascot.id, mascot);
+          throw error;
+        }
+        return send(res, 200, { status: "deleted" });
+      }
       if (req.method === "PATCH" && !action) {
         const body = await readBody(req);
         mascot.name = cleanText(body.name, 50, "name", false) || mascot.name;

@@ -24,6 +24,15 @@ class OverlayLaunchActivity : ComponentActivity() {
                 finish()
                 return@launch
             }
+            if (OverlaySession.hero(this@OverlayLaunchActivity) == null) {
+                val prepared = try { com.generativemascot.app.physics.PhysicsStore(this@OverlayLaunchActivity).load(requireNotNull(id)) != null }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+                if (prepared && runCatching { com.generativemascot.app.widget.WidgetDepthService.reactFromWidget(this@OverlayLaunchActivity) }.isSuccess) {
+                    finish()
+                    return@launch
+                }
+            }
             fun showHero() {
                 runCatching { MascotOverlayService.showFromWidget(this@OverlayLaunchActivity, requireNotNull(id)) }
                     .onFailure { Toast.makeText(this@OverlayLaunchActivity, "Не удалось показать героя. Попробуйте ещё раз.", Toast.LENGTH_LONG).show() }

@@ -82,6 +82,7 @@ class MascotApp : Application(), ImageLoaderFactory {
                     listAssets = { path -> assets.list(path).orEmpty() },
                     openAsset = { path -> assets.open(path) },
                     destinationRoot = File(filesDir, "hero"),
+                    isDeleted = heroStore::isDeleted,
                 ).importAll()
                 bundledHeroesImported = true
             }

@@ -3,7 +3,7 @@ package com.generativemascot.app.data
 /** The chosen type and communication style stay attached to a generated hero. */
 data class CharacterCreationChoice(
     val type: String, val style: String,
-    val positionX: Float? = null, val positionY: Float? = null,
+    val positionX: Float? = null, val positionY: Float? = null, val referencePath: String? = null,
 ) {
     init {
         require(type in setOf("person", "creature", "animal"))

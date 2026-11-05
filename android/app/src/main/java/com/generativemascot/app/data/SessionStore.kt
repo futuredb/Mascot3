@@ -44,6 +44,17 @@ class SessionStore(private val context: Context) {
         }
     }
 
+    suspend fun replaceDeletedMascot(deletedId: String, nextId: String?) {
+        context.dataStore.edit {
+            if (it[mascotId] == deletedId) {
+                if (nextId == null) it.remove(mascotId) else it[mascotId] = nextId
+            }
+            if (it[acceptedMascotId] == deletedId) {
+                if (nextId == null) it.remove(acceptedMascotId) else it[acceptedMascotId] = nextId
+            }
+        }
+    }
+
     suspend fun acceptedMascotId(): String? = context.dataStore.data.map { it[acceptedMascotId] }.first()
 
     suspend fun saveCurrentState(stateKey: String) {

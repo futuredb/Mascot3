@@ -13,7 +13,7 @@ fun heroFlowContentKey(state: AppUiState): String = when (state.route) {
 /** Synchronous tap feedback, before disk/network work. This does not enqueue any job. */
 internal fun AppUiState.withGreetingStarted(): AppUiState = copy(
     route = "knock", mascot = mascot?.copy(status = "READY"), context = null,
-    busy = true, creating = true, greetingPending = true, newCreationFlow = false, error = null,
+    busy = true, creating = true, greetingPending = true, greetingCanResume = true, newCreationFlow = false, error = null,
     generationLabel = "Готовим приветствие — одну анимацию…",
     animationBatchActions = listOf("greeting"),
 )

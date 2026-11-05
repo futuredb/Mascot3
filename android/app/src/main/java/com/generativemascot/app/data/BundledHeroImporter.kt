@@ -11,11 +11,13 @@ internal class BundledHeroImporter(
     private val listAssets: (String) -> Array<out String>,
     private val openAsset: (String) -> InputStream,
     private val destinationRoot: File,
+    private val isDeleted: (String) -> Boolean = { false },
 ) {
     fun importAll() {
         val assetRoot = "bundled-heroes"
         childrenOf(assetRoot).sorted().forEach { heroId ->
             require(heroId.matches(Regex("[A-Za-z0-9-]{1,80}"))) { "Invalid bundled hero ID: $heroId" }
+            if (isDeleted(heroId)) return@forEach
             val source = "$assetRoot/$heroId"
             check("base.png" in childrenOf(source)) { "Bundled hero has no base image: $heroId" }
             copyTree(source, File(destinationRoot, heroId))

@@ -6,12 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PersonalityOrbAssetTest {
-    @Test fun everyPersonalityHasItsOwnBackgroundAndOnlySuppliedLoopsAreMapped() {
+    @Test fun everyPersonalityHasItsOwnBackgroundAndSuppliedLoop() {
         assertEquals(characterPersonalities.map { it.id }.toSet(), personalityOrbAssets.keys)
         assertEquals(12, personalityOrbAssets.values.map { it.image }.toSet().size)
-        assertEquals(setOf("neutral", "direct", "friendly", "concise", "executive"),
+        assertEquals(characterPersonalities.map { it.id }.toSet(),
             personalityOrbAssets.filterValues { it.video != null }.keys)
-        assertEquals(5, personalityOrbAssets.values.mapNotNull { it.video }.toSet().size)
+        assertEquals(12, personalityOrbAssets.values.mapNotNull { it.video }.toSet().size)
         assertTrue(personalityOrbAssets.values.all { it.image != 0 })
     }
 }

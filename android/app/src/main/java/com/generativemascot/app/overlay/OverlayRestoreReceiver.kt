@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 class OverlayRestoreReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        com.generativemascot.app.widget.WidgetDepthService.startIfPresent(context)
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED && context.applicationContext is MascotApp) {
             // Replace old launcher PendingIntents too; no new video preparation or generation.
             val pending = goAsync()

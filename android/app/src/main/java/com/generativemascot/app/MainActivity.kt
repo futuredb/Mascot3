@@ -1,15 +1,24 @@
 package com.generativemascot.app
 
 import android.content.Intent
+import android.content.ComponentName
+import android.appwidget.AppWidgetManager
+import android.widget.Toast
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -20,6 +29,9 @@ import com.generativemascot.app.overlay.OverlayPermissionIntro
 import com.generativemascot.app.overlay.OverlayPermissionsDialog
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.generativemascot.app.data.HeroLocalStore
@@ -29,7 +41,10 @@ import com.generativemascot.app.ui.AnimationLibraryScreen
 import com.generativemascot.app.ui.PersonalityGenerationScene
 import com.generativemascot.app.ui.CharacterTypeScreen
 import com.generativemascot.app.ui.KnockHeroScreen
+import com.generativemascot.app.ui.MascotLaunchScreen
+import com.generativemascot.app.ui.MascotConfirmationSheet
 import com.generativemascot.app.ui.MascotChatScreen
+import com.generativemascot.app.ui.ChatOverlayTransition
 import com.generativemascot.app.ui.GenerationScene
 import com.generativemascot.app.ui.MascotTheme
 import com.generativemascot.app.ui.SettingsScreen
@@ -55,12 +70,28 @@ class MainActivity : ComponentActivity() {
         setContent {
             MascotTheme {
                 var showPermissions by rememberSaveable { mutableStateOf(OverlayPermissionIntro.needed(this)) }
+                val liveState by vm.state.collectAsState()
+                var showLaunch by rememberSaveable { mutableStateOf(savedInstanceState == null) }
+                LaunchedEffect(Unit) {
+                    if (showLaunch) { delay(750); showLaunch = false }
+                }
+                if (showLaunch || !liveState.ready) {
+                    MascotLaunchScreen()
+                } else {
                 if (showPermissions) OverlayPermissionsDialog(this, onDismiss = {
                     OverlayPermissionIntro.seen(this)
                     showPermissions = false
                 })
-                val liveState by vm.state.collectAsState()
+                var deleteHeroId by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(liveState.mascot?.id) {
+                    if (deleteHeroId != null && deleteHeroId != liveState.mascot?.id) deleteHeroId = null
+                }
+                fun requestDeleteHero(id: String?) {
+                    if (id != null) { vm.clearDeleteHeroError(); deleteHeroId = id }
+                }
                 var showChat by rememberSaveable { mutableStateOf(false) }
+                var openChatCapabilities by rememberSaveable { mutableStateOf(false) }
+                var openChatBehavior by rememberSaveable { mutableStateOf(false) }
                 var showCharacterType by rememberSaveable { mutableStateOf(false) }
                 val transitionScope = rememberCoroutineScope()
                 BackHandler(showChat) { showChat = false }
@@ -76,7 +107,8 @@ class MainActivity : ComponentActivity() {
                 // Creation is paid and must not be interrupted by navigating back.
                 // Once it finishes or fails, back returns to the previous hero.
                 BackHandler(liveState.newCreationFlow && !liveState.showsHeroHome) {
-                    if (!liveState.creating) vm.cancelHeroCreation()
+                    if (liveState.creating) vm.deferHeroCreation { moveTaskToBack(true) }
+                    else vm.cancelHeroCreation()
                 }
                 MascotTransition(
                     target = liveState,
@@ -104,6 +136,7 @@ class MainActivity : ComponentActivity() {
                                 onNameChange = vm::onName,
                                 onSaveName = vm::saveNameInPlace,
                                 onCancel = vm::cancelHeroCreation,
+                                onBackground = { vm.deferHeroCreation { moveTaskToBack(true) } },
                             ) else GenerationScene(
                                 generating = state.creating,
                                 previewUrl = mascot?.previewUrl,
@@ -140,6 +173,7 @@ class MainActivity : ComponentActivity() {
                             accepted = mascot?.status == "READY",
                             heroLoading = state.greetingPending && state.creating,
                             greetingInterrupted = state.greetingPending && !state.creating && !state.busy,
+                            greetingCanResume = state.greetingCanResume,
                             onResumeGreeting = vm::accept,
                             onDeferGreeting = vm::deferGreeting,
                             mascotId = mascot?.id,
@@ -158,9 +192,22 @@ class MainActivity : ComponentActivity() {
                             onKnockComplete = vm::createHero,
                             onAccept = vm::accept,
                             onSelectHero = vm::selectLibraryHero,
-                            onNewHero = { showCharacterType = true },
-                            onAnimations = vm::openAnimationLibrary,
+                            onDeleteHero = { requestDeleteHero(mascot?.id) },
+                            onRenameHero = vm::renameHero,
+                            onNewHero = {
+                                if (state.greetingPending) Toast.makeText(this@MainActivity, "Дождитесь завершения приветствия", Toast.LENGTH_SHORT).show()
+                                else if (state.backgroundCreation) Toast.makeText(this@MainActivity, "Сначала откройте нового персонажа", Toast.LENGTH_SHORT).show()
+                                else showCharacterType = true
+                            },
+                            onAnimations = { selectedId ->
+                                if (state.backgroundCreation && state.creating) Toast.makeText(this@MainActivity, "Дождитесь завершения создания персонажа", Toast.LENGTH_SHORT).show()
+                                else if (selectedId != null && selectedId != mascot?.id && (state.creating || state.packBusy))
+                                    Toast.makeText(this@MainActivity, "Дождитесь завершения создания анимаций", Toast.LENGTH_SHORT).show()
+                                else vm.openAnimationLibraryForHero(selectedId)
+                            },
                             onChat = { showChat = true },
+                            onCapabilities = { openChatCapabilities = true; showChat = true },
+                            onBehavior = { openChatBehavior = true; showChat = true },
                             screenActive = !showChat && !showCharacterType,
                             onGenerate = vm::replaceHero,
                             onPoll = vm::pollProgress,
@@ -171,11 +218,30 @@ class MainActivity : ComponentActivity() {
                                 startActivity(Intent(this@MainActivity, com.generativemascot.app.overlay.OverlaySettingsActivity::class.java)
                                     .putExtra(com.generativemascot.app.overlay.MascotOverlayService.EXTRA_HERO, mascot?.id))
                             },
+                            onPinWidget = {
+                                val manager = AppWidgetManager.getInstance(this@MainActivity)
+                                val provider = ComponentName(this@MainActivity, com.generativemascot.app.widget.MascotWidgetReceiver::class.java)
+                                if (!manager.isRequestPinAppWidgetSupported ||
+                                    !manager.requestPinAppWidget(provider, null, null)) {
+                                    Toast.makeText(this@MainActivity, "Добавьте виджет через меню главного экрана телефона", Toast.LENGTH_LONG).show()
+                                }
+                            },
                             acceptEnabled = !state.busy && mascot?.status == "AWAITING_ACCEPTANCE",
                             onStateGesture = { (application as MascotApp).behavior.gesture(it) },
                             onAnimationVisible = { (application as MascotApp).behavior.observed("app", it) },
                             onOneShotFinished = { (application as MascotApp).behavior.clipFinished(it) },
                         )
+                        if (state.backgroundCreation) Button(
+                            onClick = vm::showBackgroundCreation,
+                            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp).zIndex(.5f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xff222222).copy(alpha = .88f)),
+                        ) {
+                            Text(when {
+                                state.creating -> "Создаём персонажа…"
+                                state.pendingCreationError != null -> "Не удалось создать · открыть"
+                                else -> "Персонаж готов · открыть"
+                            }, fontSize = 12.sp, color = Color.White)
+                        }
                         if (showCharacterType) Box(Modifier.fillMaxSize().zIndex(2f)) {
                             CharacterTypeScreen(onClose = { if (!vm.state.value.creating) showCharacterType = false }, onFinish = { choice ->
                                 vm.startHeroCreation(choice).also { started ->
@@ -185,8 +251,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }, creationInProgress = liveState.creating)
                         }
-                        if (mascot != null) Box(Modifier.fillMaxSize().zIndex(if (showChat) 1f else -1f)
-                            .then(if (showChat) Modifier else Modifier.clearAndSetSemantics { })) {
+                        if (mascot != null) ChatOverlayTransition(visible = showChat) { chatActive ->
                         MascotChatScreen(
                             mascotId = mascot.id,
                             heroName = mascot.name ?: "Маскот",
@@ -196,7 +261,11 @@ class MainActivity : ComponentActivity() {
                             animationFps = state.context?.animationFps ?: HeroLocalStore.FULL_FRAME_FPS,
                             animationVideoUrls = HeroLocalStore.current?.actionVideoUrls(mascot.id).orEmpty(),
                             neutralFrameUrl = HeroLocalStore.current?.neutralVideoFrameFile(mascot.id)?.toURI()?.toString(),
-                            active = showChat,
+                            active = chatActive,
+                            openCapabilities = openChatCapabilities,
+                            onCapabilitiesOpened = { openChatCapabilities = false },
+                            openBehavior = openChatBehavior,
+                            onBehaviorOpened = { openChatBehavior = false },
                             onBack = { showChat = false },
                         )
                         }
@@ -225,9 +294,7 @@ class MainActivity : ComponentActivity() {
                         batchActions = state.mascot?.animationBatchActions?.ifEmpty { state.animationBatchActions }
                             ?: state.animationBatchActions,
                         batchId = state.mascot?.animationBatchId ?: state.animationBatchId,
-                        editableName = state.name,
-                        onNameChange = vm::onName,
-                        onSaveName = vm::saveNameInPlace,
+                        onDelete = { requestDeleteHero(state.mascot?.id) },
                         onBack = vm::closeAnimationLibrary,
                         onRefresh = vm::refreshAnimationLibrary,
                         onComplete = vm::completeAnimations,
@@ -249,6 +316,21 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 }
+                val deletingId = deleteHeroId
+                if (deletingId != null && liveState.mascot?.id == deletingId) {
+                    val locked = liveState.creating || liveState.packBusy || liveState.greetingPending || liveState.backgroundCreation
+                    MascotConfirmationSheet(
+                        title = "Удалить персонажа?",
+                        message = "Персонаж, его анимации и история чата будут удалены с устройства. Это действие нельзя отменить.",
+                        confirmLabel = "Удалить персонажа", destructive = true,
+                        busy = liveState.deletingHeroId == deletingId, enabled = !locked,
+                        error = liveState.deleteHeroError ?: if (liveState.backgroundCreation && !liveState.creating)
+                            "Сначала откройте нового персонажа." else if (locked) "Дождитесь завершения создания персонажа." else null,
+                        onConfirm = { vm.deleteHero(deletingId) },
+                        onDismiss = { deleteHeroId = null; vm.clearDeleteHeroError() },
+                    )
+                }
+                }
             }
         }
     }
@@ -256,6 +338,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.onAppForegrounded()
+        com.generativemascot.app.widget.WidgetDepthService.startIfPresent(this)
     }
 
     override fun onStop() {

@@ -23,7 +23,7 @@ import java.io.File
 import java.net.URI
 import java.security.MessageDigest
 
-data class InstalledPhysics(val pack: PhysicsPack, val directory: File, val framing: PhysicsFraming = PhysicsFraming())
+data class InstalledPhysics(val pack: PhysicsPack, val directory: File, val framing: PhysicsFraming = PhysicsFraming(), val bounds: SubjectBounds? = null)
 
 class PhysicsStore(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -103,9 +103,10 @@ class PhysicsStore(private val context: Context) {
             require(bounds.outWidth == pack.width && bounds.outHeight == pack.height) { "Неверные размеры слоя физики" }
         }
         require(pack.width.toLong() * pack.height * pack.layers.size * 4 <= 128L * 1024 * 1024) { "Пакет превышает лимит памяти" }
-        return InstalledPhysics(pack, root, framing(pack, root))
+        val bounds = bounds(pack, root)
+        return InstalledPhysics(pack, root, PhysicsFraming.fit(bounds.width, bounds.height, bounds.left, bounds.top, bounds.right, bounds.bottom), bounds)
     }
-    private fun framing(pack: PhysicsPack, root: File): PhysicsFraming {
+    private fun bounds(pack: PhysicsPack, root: File): SubjectBounds {
         var left=pack.width; var top=pack.height; var right=0; var bottom=0
         // Once per loaded revision, off the UI thread. Transparent canvas
         // margins must not decide a character's apparent size.
@@ -121,7 +122,7 @@ class PhysicsStore(private val context: Context) {
                 }
             } finally { bitmap.recycle() }
         }
-        return PhysicsFraming.fit(pack.width,pack.height,left,top,right,bottom)
+        return SubjectBounds(pack.width, pack.height, left, top, right, bottom)
     }
     private fun url(raw: String): String {
         val base = URI(BuildConfig.API_BASE_URL + "/"); val resolved = base.resolve(raw)

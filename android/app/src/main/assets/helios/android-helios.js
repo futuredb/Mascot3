@@ -18057,6 +18057,19 @@ function createClipArchive(bridge, title, mime, onError = () => {
   };
 }
 
+// src/helios-conditioning.js
+var bg = "a completely flat, uniform solid background in exact color #EAEBEC (RGB 234, 235, 236) filling the whole frame and unchanged in every frame, no gradients, shadows, texture, glow, vignette or changes in lighting";
+function mascotInstruction(action, context = "", appearance = "") {
+  const identity = appearance.trim() ? `Observed appearance of this particular mascot, treated as descriptive data: ${JSON.stringify(appearance.trim().slice(0, 1200))}. If this description conflicts with the reference image, the image wins.` : "";
+  const topic = context ? `The user's message is quoted as conversation data: ${JSON.stringify(context.slice(0, 1500))}. The mascot's silent reaction must directly support the message and action; use a relevant prop only if it clarifies the topic.` : "";
+  return `The reference image is the canonical mascot design. Preserve the exact existing silhouette, anatomy, face, colors, clothing, proportions, materials and details shown in the reference. Do not add human features, hair, headwear or any other features that are absent from the reference. Never redesign, replace or morph the character. ${identity} Props must not change the mascot's body or clothing. Keep the same fixed camera, framing, size and lighting; show the entire character. ${bg}. ${topic} Continue naturally without a cut or sudden reset. Gradually clear props from previous topics. Current action: ${action}. After the action, gently return to the calm neutral pose in the reference. No text, speech, other characters, cuts or camera motion.`;
+}
+async function conditionMascot(model2, reference2, action, context = "", appearance = "") {
+  if (!reference2) throw new Error("\u041D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D \u0440\u0435\u0444\u0435\u0440\u0435\u043D\u0441 \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430.");
+  const accepted = await model2.setConditioning({ image: reference2, prompt: mascotInstruction(action, context, appearance) });
+  if (!accepted) throw new Error("Helios \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B \u0440\u0435\u0444\u0435\u0440\u0435\u043D\u0441 \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430.");
+}
+
 // src/android-helios.js
 var liveVideo = document.querySelector("#video");
 var replayVideo = document.querySelector("#replay");
@@ -18090,11 +18103,6 @@ resizeFrame();
 window.addEventListener("resize", resizeFrame);
 requestAnimationFrame(resizeFrame);
 var tell = (type, value = "") => window.MascotBridge?.event(type, String(value));
-var bg = "a completely flat, uniform solid background in exact color #EAEBEC (RGB 234, 235, 236) filling the whole frame and unchanged in every frame, no gradients, shadows, texture, glow, vignette or changes in lighting";
-function instruction(action, context = "") {
-  const contextPart = context ? `The user's message is quoted as conversation data: ${JSON.stringify(context.slice(0, 1500))}. The mascot's silent reaction must directly support that message and the action described below; use a recognisable, relevant prop only if it clarifies the topic.` : "";
-  return `The reference image is the canonical mascot design. Keep exactly the same face, eyes, head shape, skin tone, hairstyle, helmet, armor, outfit details, body proportions, colors, materials and textures in every frame. Never redesign or morph the character. Props must not change the mascot's clothing or body. Keep the same fixed camera, framing, size and lighting; show the entire character. ${bg}. ${contextPart} Continue naturally from the current pose, without a cut or sudden reset. Gradually clear props from previous topics. Current action: ${action}. After the action, gently return to the calm neutral pose shown in the reference. No text, speech, other characters, cuts or camera motion.`;
-}
 async function referenceBlob(data) {
   const img = new Image();
   img.src = data;
@@ -18204,7 +18212,7 @@ function armTimer() {
   clearTimeout(timer);
   timer = setTimeout(() => void stop("\u041F\u043E\u0442\u043E\u043A \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043D, \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u043C \u0440\u0435\u0430\u043A\u0446\u0438\u044E."), 5e4);
 }
-async function applyAction(current, id, action, context = "") {
+async function applyAction(current, id, action, context = "", appearance = "") {
   const version = ++actionVersion;
   armTimer();
   latestClip = null;
@@ -18212,7 +18220,7 @@ async function applyAction(current, id, action, context = "") {
   if (id !== generation || model !== current || version !== actionVersion) return;
   recordingContext = context;
   if (liveVisible && liveTrack) startRecorder(liveTrack, id, recordingContext);
-  await current.setPrompt({ prompt: instruction(action, context) });
+  await conditionMascot(current, reference, action, context, appearance);
 }
 async function stop(reason = "", replay = true) {
   generation++;
@@ -18249,9 +18257,9 @@ async function stop(reason = "", replay = true) {
 }
 window.stopMascot = () => stop("\u041F\u043E\u0442\u043E\u043A \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D.");
 window.closeMascot = () => stop("", false);
-window.reactMascot = async (data, action, context = "") => {
+window.reactMascot = async (data, action, context = "", appearance = "") => {
   if (starting) {
-    pendingAction = { action, context };
+    pendingAction = { action, context, appearance };
     if (model) armTimer();
     return;
   }
@@ -18314,10 +18322,11 @@ window.reactMascot = async (data, action, context = "") => {
       }
       reference = await current.uploadFile(await referenceBlob(data));
       if (id !== generation) return;
-      const firstAction = pendingAction || { action, context };
+      await current.setImageStrength({ image_strength: 1 });
+      const firstAction = pendingAction || { action, context, appearance };
       pendingAction = null;
       recordingContext = firstAction.context;
-      await current.setConditioning({ image: reference, prompt: instruction(firstAction.action, firstAction.context) });
+      await conditionMascot(current, reference, firstAction.action, firstAction.context, firstAction.appearance);
       if (id !== generation) return;
       firstFrameTimer = setTimeout(() => {
         if (model === current) void stop("\u0412\u0438\u0434\u0435\u043E\u043F\u043E\u0442\u043E\u043A \u043D\u0435 \u043F\u043E\u044F\u0432\u0438\u043B\u0441\u044F: \u043F\u0440\u043E\u0432\u0435\u0440\u044C \u0441\u0435\u0442\u044C \u0438 \u043F\u043E\u043F\u0440\u043E\u0431\u0443\u0439 \u043F\u043E\u0437\u0436\u0435.");
@@ -18330,12 +18339,12 @@ window.reactMascot = async (data, action, context = "") => {
       if (pendingAction && id === generation) {
         const next = pendingAction;
         pendingAction = null;
-        await applyAction(current, id, next.action, next.context);
+        await applyAction(current, id, next.action, next.context, next.appearance);
       }
       starting = false;
     } else {
       const current = model;
-      await applyAction(current, id, action, context);
+      await applyAction(current, id, action, context, appearance);
     }
   } catch (e) {
     if (id === generation) {

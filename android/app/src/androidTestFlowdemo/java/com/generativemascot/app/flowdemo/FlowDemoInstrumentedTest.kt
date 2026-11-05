@@ -127,6 +127,40 @@ class FlowDemoInstrumentedTest {
         compose.onNodeWithTag("hero-quote").assertIsDisplayed()
     }
 
+    @Test fun swipingTheCharacterOpensThePreviewedHerosAnimationLibrary() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = java.io.File(context.cacheDir, "carousel-swipe-test.png")
+        context.assets.open("bundled-heroes/716cdb43-703b-4d7e-8a79-27f03d92b99c/base.png").use { input ->
+            file.outputStream().use { input.copyTo(it) }
+        }
+        val heroes = listOf(
+            HeroLibraryItem("fixture-a", "Аким", baseStill = file.toURI().toString()),
+            HeroLibraryItem("fixture-b", "Марс", baseStill = file.toURI().toString()),
+        )
+        var openedFor: String? = null
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MascotTheme {
+                    KnockHeroScreen(generating = false, previewUrl = file.toURI().toString(), error = null,
+                        accepted = true, mascotId = "fixture-a", heroName = "Аким", heroLibrary = heroes,
+                        onStateGesture = {}, onAnimations = { openedFor = it },
+                        onKnockComplete = { error("No paid generation in carousel test") },
+                        onAccept = {}, onPoll = {}, acceptEnabled = false)
+                }
+            }
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasContentDescription("Открыть моих героев") and isEnabled())
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Открыть моих героев").performClick()
+        compose.waitUntil(5_000) { compose.onNodeWithTag("hero-picker-swipe-area").isDisplayed() }
+        compose.onNodeWithTag("hero-picker-swipe-area").performTouchInput { swipeLeft() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("МАРС").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Анимации героя").performClick()
+        compose.runOnIdle { assertEquals("fixture-b", openedFor) }
+    }
+
     /** Production state transitions/rendering; fake callbacks and a bundled still only. */
     @Test fun productionAcceptanceImmediatelyShowsHomeAndLoader() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

@@ -6,6 +6,8 @@ dist/
 server-data/
 android/.gradle/
 android/.kotlin/
+android/.idea/
+android/build/
 android/local.properties
 android/app/build/
 pipeline/characters/*

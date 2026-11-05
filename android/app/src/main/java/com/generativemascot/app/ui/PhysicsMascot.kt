@@ -136,18 +136,24 @@ private fun PhysicsPlayback(
     LaunchedEffect(interaction.spinSerial) { if (interaction.spinSerial > 0) request("dancing") }
     LaunchedEffect(interaction.danceSerial) { if (interaction.danceSerial > 0) request("dancing") }
     fun ended() { phase = PhysicsPhase.RETURNING; settleToken++ }
-    Box(Modifier.fillMaxSize().graphicsLayer {
-        val framing = installed.framing
-        val fittedWidth = minOf(size.width / installed.pack.width, size.height / installed.pack.height) * installed.pack.width
-        scaleX = framing.scale; scaleY = framing.scale
-        translationX = framing.offsetX * fittedWidth; translationY = framing.offsetY * fittedWidth
-    }) {
+    // The generated video uses a newly cropped square reference. Its subject
+    // bounds are not the bounds of the original image used by the depth mesh.
+    val videoGrounding = rememberHeroGrounding(neutralFrameUrl)
+    Box(Modifier.fillMaxSize()) {
         AndroidView(
             // TextureView must be consumed while the neutral frame is prepared.
             // An alpha-zero parent can stop SurfaceTexture consumption, blocking
             // eglSwapBuffers and the callback that is meant to reveal physics.
             // The final video frame remains above it until onSettled fires.
-            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible && phase == PhysicsPhase.VIDEO) 0f else 1f },
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                val framing = installed.bounds?.fit(size.width, size.height)
+                val fittedWidth = minOf(size.width / installed.pack.width, size.height / installed.pack.height) * installed.pack.width
+                scaleX = framing?.scale ?: installed.framing.scale
+                scaleY = framing?.scale ?: installed.framing.scale
+                translationX = framing?.translationX ?: installed.framing.offsetX * fittedWidth
+                translationY = framing?.translationY ?: installed.framing.offsetY * fittedWidth
+                alpha = if (videoVisible && phase == PhysicsPhase.VIDEO) 0f else 1f
+            },
             factory = { ctx -> PhysicsView(ctx, installed, sharedMotion = phoneMotion, sharedLighting = lighting).also { view ->
                 physicsView = view
                 if (!view.sensorsAvailable) failureCallback("На устройстве недоступны датчики движения")
@@ -175,7 +181,15 @@ private fun PhysicsPlayback(
         val current = playing
         if (current != null) {
             key(current, playbackSerial) {
-                val videoModifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (videoVisible) 1f else 0f }
+                val videoModifier = Modifier.fillMaxSize().graphicsLayer {
+                    val framing = (videoGrounding?.bounds() ?: installed.bounds)?.fit(size.width, size.height)
+                    val fittedWidth = minOf(size.width / installed.pack.width, size.height / installed.pack.height) * installed.pack.width
+                    scaleX = framing?.scale ?: installed.framing.scale
+                    scaleY = framing?.scale ?: installed.framing.scale
+                    translationX = framing?.translationX ?: installed.framing.offsetX * fittedWidth
+                    translationY = framing?.translationY ?: installed.framing.offsetY * fittedWidth
+                    alpha = if (videoVisible) 1f else 0f
+                }
                 if (current == "sleeping") {
                     SoraMascotVideo(videoUrls = urls, neutralFrameUrl = neutralFrameUrl, lighting = lighting,
                         action = if (waking) "idle" else "sleeping", modifier = videoModifier, playbackEnabled = playbackEnabled,

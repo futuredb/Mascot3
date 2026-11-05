@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +66,26 @@ private val actionDescriptions = mapOf(
 )
 
 @Composable
+private fun AnimationLibraryTopBar(title: String, onBack: () -> Unit, onDelete: () -> Unit, canDelete: Boolean) {
+    Box(Modifier.fillMaxWidth().height(104.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 52.dp).offset(y = 18.dp),
+            contentAlignment = Alignment.Center) {
+            val name = title.uppercase()
+            Text(name, fontFamily = SbSansDisplayExtendedSemibold, fontWeight = FontWeight.SemiBold,
+                fontSize = homeHeadingFontSize(name, constraints.maxWidth, maxSize = 34f),
+                maxLines = 1, textAlign = TextAlign.Center, color = Color.Black)
+        }
+        Box(Modifier.align(Alignment.CenterStart).size(48.dp)
+            .mascotClickable(onClickLabel = "Назад", onClick = onBack), contentAlignment = Alignment.Center) {
+            HomeFigmaIcon("library-back", null, size = 24.dp)
+        }
+        Box(Modifier.align(Alignment.CenterEnd).size(48.dp)
+            .mascotClickable(enabled = canDelete, onClickLabel = "Удалить персонажа", onClick = onDelete),
+            contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-delete", null, size = 24.dp) }
+    }
+}
+
+@Composable
 fun AnimationLibraryScreen(
     mascotId: String?,
     animations: Map<String, List<String>>,
@@ -80,9 +101,7 @@ fun AnimationLibraryScreen(
     generationError: String?,
     batchActions: List<String>,
     batchId: String?,
-    editableName: String,
-    onNameChange: (String) -> Unit,
-    onSaveName: () -> Unit,
+    onDelete: () -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onComplete: (Int) -> Unit,
@@ -104,8 +123,6 @@ fun AnimationLibraryScreen(
             delay(10_000)
         }
     }
-    var editingName by rememberSaveable(mascotId) { mutableStateOf(false) }
-    var nameDraft by rememberSaveable(mascotId) { mutableStateOf("") }
     val context = LocalContext.current
     val receiptPrefs = remember(context) {
         context.getSharedPreferences("mascot_ui_receipts", Context.MODE_PRIVATE)
@@ -186,8 +203,7 @@ fun AnimationLibraryScreen(
                 Modifier.fillMaxSize().background(FigmaCanvas).safeDrawingPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                MascotTopBar(displayName, onBack = onBack,
-                    trailing = { MascotTopAction(Icons.Rounded.Edit, "Изменить имя", { nameDraft = displayName; editingName = true }) })
+                AnimationLibraryTopBar(displayName, onBack = onBack, onDelete = onDelete, canDelete = mascotId != null)
                 if (showStatusBanner) {
                     Spacer(Modifier.height(16.dp))
                     Box(Modifier.padding(horizontal = 24.dp)) {
@@ -220,7 +236,7 @@ fun AnimationLibraryScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp).clipToBounds(),
-                    contentPadding = PaddingValues(vertical = 32.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
@@ -279,35 +295,25 @@ fun AnimationLibraryScreen(
                             Spacer(Modifier.height(12.dp))
                             Text(stateTitle(stateKey), fontFamily = SbSansDisplayMedium, fontSize = 13.sp,
                                 color = FigmaInk, textAlign = TextAlign.Center)
-                            Text(
-                                when {
-                                    cardStatus == AnimationCardStatus.READY -> "Готово · можно смотреть"
-                                    cardStatus == AnimationCardStatus.WORKING -> "В работе…"
-                                    cardStatus == AnimationCardStatus.QUEUED -> "В очереди"
-                                    cardStatus == AnimationCardStatus.PROCESSING -> "Ожидаем результат"
-                                    cardStatus == AnimationCardStatus.SAVING -> "Сохраняется…"
-                                    cardStatus == AnimationCardStatus.PAUSED -> "Ожидает продолжения"
-                                    available -> "Превью · видео ещё не создано"
-                                    else -> "Ещё не создано"
-                                },
-                                color = FigmaInk.copy(alpha = if (available) .58f else .40f),
-                                fontSize = 11.sp,
-                                textAlign = TextAlign.Center,
-                            )
+                            val status = when (cardStatus) {
+                                AnimationCardStatus.WORKING -> "В работе…"
+                                AnimationCardStatus.QUEUED -> "В очереди"
+                                AnimationCardStatus.PROCESSING -> "Ожидаем результат"
+                                AnimationCardStatus.SAVING -> "Сохраняется…"
+                                AnimationCardStatus.PAUSED -> "Ожидает продолжения"
+                                else -> null
+                            }
+                            if (status != null) Text(status, color = FigmaInk.copy(alpha = .52f),
+                                fontSize = 11.sp, textAlign = TextAlign.Center)
                         }
                     }
                 }
                 if (!packReady && mascotId != null) {
-                    Text(
-                        when {
-                            (inProgress || syncing) && readyCount > 0 -> "Готовые анимации уже можно смотреть"
-                            inProgress -> "Первый ролик ещё в работе — он появится здесь"
-                            syncing -> "Получаем первые готовые ролики на телефон"
-                            else -> "Готово $readyCount из $ANIMATION_PACK_SIZE · осталось ${progress.remainingCount}"
-                        },
-                        color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(8.dp))
+                    if (inProgress || syncing) {
+                        Text(if (syncing) "Сохраняем анимации" else "Создаём анимации",
+                            color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Button(
                         onClick = {
                             if (greetingRequiresResume) onResumeGreeting() else {
@@ -317,33 +323,24 @@ fun AnimationLibraryScreen(
                         }, enabled = !inProgress && !syncing && progress.remainingCount > 0,
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(48.dp),
+                        contentPadding = PaddingValues(horizontal = 28.dp),
+                        modifier = Modifier.widthIn(max = 320.dp).height(50.dp),
                     ) {
                         Text(
                             when {
                                 greetingRequiresResume -> "Продолжить приветствие"
-                                inProgress -> "Создаём: $batchReadyCount из ${selectedBatch.size} готовы"
-                                syncing -> "Сохраняем: $readyCount из $ANIMATION_PACK_SIZE"
-                                interrupted -> "Продолжить · осталось ${progress.remainingCount}"
+                                inProgress -> "Создаём анимации"
+                                syncing -> "Сохраняем анимации"
+                                interrupted -> "Продолжить"
                                 else -> "Оживить персонажа"
-                            },
-                            fontFamily = SbSansDisplayMedium,
+                            }.uppercase(),
+                            fontFamily = SbSansDisplayBold, fontWeight = FontWeight.Bold, fontSize = 13.4.sp,
                         )
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
-    }
-    if (editingName) {
-        AlertDialog(
-            onDismissRequest = { editingName = false },
-            title = { Text("Имя персонажа") },
-            text = { OutlinedTextField(value = nameDraft, onValueChange = { nameDraft = it }, singleLine = true,
-                label = { Text("Имя") }, modifier = Modifier.fillMaxWidth()) },
-            confirmButton = { TextButton(onClick = { onNameChange(nameDraft.trim()); onSaveName(); editingName = false }, enabled = nameDraft.isNotBlank()) { Text("Сохранить") } },
-            dismissButton = { TextButton(onClick = { editingName = false }) { Text("Отмена") } },
-        )
     }
     if (confirmPack && progress.remainingCount > 0) {
         AlertDialog(
@@ -351,7 +348,7 @@ fun AnimationLibraryScreen(
             title = { Text("Сколько анимаций создать?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Готово $readyCount из $ANIMATION_PACK_SIZE · можно добавить ${progress.remainingCount}")
+                    Text("Выберите количество анимаций для создания")
                     Text("$selectedCount", style = MaterialTheme.typography.headlineLarge,
                         modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     if (progress.remainingCount > 1) {

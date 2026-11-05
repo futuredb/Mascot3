@@ -92,6 +92,7 @@ class HeroLocalStore(context: Context) {
         require(Regex("^[A-Za-z0-9_-]{1,80}$").matches(mascotId))
         val editor = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
             .putString("$mascotId:type", choice.type).putString("$mascotId:style", choice.style)
+            .putString("$mascotId:reference", choice.referencePath)
         if (choice.positionX != null && choice.positionY != null) {
             editor.putFloat("$mascotId:x", choice.positionX).putFloat("$mascotId:y", choice.positionY)
         } else {
@@ -106,7 +107,7 @@ class HeroLocalStore(context: Context) {
         val style = prefs.getString("$mascotId:style", null) ?: return null
         val x = if (prefs.contains("$mascotId:x")) prefs.getFloat("$mascotId:x", .5f) else null
         val y = if (prefs.contains("$mascotId:y")) prefs.getFloat("$mascotId:y", .5f) else null
-        return runCatching { CharacterCreationChoice(type, style, x, y) }.getOrNull()
+        return runCatching { CharacterCreationChoice(type, style, x, y, prefs.getString("$mascotId:reference", null)) }.getOrNull()
     }
 
     fun mascotName(mascotId: String): String? = synchronized(nameFileLock) {
@@ -238,6 +239,13 @@ class HeroLocalStore(context: Context) {
         claimVideoSubmission(File(appContext.filesDir, "generation-requests"), requestToken, action)
     }
 
+    internal fun videoSubmissionStarted(requestToken: String, action: String): Boolean {
+        if (!requestToken.matches(Regex("[A-Za-z0-9-]{1,80}"))) return false
+        val normalized = normalizeVideoAction(action)
+        if (normalized !in LIBRARY_VIDEO_ACTIONS) return false
+        return File(appContext.filesDir, "generation-requests/$requestToken.$normalized.started").isFile
+    }
+
     internal fun saveAnimationBatch(mascotId: String, batchId: String, actions: List<String>) {
         val selected = validateAnimationBatch(actions)
         check(appContext.getSharedPreferences("animation_batches", Context.MODE_PRIVATE).edit()
@@ -289,6 +297,12 @@ class HeroLocalStore(context: Context) {
         destination
     }
 
+    internal fun animationPromptRecord(mascotId: String, action: String): AnimationPromptRecord? =
+        runCatching {
+            val file = File(root, "$mascotId/creative/animations/${normalizeVideoAction(action)}.prompt.json")
+            file.takeIf { it.isFile }?.readText()?.let { json.decodeFromString<AnimationPromptRecord>(it) }
+        }.getOrNull()
+
     suspend fun saveActionVideo(
         mascotId: String,
         action: String,
@@ -317,6 +331,18 @@ class HeroLocalStore(context: Context) {
             destination.writeText(json.encodeToString(qa))
             destination
         }
+
+    internal fun rejectedVideoQa(mascotId: String, action: String): VideoClipQa? = runCatching {
+        val normalized = normalizeVideoAction(action)
+        val videoDirectory = File(root, "$mascotId/videos")
+        val hasSavedVideo = File(videoDirectory, "rejected").listFiles().orEmpty().any {
+            it.isFile && it.name.startsWith("$normalized-") && it.name.endsWith(".mp4") && it.length() > 1024
+        }
+        if (!hasSavedVideo) return@runCatching null
+        val qaFile = File(videoDirectory, "$normalized.qa.json")
+        qaFile.takeIf { it.isFile }?.readText()?.let { json.decodeFromString<VideoClipQa>(it) }
+            ?.takeUnless { it.hardPass }
+    }.getOrNull()
 
     suspend fun quarantineActionVideo(
         mascotId: String,
@@ -426,8 +452,25 @@ class HeroLocalStore(context: Context) {
         destination
     }
 
+    fun isDeleted(mascotId: String): Boolean =
+        appContext.getSharedPreferences("deleted_heroes", Context.MODE_PRIVATE).getBoolean(mascotId, false)
+
+    suspend fun deleteMascot(mascotId: String) = syncMutex.withLock {
+        withContext(Dispatchers.IO) {
+            require(mascotId.matches(Regex("[A-Za-z0-9_-]{1,80}"))) { "Некорректный персонаж" }
+            check(appContext.getSharedPreferences("deleted_heroes", Context.MODE_PRIVATE)
+                .edit().putBoolean(mascotId, true).commit()) { "Не удалось сохранить удаление" }
+            val directory = File(root, mascotId)
+            check(!directory.exists() || directory.deleteRecursively()) { "Не удалось удалить файлы персонажа" }
+            val choices = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
+            listOf("type", "style", "reference", "x", "y").forEach { choices.remove("$mascotId:$it") }
+            choices.apply()
+            appContext.getSharedPreferences("mascot_chat_history", Context.MODE_PRIVATE).edit().remove(mascotId).apply()
+        }
+    }
+
     fun localMascotIds(): List<String> = root.listFiles { file ->
-        file.isDirectory && File(file, "base.png").isFile
+        file.isDirectory && !isDeleted(file.name) && File(file, "base.png").isFile
     }?.sortedByDescending { File(it, "base.png").lastModified() }?.map { it.name }.orEmpty()
 
     suspend fun saveGeneratedBase(mascotId: String, png: ByteArray): File = withContext(Dispatchers.IO) {
@@ -1038,7 +1081,8 @@ class HeroLocalStore(context: Context) {
         return pack.parts.mapNotNull { (role, asset) -> fileFor(asset.url)?.let { role to it } }.toMap()
     }
 
-    suspend fun sync(api: MascotApi, mascotId: String) = withContext(Dispatchers.IO) {
+    suspend fun sync(api: MascotApi, mascotId: String) = syncMutex.withLock { withContext(Dispatchers.IO) {
+        if (isDeleted(mascotId)) return@withContext
         val manifest = runCatching { api.manifest(mascotId) }.getOrNull() ?: return@withContext
         val jobs = buildList {
             manifest.base?.let { add(it.url to it.sha256) }
@@ -1070,7 +1114,7 @@ class HeroLocalStore(context: Context) {
             metadata.writeText(json.encodeToString(pack))
         }
         manifest.physicsPack?.let { com.generativemascot.app.physics.PhysicsStore(appContext).enqueueInstall(mascotId, it) }
-    }
+    } }
 
     private fun unpackSpriteAtlas(mascotId: String, pack: SpritePackDto) {
         if (!pack.productionEligible || pack.approval != "approved") return
@@ -1117,6 +1161,7 @@ class HeroLocalStore(context: Context) {
     }
 
     companion object {
+        private val syncMutex = Mutex()
         private val nameFileLock = Any()
         val EXPRESSION_STATES = listOf(
             "acquaintance", "working", "sleeping", "thinking", "bored", "rainy",

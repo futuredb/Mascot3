@@ -11,6 +11,14 @@ if (!server || new URL(server).protocol!=='https:' || new URL(server).username |
 }
 if (!existsSync(join(homedir(),'.android/debug.keystore'))) throw Error('Existing team signing identity is missing.');
 const env={...process.env,ORG_GRADLE_PROJECT_MASCOT3_SERVER_URL:server};
+// A blank inherited Gradle property overrides the valid .env fallback. Treat
+// that case as absent; a supplied key is passed through the environment only.
+if (!env.ORG_GRADLE_PROJECT_MASCOT3_OPENROUTER_API_KEY?.trim()) {
+    delete env.ORG_GRADLE_PROJECT_MASCOT3_OPENROUTER_API_KEY;
+}
+if (process.env.MASCOT3_OPENROUTER_API_KEY?.trim()) {
+    env.ORG_GRADLE_PROJECT_MASCOT3_OPENROUTER_API_KEY=process.env.MASCOT3_OPENROUTER_API_KEY;
+}
 if (process.env.MASCOT3_CLIENT_TOKEN) env.ORG_GRADLE_PROJECT_MASCOT3_CLIENT_TOKEN=process.env.MASCOT3_CLIENT_TOKEN;
 if (process.env.MASCOT3_TEST_JAVA_HOME) env.ORG_GRADLE_PROJECT_MASCOT3_TEST_JAVA_HOME=process.env.MASCOT3_TEST_JAVA_HOME;
 console.log('Building update-compatible APK, lint and offline unit tests with the existing team certificate.');

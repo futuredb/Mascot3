@@ -30,6 +30,7 @@ internal fun PersonalityGenerationScene(
     generating: Boolean, previewUrl: String?, heroName: String?, nameDraft: String, error: String?,
     acceptEnabled: Boolean, onGenerate: () -> Unit, onRegenerate: () -> Unit, onAccept: () -> Unit,
     onNameChange: (String) -> Unit, onSaveName: () -> Unit, onCancel: () -> Unit,
+    onBackground: () -> Unit,
 ) {
     var editingName by remember { mutableStateOf(false) }
     val ready = !previewUrl.isNullOrBlank() && !generating
@@ -60,6 +61,13 @@ internal fun PersonalityGenerationScene(
                 Button(onClick = onAccept, enabled = acceptEnabled, colors = ButtonDefaults.buttonColors(containerColor = FigmaInk)) {
                     Icon(Icons.Rounded.Check, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("ОСТАВИМ")
                 }
+            }
+        }
+        if (generating && !ready) {
+            Box(Modifier.offset(x = sx * 336, y = sy * 47).size(48.dp)
+                .mascotClickable(onClickLabel = "Свернуть ожидание", onClick = onBackground),
+                contentAlignment = Alignment.Center) {
+                HomeFigmaIcon("creation-close", null, size = 15.dp)
             }
         }
         if (!generating && (ready || error != null)) {

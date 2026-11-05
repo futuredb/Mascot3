@@ -4,7 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class ChatMessage(val user: Boolean, val text: String)
+internal data class ChatMessage(val user: Boolean, val text: String, val imagePath: String? = null, val capabilities: Boolean = false)
 
 /** Conversations stay on this device and are isolated by saved character ID. */
 internal class ChatHistoryStore(context: Context) {
@@ -16,14 +16,15 @@ internal class ChatHistoryStore(context: Context) {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 val text = row.optString("text")
-                if (text.isNotBlank() && row.has("user")) add(ChatMessage(row.optBoolean("user"), text))
+                if (row.has("user") && (text.isNotBlank() || row.optString("imagePath").isNotBlank() || row.optBoolean("capabilities")))
+                    add(ChatMessage(row.optBoolean("user"), text, row.optString("imagePath").takeIf { it.isNotBlank() }, row.optBoolean("capabilities")))
             }
         }
     }.getOrDefault(emptyList())
 
     fun write(heroId: String, messages: List<ChatMessage>) {
         val rows = JSONArray()
-        messages.forEach { rows.put(JSONObject().put("user", it.user).put("text", it.text)) }
+        messages.forEach { rows.put(JSONObject().put("user", it.user).put("text", it.text).put("imagePath", it.imagePath).put("capabilities", it.capabilities)) }
         preferences.edit().putString(heroId, rows.toString()).apply()
     }
 }

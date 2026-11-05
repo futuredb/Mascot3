@@ -37,6 +37,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.DERIVED_SLEEP_START_MS
+import com.generativemascot.app.data.DERIVED_SLEEP_END_MS
 import java.net.URI
 import java.util.WeakHashMap
 import com.generativemascot.app.physics.TiltLighting
@@ -49,11 +51,11 @@ private const val CROSSFADE_MS = 360L
 private const val REACTION_HANDOFF_MS = 90L
 private const val PREPARE_BEFORE_END_MS = 500L
 private const val TRANSITION_BEFORE_END_MS = 220L
-private const val SEAMLESS_SWAP_BEFORE_END_MS = 350L
+// Closed sleep clips have matching endpoints: swap on the last frame, not
+// hundreds of milliseconds early. At 24 fps this covers one frame interval.
+private const val CLOSED_LOOP_SWAP_BEFORE_END_MS = 40L
 private const val SLEEP_ANCHOR_MS = 6_000L
 private const val DERIVED_SLEEP_ANCHOR_MS = 2_100L
-private const val DERIVED_SLEEP_START_MS = 1_600L
-private const val DERIVED_SLEEP_END_MS = 4_400L
 private const val SLEEP_HANDOFF_PRELOAD_MS = 700L
 private const val SLEEP_HANDOFF_CROSSFADE_MS = 360L
 private const val SLEEP_LOOP_MARKER = "sleep-loop-ready"
@@ -296,6 +298,9 @@ fun SoraMascotVideo(
         var currentAction = requestedAction
         var oneShotBoundaryReportedAt: Long? = null
         val matteTunings = mutableMapOf<String, GreenMatteTuning>()
+        val closedSleepSeams = mutableMapOf<String, Boolean>()
+        val verifiedGeneratedSeams = mutableMapOf<String, Boolean>()
+        val verifiedGeneratedSleepSeams = mutableMapOf<String, Boolean>()
         // Start at zero instead of copying requestSerial: a detail screen can
         // request its action before the players finish initializing.
         var consumedSerial = 0
@@ -339,6 +344,21 @@ fun SoraMascotVideo(
             val binding=lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }
             val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl) }
                 .also { matteTunings[url] = it }
+            if (actionName == "sleep_loop" && !derivedSleepLoop && url !in closedSleepSeams) {
+                closedSleepSeams[url] = withContext(Dispatchers.IO) {
+                    hasClosedLoopSeam(mediaUri(url), backgroundKeys[actionName] ?: Color.rgb(232, 244, 252))
+                }
+            }
+            if (actionName != "sleep_loop" && url !in verifiedGeneratedSeams) {
+                verifiedGeneratedSeams[url] = withContext(Dispatchers.IO) {
+                    isVerifiedGeneratedLoop(mediaUri(url))
+                }
+            }
+            if (actionName == "sleep_loop" && derivedSleepLoop && url !in verifiedGeneratedSleepSeams) {
+                verifiedGeneratedSleepSeams[url] = withContext(Dispatchers.IO) {
+                    isVerifiedGeneratedLoop(mediaUri(url), sleepSection = true)
+                }
+            }
             players[index].apply {
                 stop()
                 clearMediaItems()
@@ -517,11 +537,13 @@ fun SoraMascotVideo(
                 }
             }
 
-            // The dedicated closed-pose clip may repeat forever. Its locally
-            // prepared first and last frames are identical, so swap surfaces at
-            // the boundary instead of blending two silhouettes into a ghost.
+            // Verify dedicated clips before assuming their endpoints match.
+            // Locally generated videos can violate the requested last frame.
             if (currentAction == "sleep_loop") {
                 if (queuedAction == null) {
+                    val exactSleepSeam = normalizedUrls["sleep_loop"]?.let { url ->
+                        if (derivedSleepLoop) verifiedGeneratedSleepSeams[url] else closedSleepSeams[url]
+                    } == true
                     val loopRemaining = if (active.duration > 0) {
                         active.duration - active.currentPosition
                     } else {
@@ -535,7 +557,7 @@ fun SoraMascotVideo(
                         preparedAction = SLEEP_LOOP_MARKER
                     }
                     if (
-                        loopRemaining <= SEAMLESS_SWAP_BEFORE_END_MS ||
+                        loopRemaining <= (if (exactSleepSeam) CLOSED_LOOP_SWAP_BEFORE_END_MS else CROSSFADE_MS) ||
                         active.playbackState == Player.STATE_ENDED
                     ) {
                         if (preparedAction != SLEEP_LOOP_MARKER) {
@@ -555,16 +577,20 @@ fun SoraMascotVideo(
                         if (!isActive) break
                         val outgoingView = playerViews[activeIndex]
                         val incomingView = playerViews[inactiveIndex]
-                        active.pause()
-                        if (derivedSleepLoop) {
+                        if (!exactSleepSeam) {
+                            // Both clips continue moving during the overlap. A
+                            // frozen outgoing pose makes the seam visibly stall.
+                            outgoingView.translationZ = 0f
+                            incomingView.translationZ = 1f
+                            neutralView?.translationZ = 2f
                             val steps = 9
                             repeat(steps) { step ->
                                 val mix = (step + 1f) / steps
-                                outgoingView.alpha = 1f - mix
                                 incomingView.alpha = mix
                                 delay(CROSSFADE_MS / steps)
                             }
                         }
+                        active.pause()
                         active.seekTo(0)
                         outgoingView.alpha = 0f
                         incomingView.alpha = 1f
@@ -594,8 +620,12 @@ fun SoraMascotVideo(
                 preparedAction = desiredNext
             }
 
-            val boundaryWindow = if (desiredNext == currentAction) {
-                SEAMLESS_SWAP_BEFORE_END_MS
+            val verifiedRepeat = desiredNext == currentAction &&
+                (normalizedUrls[currentAction]?.let { verifiedGeneratedSeams[it] } == true)
+            val boundaryWindow = if (verifiedRepeat) {
+                CLOSED_LOOP_SWAP_BEFORE_END_MS
+            } else if (desiredNext == currentAction) {
+                CROSSFADE_MS
             } else {
                 TRANSITION_BEFORE_END_MS
             }
@@ -654,16 +684,27 @@ fun SoraMascotVideo(
                         delay(CROSSFADE_MS / steps)
                     }
                     anchor.alpha = 0f
-                } else {
-                    // Existing clips do not necessarily end on the exact first
-                    // frame. Keep the last decoded frame underneath the new one
-                    // and fade the new frame in, avoiding an abrupt colour jump.
+                } else if (verifiedRepeat) {
+                    // The new generation passed an exact-frame seam check.
+                    // A crossfade here would overlap different motion phases
+                    // and introduce ghosting into an already closed cycle.
                     if (!waitForFirstFrame(inactiveIndex)) {
                         incoming.pause(); preparedAction = null; queuedAction = null
                         active.seekTo(0); active.play(); delay(250); continue
                     }
                     if (!isActive) break
                     active.pause()
+                    outgoingView.alpha = 0f
+                    incomingView.alpha = 1f
+                } else {
+                    // Existing provider clips can have different endpoints.
+                    // Overlap their motion rather than freezing the outgoing
+                    // frame for the whole blend or cutting it 350 ms early.
+                    if (!waitForFirstFrame(inactiveIndex)) {
+                        incoming.pause(); preparedAction = null; queuedAction = null
+                        active.seekTo(0); active.play(); delay(250); continue
+                    }
+                    if (!isActive) break
                     outgoingView.translationZ = 0f
                     incomingView.translationZ = 1f
                     neutralView?.translationZ = 2f
@@ -740,8 +781,8 @@ internal fun detectBackgroundColor(rawUrl: String): Int = runCatching {
 }.getOrDefault(Color.rgb(232, 244, 252))
 
 @OptIn(UnstableApi::class)
-internal fun applyBackgroundKey(view: View, keyColor: Int, lighting: VideoLightingBinding? = null, conservative: Boolean = false, tuning: GreenMatteTuning = GreenMatteTuning()) {
-    if (Build.VERSION.SDK_INT < 33 || (view is PlayerView && lighting != null)) {
+internal fun applyBackgroundKey(view: View, keyColor: Int, lighting: VideoLightingBinding? = null, conservative: Boolean = false, tuning: GreenMatteTuning = GreenMatteTuning(), forceVideoEffect: Boolean = false) {
+    if (Build.VERSION.SDK_INT < 33 || (view is PlayerView && (lighting != null || forceVideoEffect))) {
         if(Build.VERSION.SDK_INT>=31)view.setRenderEffect(null)
         if(view is PlayerView) {
             (view.videoSurfaceView as? TextureView)?.isOpaque=false

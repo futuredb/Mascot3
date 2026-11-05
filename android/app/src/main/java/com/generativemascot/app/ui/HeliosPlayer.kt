@@ -28,10 +28,10 @@ private val reactorHttp = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECOND
 internal class HeliosPlayerController {
     var view: WebView? = null
     var ready = false
-    fun react(image: String, reaction: String, context: String = ""): Boolean {
+    fun react(image: String, reaction: String, context: String = "", appearance: String = ""): Boolean {
         val target = view ?: return false
         if (!ready) return false
-        target.evaluateJavascript("window.reactMascot(${JSONObject.quote(image)},${JSONObject.quote(reaction)},${JSONObject.quote(context)})", null)
+        target.evaluateJavascript("window.reactMascot(${JSONObject.quote(image)},${JSONObject.quote(reaction)},${JSONObject.quote(context)},${JSONObject.quote(appearance)})", null)
         return true
     }
     fun stop() { view?.evaluateJavascript("window.stopMascot?.()", null) }

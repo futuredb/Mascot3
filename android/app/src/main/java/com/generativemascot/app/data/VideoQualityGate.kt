@@ -3,16 +3,19 @@ package com.generativemascot.app.data
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 /**
  * Cheap, deterministic checks run after the paid provider job, before a clip
  * becomes visible in the app. Only technical defects that make the file
- * unusable are blocking. Visual heuristics are advisory because discarding an
- * already-paid, playable clip would require another paid generation.
+ * unusable are blocking. For new loop-directed jobs, a clearly broken seam
+ * also blocks publication; the paid original remains available in quarantine.
  */
 internal object VideoQualityGate {
     fun inspect(
@@ -20,6 +23,7 @@ internal object VideoQualityGate {
         action: String,
         expectedDurationSeconds: Int,
         matteColor: Int,
+        enforceLoop: Boolean = false,
     ): VideoClipQa {
         val retriever = MediaMetadataRetriever()
         try {
@@ -45,6 +49,19 @@ internal object VideoQualityGate {
                 } else {
                     1.0
                 }
+                val frameCount = if (Build.VERSION.SDK_INT >= 28) {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull()
+                } else null
+                val effectiveCount = frameCount?.takeIf { it > 3 }
+                    ?: ((safeDuration / 1000.0) * 24.0).roundToInt()
+                val fullSeam = if (enforceLoop) {
+                    inspectSeam(retriever, safeDuration, effectiveCount, 0, effectiveCount - 1, matteColor)
+                } else null
+                val sleepSeam = if (enforceLoop && HeroLocalStore.normalizeVideoAction(action) == "sleeping") {
+                    val start = ceil(DERIVED_SLEEP_START_MS.toDouble() * effectiveCount / safeDuration).toInt()
+                    val end = ceil(DERIVED_SLEEP_END_MS.toDouble() * effectiveCount / safeDuration).toInt() - 1
+                    inspectSeam(retriever, safeDuration, effectiveCount, start, end, matteColor)
+                } else null
                 return evaluateVideoQa(
                     action = action,
                     expectedDurationSeconds = expectedDurationSeconds,
@@ -56,6 +73,9 @@ internal object VideoQualityGate {
                     minimumFrameMargin = minimumMargin,
                     endpointDelta = endpointDelta,
                     matteHex = colorHex(matteColor),
+                    enforceLoop = enforceLoop,
+                    loopSeam = fullSeam,
+                    sleepLoopSeam = sleepSeam,
                 )
             } finally {
                 frames.forEach { frame ->
@@ -65,6 +85,90 @@ internal object VideoQualityGate {
         } finally {
             retriever.release()
         }
+    }
+
+    private fun inspectSeam(
+        retriever: MediaMetadataRetriever,
+        durationMs: Long,
+        frameCount: Int,
+        firstIndex: Int,
+        lastIndex: Int,
+        matte: Int,
+    ): VideoLoopSeam? {
+        if (frameCount < 8 || firstIndex < 0 || lastIndex >= frameCount || lastIndex - firstIndex < 6) return null
+        val frames = mutableMapOf<Int, Bitmap>()
+        fun get(index: Int): Bitmap? {
+            frames[index]?.let { return it }
+            val source = if (Build.VERSION.SDK_INT >= 28) {
+                runCatching { retriever.getFrameAtIndex(index) }.getOrNull()
+            } else {
+                val timeUs = (index.toDouble() * durationMs * 1_000.0 / frameCount).toLong()
+                retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+            } ?: return null
+            val scaled = try { Bitmap.createScaledBitmap(source, 192, 192, true) }
+                finally { if (source.width != 192 || source.height != 192) source.recycle() }
+            frames[index] = scaled
+            return scaled
+        }
+        fun difference(a: Int, b: Int): Double? {
+            val left = get(a) ?: return null
+            val right = get(b) ?: return null
+            return frameDelta(left, right, matte)
+        }
+        return try {
+            val span = lastIndex - firstIndex
+            val middleSteps = listOf(1, 2, 3).mapNotNull { part ->
+                val i = firstIndex + span * part / 4
+                difference(i, i + 1)
+            }.sorted()
+            if (middleSteps.size != 3) return null
+            val edgeSteps = listOf(
+                firstIndex to firstIndex + 1,
+                firstIndex + 2 to firstIndex + 3,
+                firstIndex + 5 to firstIndex + 6,
+                lastIndex - 6 to lastIndex - 5,
+                lastIndex - 3 to lastIndex - 2,
+                lastIndex - 1 to lastIndex,
+            ).mapNotNull { (a, b) -> difference(a, b) }
+            if (edgeSteps.size != 6) return null
+            val previous = get(lastIndex - 1) ?: return null
+            val last = get(lastIndex) ?: return null
+            val first = get(firstIndex) ?: return null
+            val second = get(firstIndex + 1) ?: return null
+            VideoLoopSeam(
+                endpointDelta = difference(firstIndex, lastIndex) ?: return null,
+                firstStepDelta = difference(firstIndex, firstIndex + 1) ?: return null,
+                lastStepDelta = difference(lastIndex - 1, lastIndex) ?: return null,
+                typicalStepDelta = middleSteps[1],
+                peakEdgeStepDelta = edgeSteps.maxOrNull() ?: return null,
+                motionMismatch = frameVelocityMismatch(previous, last, first, second, matte),
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            frames.values.forEach { if (!it.isRecycled) it.recycle() }
+        }
+    }
+
+    private fun frameVelocityMismatch(previous: Bitmap, last: Bitmap, first: Bitmap, next: Bitmap, matte: Int): Double {
+        val width = minOf(previous.width, last.width, first.width, next.width)
+        val height = minOf(previous.height, last.height, first.height, next.height)
+        val step = max(2, minOf(width, height) / 96)
+        var total = 0.0
+        var count = 0
+        for (y in 0 until height step step) for (x in 0 until width step step) {
+            val p = previous.getPixel(x, y)
+            val l = last.getPixel(x, y)
+            val f = first.getPixel(x, y)
+            val n = next.getPixel(x, y)
+            if (colorDistance(p, matte) <= 105.0 && colorDistance(l, matte) <= 105.0 &&
+                colorDistance(f, matte) <= 105.0 && colorDistance(n, matte) <= 105.0) continue
+            total += abs((Color.red(l) - Color.red(p)) - (Color.red(n) - Color.red(f)))
+            total += abs((Color.green(l) - Color.green(p)) - (Color.green(n) - Color.green(f)))
+            total += abs((Color.blue(l) - Color.blue(p)) - (Color.blue(n) - Color.blue(f)))
+            count += 3
+        }
+        return if (count < 30) 1.0 else total / (count * 255.0)
     }
 
     private data class FrameMeasurement(val borderKeyRatio: Double, val minimumMargin: Double)
@@ -130,7 +234,7 @@ internal object VideoQualityGate {
             total += abs(Color.blue(a) - Color.blue(b))
             count += 3
         }
-        return total / (count.coerceAtLeast(1) * 255.0)
+        return if (count < 30) 1.0 else total / (count * 255.0)
     }
 
     private fun colorDistance(left: Int, right: Int): Double {

@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.GenerativeMascot" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#D6D6D6</item>
+        <item name="android:statusBarColor">#D6D6D6</item>
+        <item name="android:navigationBarColor">#F7F7F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowSplashScreenBackground">#D6D6D6</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>

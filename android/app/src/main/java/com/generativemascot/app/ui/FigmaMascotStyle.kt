@@ -76,6 +76,7 @@ internal val RubikBubbles = FontFamily(Font(R.font.rubik_bubbles))
 internal val SbSansTextRegular = FontFamily(Font(R.font.sb_sans_text_regular))
 internal val SbSansTextMedium = FontFamily(Font(R.font.sb_sans_text_medium, FontWeight.Medium))
 internal val SbSansDisplayExtendedSemibold = FontFamily(Font(R.font.sb_sans_display_extended_semibold, FontWeight.SemiBold))
+internal val SbSansDisplayBold = FontFamily(Font(R.font.sb_sans_display_bold, FontWeight.Bold))
 internal val SbSansDisplayMedium = FontFamily(
     Font(R.font.sb_sans_display_medium, FontWeight.Medium),
 )

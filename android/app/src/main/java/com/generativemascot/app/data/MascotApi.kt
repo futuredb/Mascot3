@@ -54,6 +54,9 @@ interface MascotApi {
     @GET("/v1/mascots/library")
     suspend fun mascotLibrary(): List<MascotDto>
 
+    @DELETE("/v1/mascots/{id}")
+    suspend fun deleteMascot(@Path("id") id: String): Response<Unit>
+
     @GET("/v1/mascots/{id}")
     suspend fun getMascot(@Path("id") id: String): MascotDto
 

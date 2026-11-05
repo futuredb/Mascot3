@@ -20,6 +20,8 @@ class PhoneMotion(context: Context) : SensorEventListener {
     @Volatile var rotationEvents = 0; private set
     @Volatile var accelerationEvents = 0; private set
     @Volatile var sample = PhoneSample(); private set
+    /** Optional consumer for short acceleration impulses between display frames. */
+    var onAcceleration: ((PhoneSample) -> Unit)? = null
     @Volatile var calibrated = false; private set
     val available get() = rotation != null && acceleration != null
     fun recalibrate() {
@@ -53,6 +55,7 @@ class PhoneMotion(context: Context) : SensorEventListener {
             val (x, y) = screen(event.values[0], event.values[1])
             sample = sample.copy(accelerationX = x.coerceIn(-12f, 12f), accelerationY = -y.coerceIn(-12f, 12f),
                 accelerationZ = event.values[2].coerceIn(-12f, 12f), accelerationTimestamp = event.timestamp)
+            onAcceleration?.invoke(sample)
         } else {
             rotationEvents++
             val q = FloatArray(4); SensorManager.getQuaternionFromVector(q, event.values)

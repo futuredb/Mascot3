@@ -34,6 +34,11 @@ import org.robolectric.shadows.ShadowUsageStatsManager
 import com.generativemascot.app.physics.PhoneMotion
 import com.generativemascot.app.physics.PhonePose
 import com.generativemascot.app.physics.PhoneSample
+import com.generativemascot.app.physics.InstalledPhysics
+import com.generativemascot.app.physics.PhysicsPack
+import com.generativemascot.app.physics.PhysicsView
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import com.generativemascot.app.data.HeroLocalStore
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -1282,6 +1287,65 @@ class OverlayTest {
             assertNotNull(player())
             (view.parent as ViewGroup).removeView(view)
             assertNull(player())
+        } finally { controller.pause().stop().destroy(); art.recycle() }
+    }
+
+    @Test fun depthIdleGivesWayToReactionAndReturnsWithoutLosingPlayer() {
+        val assets = File("src/main/assets").let { if (it.isDirectory) it else File("app/src/main/assets") }
+        val root = File(assets, "bundled-heroes/716cdb43-703b-4d7e-8a79-27f03d92b99c/physics")
+        val packDir = File(root, File(root, "active").readText().trim())
+        val pack = Json { ignoreUnknownKeys = true }.decodeFromString<PhysicsPack>(File(packDir, "manifest.json").readText())
+        val controller = Robolectric.buildActivity(android.app.Activity::class.java).setup()
+        val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        val idle = OverlayVideo(File(context.filesDir, "idle.mp4"), Color.GREEN)
+        val reaction = OverlayVideo(File(context.filesDir, "joyful.mp4"), Color.GREEN)
+        val art = OverlayArtwork(listOf(bitmap), Rect(0, 0, 100, 100), 100, idle, listOf(reaction))
+        val hero = OverlayHeroView(controller.get(), art, InstalledPhysics(pack, packDir), PhoneMotion(controller.get()))
+        fun field(name: String) = hero.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(hero)
+        try {
+            controller.get().setContentView(hero)
+            val physical = field("physicsView") as PhysicsView
+            val player = field("player") as ExoPlayer
+            val listener = field("playbackListener") as Player.Listener
+            val video = field("videoView") as View
+            physical.onReady()
+            assertEquals(1f, physical.alpha)
+            assertEquals(0f, video.alpha)
+            assertTrue(hero.react())
+            assertEquals(android.net.Uri.fromFile(reaction.file), player.currentMediaItem!!.localConfiguration!!.uri)
+            listener.onRenderedFirstFrame()
+            assertEquals(1f, video.alpha)
+            listener.onPlaybackStateChanged(Player.STATE_ENDED)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
+            assertEquals(0f, video.alpha)
+            assertSame(player, field("player"))
+        } finally { controller.pause().stop().destroy(); art.recycle() }
+    }
+
+    @Test fun depthPackCanArriveAfterOverlayWasOpened() {
+        val assets = File("src/main/assets").let { if (it.isDirectory) it else File("app/src/main/assets") }
+        val root = File(assets, "bundled-heroes/716cdb43-703b-4d7e-8a79-27f03d92b99c/physics")
+        val packDir = File(root, File(root, "active").readText().trim())
+        val pack = Json { ignoreUnknownKeys = true }.decodeFromString<PhysicsPack>(File(packDir, "manifest.json").readText())
+        val controller = Robolectric.buildActivity(android.app.Activity::class.java).setup()
+        val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        val art = OverlayArtwork(listOf(bitmap), Rect(0, 0, 100, 100), 100,
+            OverlayVideo(File(context.filesDir, "idle.mp4"), Color.GREEN))
+        val hero = OverlayHeroView(controller.get(), art)
+        fun field(name: String) = hero.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(hero)
+        try {
+            controller.get().setContentView(hero)
+            val player = field("player") as ExoPlayer
+            assertNull(field("physicsView"))
+            val installed = InstalledPhysics(pack, packDir)
+            val sensors = PhoneMotion(controller.get())
+            hero.installPhysics(installed, sensors)
+            val physical = field("physicsView") as PhysicsView
+            hero.installPhysics(installed, sensors)
+            assertSame(physical, field("physicsView"))
+            physical.onReady()
+            assertEquals(1f, physical.alpha)
+            assertSame(player, field("player"))
         } finally { controller.pause().stop().destroy(); art.recycle() }
     }
 

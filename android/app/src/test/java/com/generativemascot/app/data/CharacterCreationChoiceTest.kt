@@ -4,6 +4,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CharacterCreationChoiceTest {
+    @Test fun referenceCharactersUseTheFullAnimationContract() {
+        val choice = CharacterCreationChoice("person", "friendly", referencePath = "/private/reference.jpg")
+        val contract = mobileCharacterContract(71, choice)
+        for (action in HeroLocalStore.LIBRARY_VIDEO_ACTIONS) {
+            val prompt = buildCharacterAnimationPrompt(action, seed = 71, character = contract)
+            assertTrue(prompt.contains(contract.body.subject))
+            assertTrue(prompt.contains(contract.body.visibleParts))
+            assertTrue(prompt.contains("ORDERED PERFORMANCE BEATS"))
+            validateResolvedVideoPrompt(prompt, "#00FF00")
+        }
+    }
+    @Test fun identifiesProviderRejectionForRealPersonWithoutTreatingEvery400AsThatError() {
+        assertTrue(isRealPersonImageRejection("{\"code\":\"InputImageSensitiveContentDetected.PrivacyInformation\"}"))
+        assertTrue(isRealPersonImageRejection("The input image may contain real person"))
+        assertFalse(isRealPersonImageRejection("invalid aspect ratio"))
+    }
+    @Test fun referenceOverridesPersonalityPaletteAndRandomAppearance() {
+        val choice = CharacterCreationChoice("person", "friendly", referencePath = "/private/reference.jpg")
+        val contract = mobileCharacterContract(71, choice)
+        val prompt = buildCanonicalCharacterPrompt(71, choice)
+        assertTrue(prompt.contains("USER REFERENCE PRIORITY"))
+        assertTrue(prompt.contains("overrides the writer's randomly suggested"))
+        assertFalse(prompt.contains("Palette: ${contract.palette}"))
+        assertFalse(prompt.contains("Body profile: ${contract.body.visibleParts}"))
+        assertTrue(prompt.contains(characterPersonalityById("friendly")!!.tone))
+    }
     @Test fun accessErrorsDistinguishKeyFromRegionAndPrivacyRestrictions() {
         assertTrue(describeOpenRouterAccessError(401, "invalid key").contains("ключ"))
         assertTrue(describeOpenRouterAccessError(403, "unsupported country").contains("регион"))

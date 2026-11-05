@@ -464,15 +464,18 @@ class MascotWidgetReceiver : AppWidgetProvider() {
 
     override fun onEnabled(context: Context) {
         scheduleWidgetMoodRotation(context)
+        WidgetDepthService.startIfPresent(context)
     }
 
     override fun onDisabled(context: Context) {
         cancelWidgetMoodRotation(context)
         WidgetMoodWorker.cancel(context)
+        context.stopService(Intent(context, WidgetDepthService::class.java))
     }
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         scheduleWidgetMoodRotation(context)
+        WidgetDepthService.startIfPresent(context)
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {

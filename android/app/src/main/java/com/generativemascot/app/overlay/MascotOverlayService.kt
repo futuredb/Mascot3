@@ -97,6 +97,7 @@ class MascotOverlayService : Service() {
             val sample = phoneMotion.sample
             if (movement.observe(sample)) hero?.react()
             if (previousFrame > 0) {
+                hero?.updateLighting((frameTimeNanos - previousFrame) / 1e9f, sample)
                 hero?.applyPhonePose(movement.advance((frameTimeNanos - previousFrame) / 1e9f, sample))
                 updateBubble(motionOnly = true)
             }
@@ -182,9 +183,12 @@ class MascotOverlayService : Service() {
             var decoded: OverlayArtwork? = null
             try {
                 withContext(Dispatchers.IO) { decoded = loadOverlayArtwork(this@MascotOverlayService, id) }
+                val physics = try { com.generativemascot.app.physics.PhysicsStore(this@MascotOverlayService).load(id) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
                 if (destroyed) return@launch
                 artwork = decoded
-                hero = OverlayHeroView(this@MascotOverlayService, requireNotNull(decoded)).apply {
+                hero = OverlayHeroView(this@MascotOverlayService, requireNotNull(decoded), physics, phoneMotion).apply {
                     contentDescription = "Плавающий герой. Нажмите для реакции. Разведите или сведите два пальца, чтобы изменить размер. Удерживайте, чтобы скрыть или показать подсказку. Перетащите, чтобы переместить."
                     setOnLongClickListener {
                         bubbleVisible = !bubbleVisible
@@ -192,6 +196,18 @@ class MascotOverlayService : Service() {
                         updateBubble(); true
                     }
                     installDrag(this)
+                }
+                if (physics == null) scope.launch {
+                    while (isActive && !destroyed && !stopping && activeHeroId == id) {
+                        delay(10_000)
+                        val prepared = try { com.generativemascot.app.physics.PhysicsStore(this@MascotOverlayService).load(id) }
+                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (_: Exception) { null }
+                        if (prepared != null && activeHeroId == id && !destroyed && !stopping) {
+                            hero?.installPhysics(prepared, phoneMotion)
+                            break
+                        }
+                    }
                 }
                 compact = OverlayCompactView(this@MascotOverlayService, requireNotNull(decoded)) { setCollapsed(false) }
                     .also { installDrag(it) }
@@ -399,6 +415,7 @@ class MascotOverlayService : Service() {
             phoneMotion.stop()
         }
         previousFrame = 0L; movement.reset()
+        hero?.resetLighting()
         hero?.applyPhonePose(PhonePose())
     }
 

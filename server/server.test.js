@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { mkdtemp, rm, mkdir, writeFile } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -77,4 +77,33 @@ test("health stays public while mutations require the client token", async (t) =
   assert.equal(disabled.status,422);
   assert.equal((await disabled.json()).error,"physics_pilot_disabled");
   assert.equal((await fetch(`${physics}/${"a".repeat(32)}`,{headers:{"x-mascot-client-token":"test-client-token"}})).status,404);
+});
+
+
+test("deleting a hero keeps the others and refuses a running generation", async (t) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "mascot3-delete-test-"));
+  await mkdir(path.join(dataRoot, "server-data"), { recursive: true });
+  await writeFile(path.join(dataRoot, "server-data", "mascots.json"), JSON.stringify([
+    { id: "one", name: "First", status: "READY", active: true, acceptedAt: "2026-01-01" },
+    { id: "two", name: "Second", status: "READY", active: false, acceptedAt: "2026-01-01" },
+    { id: "busy", status: "BASE_GENERATING", active: false },
+  ]));
+  const port = 20000 + Math.floor(Math.random() * 1000);
+  const child = spawn(process.execPath, [path.join(ROOT, "server", "server.js")], {
+    cwd: ROOT, env: { ...process.env, MASCOT3_PORT: String(port), MASCOT3_DATA_DIR: dataRoot,
+      MASCOT3_SKIP_SEED: "true", MASCOT3_CLIENT_TOKEN: "test-client-token", PHYSICS_ENABLED: "false" },
+    stdio: "ignore",
+  });
+  t.after(async () => { child.kill("SIGTERM"); await new Promise((resolve) => child.once("exit", resolve));
+    await rm(dataRoot, { recursive: true, force: true }); });
+  await waitForServer(port, child);
+  const root = `http://127.0.0.1:${port}/v1/mascots`;
+  const auth = { "x-mascot-client-token": "test-client-token" };
+  assert.equal((await fetch(`${root}/one`, { method: "DELETE" })).status, 401);
+  assert.equal((await fetch(`${root}/busy`, { method: "DELETE", headers: auth })).status, 409);
+  assert.equal((await fetch(`${root}/one`, { method: "DELETE", headers: auth })).status, 200);
+  assert.equal((await fetch(`${root}/one`)).status, 404);
+  const remaining = await (await fetch(`${root}/library`)).json();
+  assert.deepEqual(remaining.map((hero) => hero.id), ["two"]);
+  assert.equal((await (await fetch(`${root}/current/active`)).json()).id, "two");
 });

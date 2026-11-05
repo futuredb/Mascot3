@@ -68,7 +68,7 @@ internal fun personalityIndexNearestCenter(items: List<PersonalityItemPosition>,
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CharacterPersonalityScreen(type: String, preview: Int, previewAspect: Float, onFinish: (CharacterCreationChoice) -> Boolean,
-    onBack: () -> Unit, canNavigateBack: Boolean = true) {
+    onBack: () -> Unit, onClose: () -> Unit, canNavigateBack: Boolean = true, showPreview: Boolean = true) {
     var selectedId by remember { mutableStateOf(characterPersonalities.first().id) }
     var error by remember { mutableStateOf(false) }
     val selected = characterPersonalities.first { it.id == selectedId }
@@ -95,10 +95,17 @@ internal fun CharacterPersonalityScreen(type: String, preview: Int, previewAspec
         val listHeight = sy * 255
         val edgePadding = ((listHeight - 108.dp) / 2f).coerceAtLeast(0.dp)
         val previewWidth = 284f * previewAspect
-        Image(painterResource(preview), null,
+        if (showPreview) Image(painterResource(preview), null,
             Modifier.offset(x = sx * ((393f - previewWidth) / 2f), y = sy * 147).size(sx * previewWidth, sy * 284), contentScale = ContentScale.FillBounds)
-        if (canNavigateBack) Box(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 16.dp, top = 4.dp)) {
-            MascotTopAction(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", onBack)
+        if (canNavigateBack) {
+            Box(Modifier.offset(x = sx * 13, y = sy * 48).size(48.dp)
+                .mascotClickable(onClickLabel = "Назад", onClick = onBack), contentAlignment = Alignment.Center) {
+                HomeFigmaIcon("creation-back", null, size = 24.dp)
+            }
+            Box(Modifier.offset(x = maxWidth - sx * 57, y = sy * 47).size(48.dp)
+                .mascotClickable(onClickLabel = "Закрыть", onClick = onClose), contentAlignment = Alignment.Center) {
+                HomeFigmaIcon("creation-close", null, size = 15.dp)
+            }
         }
         LazyColumn(
             state = scroll,

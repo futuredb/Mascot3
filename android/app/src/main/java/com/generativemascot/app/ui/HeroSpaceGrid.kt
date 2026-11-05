@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import com.generativemascot.app.physics.HeroSpace
 import com.generativemascot.app.physics.PhonePose
+import com.generativemascot.app.physics.PhysicsFraming
 
 @Composable
 internal fun HeroSpaceGrid(palette: HeroPalette, pose: () -> PhonePose, modifier: Modifier = Modifier) {
@@ -20,7 +21,7 @@ internal fun HeroSpaceGrid(palette: HeroPalette, pose: () -> PhonePose, modifier
         val current = pose()
         val heroHeight = size.height - 24.dp.toPx()
         val artworkSize = minOf(size.width - 48.dp.toPx(), heroHeight).coerceAtLeast(1f)
-        val ground = (heroHeight * .5f + artworkSize * .35f) / size.height
+        val ground = (heroHeight * .5f + artworkSize * PhysicsFraming.GROUND_OFFSET) / size.height
         clipRect {
             HeroSpace.floor(current, ground).forEach { line ->
                 drawLine(ink.copy(alpha = line.alpha),
