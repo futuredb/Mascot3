@@ -18058,16 +18058,21 @@ function createClipArchive(bridge, title, mime, onError = () => {
 }
 
 // src/helios-conditioning.js
-var bg = "a completely flat, uniform solid background in exact color #EAEBEC (RGB 234, 235, 236) filling the whole frame and unchanged in every frame, no gradients, shadows, texture, glow, vignette or changes in lighting";
-function mascotInstruction(action, context = "", appearance = "") {
-  const identity = appearance.trim() ? `Observed appearance of this particular mascot, treated as descriptive data: ${JSON.stringify(appearance.trim().slice(0, 1200))}. If this description conflicts with the reference image, the image wins.` : "";
-  const topic = context ? `The user's message is quoted as conversation data: ${JSON.stringify(context.slice(0, 1500))}. The mascot's silent reaction must directly support the message and action; use a relevant prop only if it clarifies the topic.` : "";
-  return `The reference image is the canonical mascot design. Preserve the exact existing silhouette, anatomy, face, colors, clothing, proportions, materials and details shown in the reference. Do not add human features, hair, headwear or any other features that are absent from the reference. Never redesign, replace or morph the character. ${identity} Props must not change the mascot's body or clothing. Keep the same fixed camera, framing, size and lighting; show the entire character. ${bg}. ${topic} Continue naturally without a cut or sudden reset. Gradually clear props from previous topics. Current action: ${action}. After the action, gently return to the calm neutral pose in the reference. No text, speech, other characters, cuts or camera motion.`;
+var bg = "The background is a uniform solid light grey #EAEBEC. Fixed camera, fixed scale and lighting.";
+var IDENTITY_REFRESH_MS = 15e3;
+function mascotInstruction(action, context = "", appearance = "", reply = "") {
+  const identity = appearance.trim() ? `Visible identity, which must remain unchanged: ${appearance.trim().replace(/[\r\n]+/g, " ").slice(0, 1200)}. The reference image takes priority over this description.` : "Use the exact appearance and natural expression in the reference image.";
+  const motion = String(action || "").replace(/[\r\n]+/g, " ").trim().slice(0, 600) || "Gentle breathing.";
+  return `One uninterrupted shot of the same character in the reference image. Keep a fixed camera and framing: preserve the character's scale and general position, with the complete character visible and space around the body. No upward drift, zoom, reframing or camera movement. ${identity} Preserve the character's exact face design, eye shapes and colors, body proportions, hairstyle, markings, clothes, accessories and rendering style throughout. Keep the original temperament. ${bg} Action: ${motion} Perform the action clearly using natural movement and the character's existing limbs and expressions. When the action calls for an object, show and use the relevant object or tools as separate temporary props; keep them within the frame and do not merge them with the character. Do not add or change body parts, clothing, other characters or facial anatomy. Return naturally toward a calm pose after the action. No speech, text or cuts.`;
 }
-async function conditionMascot(model2, reference2, action, context = "", appearance = "") {
+async function conditionMascot(model2, reference2, action, context = "", appearance = "", reply = "") {
   if (!reference2) throw new Error("\u041D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D \u0440\u0435\u0444\u0435\u0440\u0435\u043D\u0441 \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430.");
-  const accepted = await model2.setConditioning({ image: reference2, prompt: mascotInstruction(action, context, appearance) });
-  if (!accepted) throw new Error("Helios \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B \u0440\u0435\u0444\u0435\u0440\u0435\u043D\u0441 \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430.");
+  const accepted = await model2.setConditioning({ image: reference2, prompt: mascotInstruction(action, context, appearance, reply) });
+  if (!accepted?.has_image || !accepted?.has_prompt) throw new Error("Helios \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B \u0440\u0435\u0444\u0435\u0440\u0435\u043D\u0441 \u0438 \u0440\u0435\u0430\u043A\u0446\u0438\u044E.");
+}
+async function updateMascotPrompt(model2, action, context = "", appearance = "", reply = "") {
+  const accepted = await model2.setPrompt({ prompt: mascotInstruction(action, context, appearance, reply) });
+  if (!accepted) throw new Error("Helios \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B \u0440\u0435\u0430\u043A\u0446\u0438\u044E.");
 }
 
 // src/android-helios.js
@@ -18086,6 +18091,7 @@ var firstFrameTimer = null;
 var generation = 0;
 var starting = false;
 var pendingAction = null;
+var displayVisible = true;
 var liveVisible = false;
 var clipRecorder = null;
 var latestClip = null;
@@ -18095,6 +18101,43 @@ var liveTrack = null;
 var actionVersion = 0;
 var recorderEpoch = 0;
 var recordingContext = "";
+var recorderTimer = null;
+var actionQueue = Promise.resolve();
+var prewarmActive = false;
+var prewarmTimer = null;
+var stopping = null;
+var saveIdleOnStop = false;
+var identityTimer = null;
+var lastCondition = null;
+var REACTION_REFRESH_DELAY_MS = 3e4;
+var LOOP_CAPTURE_MS = 3e4;
+var warmTimer = null;
+var warmPause = null;
+var pausedForReplay = false;
+var resetInProgress = false;
+var resetFrameReady = false;
+var startupTask = null;
+function scheduleIdentityRefresh(current, id, delay = IDENTITY_REFRESH_MS) {
+  clearTimeout(identityTimer);
+  identityTimer = setTimeout(() => {
+    if (id !== generation || model !== current || !lastCondition) return;
+    const version = actionVersion;
+    actionQueue = actionQueue.catch(() => {
+    }).then(async () => {
+      if (id !== generation || model !== current || version !== actionVersion || !lastCondition) return;
+      const { action, context, appearance, reply } = lastCondition;
+      await updateMascotPrompt(current, action, context, appearance, reply);
+      tell("diagnostic", "identity-refreshed");
+    }).catch(() => {
+      if (id === generation && model === current) {
+        tell("diagnostic", "identity-refresh-failed");
+        tell("status", "\u041E\u0431\u043D\u043E\u0432\u043B\u044F\u0435\u043C \u043E\u0431\u0440\u0430\u0437 \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430\u2026");
+      }
+    }).finally(() => {
+      if (id === generation && model === current && version === actionVersion) scheduleIdentityRefresh(current, id);
+    });
+  }, delay);
+}
 function resizeFrame() {
   frame.style.width = window.innerWidth + "px";
   frame.style.height = window.innerHeight + "px";
@@ -18118,12 +18161,23 @@ async function referenceBlob(data) {
   return await new Promise((ok, fail) => c.toBlob((b) => b ? ok(b) : fail(new Error("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u0438\u0442\u044C \u0438\u0437\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u0435.")), "image/png"));
 }
 function draw(source) {
-  if (!source.videoWidth || !source.videoHeight) return;
-  if (frame.width !== source.videoWidth || frame.height !== source.videoHeight) {
-    frame.width = source.videoWidth;
-    frame.height = source.videoHeight;
+  if (!displayVisible || !source.videoWidth || !source.videoHeight) return;
+  const w = window.MascotOverlayMode ? Math.min(512, source.videoWidth) : source.videoWidth;
+  const h = window.MascotOverlayMode ? Math.round(source.videoHeight * w / source.videoWidth) : source.videoHeight;
+  if (frame.width !== w || frame.height !== h) {
+    frame.width = w;
+    frame.height = h;
   }
-  frameCtx.drawImage(source, 0, 0, frame.width, frame.height);
+  frameCtx.drawImage(source, 0, 0, w, h);
+  if (window.MascotOverlayMode) {
+    const pixels = frameCtx.getImageData(0, 0, w, h), a = pixels.data;
+    for (let i = 0; i < a.length; i += 4) {
+      const d = Math.max(Math.abs(a[i] - 234), Math.abs(a[i + 1] - 235), Math.abs(a[i + 2] - 236));
+      if (d < 12) a[i + 3] = 0;
+      else if (d < 32) a[i + 3] = Math.round(a[i + 3] * (d - 12) / 20);
+    }
+    frameCtx.putImageData(pixels, 0, 0);
+  }
 }
 function stopReplay() {
   replayGeneration++;
@@ -18145,7 +18199,7 @@ function playReplay(blob) {
   function next(now, meta) {
     if (n !== replayGeneration || liveVisible) return;
     try {
-      transition.render(replayVideo, now, meta.mediaTime, draw);
+      if (displayVisible) transition.render(replayVideo, now, meta.mediaTime, draw);
     } catch {
     }
     replayVideo.requestVideoFrameCallback(next);
@@ -18154,14 +18208,33 @@ function playReplay(blob) {
   replayVideo.play().catch(() => tell("error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0439 \u0444\u0440\u0430\u0433\u043C\u0435\u043D\u0442."));
   return true;
 }
+window.setMascotVisibility = (visible) => {
+  displayVisible = Boolean(visible);
+  if (displayVisible) {
+    if (pausedForReplay && replayUrl) draw(replayVideo);
+    else if (liveVisible) draw(liveVideo);
+  }
+};
+function saveIdle(blob) {
+  if (!window.MascotBridge?.saveIdleClip) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      if (window.MascotBridge.saveIdleClip(String(reader.result).split(",")[1])) tell("idle_saved");
+    } catch {
+    }
+  };
+  reader.readAsDataURL(blob);
+}
 function startRecorder(track, id, context = "") {
   if (!globalThis.MediaRecorder || !track || id !== generation) return;
   let parts = [];
-  const epoch = ++recorderEpoch;
+  const epoch = ++recorderEpoch, saveAsIdle = prewarmActive, version = actionVersion;
   try {
     const type = ["video/webm;codecs=vp8", "video/webm", "video/mp4"].find((t) => MediaRecorder.isTypeSupported(t));
     const rec = new MediaRecorder(new MediaStream([track]), { ...type ? { mimeType: type } : {}, videoBitsPerSecond: 2e6 });
-    const archive = createClipArchive(window.MascotBridge, context, rec.mimeType || type || "", () => tell("archive-error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0440\u0435\u0430\u043A\u0446\u0438\u044E \u0432 \u0431\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A\u0443."));
+    const archive = context.trim() ? createClipArchive(window.MascotBridge, context, rec.mimeType || type || "", () => tell("archive-error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0440\u0435\u0430\u043A\u0446\u0438\u044E \u0432 \u0431\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A\u0443.")) : null;
+    latestClip = null;
     clipRecorder = rec;
     rec.ondataavailable = (e) => {
       if (e.data.size) {
@@ -18172,17 +18245,34 @@ function startRecorder(track, id, context = "") {
     rec.onstop = () => {
       if (epoch === recorderEpoch && parts.length) {
         const blob = new Blob(parts, { type: rec.mimeType || "video/webm" });
-        if (blob.size) latestClip = blob;
+        if (blob.size) {
+          latestClip = blob;
+          if (saveAsIdle && saveIdleOnStop) saveIdle(blob);
+        }
       }
       void archive?.finish();
     };
     rec.start(1e3);
+    clearTimeout(recorderTimer);
+    if (!saveAsIdle) {
+      recorderTimer = setTimeout(() => {
+        void (async () => {
+          await finishRecorder();
+          if (id === generation && model && version === actionVersion && latestClip) await pauseForReplay(model, id, version);
+        })();
+      }, LOOP_CAPTURE_MS);
+    } else {
+      clearTimeout(prewarmTimer);
+      prewarmTimer = setTimeout(() => void stop("", true, true), 6e3);
+    }
   } catch {
     clipRecorder = null;
     if (context.trim()) tell("archive-error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0440\u0435\u0430\u043A\u0446\u0438\u044E \u0434\u043B\u044F \u0431\u0438\u0431\u043B\u0438\u043E\u0442\u0435\u043A\u0438.");
   }
 }
 function finishRecorder(save = true) {
+  clearTimeout(recorderTimer);
+  recorderTimer = null;
   if (!save) recorderEpoch++;
   const rec = clipRecorder;
   clipRecorder = null;
@@ -18208,34 +18298,69 @@ function finishRecorder(save = true) {
     setTimeout(finish, 3e3);
   });
 }
+async function pauseForReplay(current, id, version) {
+  if (id !== generation || model !== current || version !== actionVersion) return;
+  pausedForReplay = true;
+  liveVisible = false;
+  if (playReplay(latestClip)) {
+    tell("replay");
+    tell("diagnostic", "replay-live");
+  } else {
+    pausedForReplay = false;
+    liveVisible = true;
+    tell("status", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C \u0444\u0440\u0430\u0433\u043C\u0435\u043D\u0442.");
+  }
+}
 function armTimer() {
   clearTimeout(timer);
-  timer = setTimeout(() => void stop("\u041F\u043E\u0442\u043E\u043A \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043D, \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u043C \u0440\u0435\u0430\u043A\u0446\u0438\u044E."), 5e4);
+  timer = null;
 }
-async function applyAction(current, id, action, context = "", appearance = "") {
+function applyAction(current, id, action, context = "", appearance = "", reply = "") {
   const version = ++actionVersion;
+  lastCondition = { action, context, appearance, reply };
   armTimer();
-  latestClip = null;
-  await finishRecorder(false);
-  if (id !== generation || model !== current || version !== actionVersion) return;
-  recordingContext = context;
-  if (liveVisible && liveTrack) startRecorder(liveTrack, id, recordingContext);
-  await conditionMascot(current, reference, action, context, appearance);
+  scheduleIdentityRefresh(current, id, REACTION_REFRESH_DELAY_MS);
+  const next = actionQueue.catch(() => {
+  }).then(async () => {
+    if (id !== generation || model !== current || version !== actionVersion) return;
+    latestClip = null;
+    await finishRecorder(false);
+    if (id !== generation || model !== current || version !== actionVersion) return;
+    recordingContext = reply ? context : "";
+    if (liveVisible && liveTrack) startRecorder(liveTrack, id, recordingContext);
+    await updateMascotPrompt(current, action, context, appearance, reply);
+  });
+  actionQueue = next;
+  return next;
 }
-async function stop(reason = "", replay = true) {
+async function performStop(reason = "", replay = true, saveIdle2 = false) {
   generation++;
   clearTimeout(timer);
   clearTimeout(firstFrameTimer);
+  clearTimeout(prewarmTimer);
+  clearTimeout(identityTimer);
+  clearTimeout(warmTimer);
+  warmTimer = null;
+  identityTimer = null;
+  lastCondition = null;
+  prewarmTimer = null;
+  saveIdleOnStop = saveIdle2 && prewarmActive;
+  prewarmActive = false;
   timer = null;
   firstFrameTimer = null;
-  const old = model;
+  const old = model, alreadyReplaying = replay && !!replayUrl && !liveVisible;
   model = null;
   reference = null;
   starting = false;
   pendingAction = null;
   liveTrack = null;
+  pausedForReplay = false;
+  resetInProgress = false;
+  resetFrameReady = false;
   actionVersion++;
+  actionQueue = Promise.resolve();
   await finishRecorder();
+  saveIdleOnStop = false;
   liveVisible = false;
   liveVideo.pause();
   liveVideo.srcObject = null;
@@ -18245,9 +18370,9 @@ async function stop(reason = "", replay = true) {
     tell("error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044C \u043E\u0442\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 Helios.");
     return;
   }
-  const replaying = replay && playReplay(latestClip);
+  const replaying = alreadyReplaying || replay && playReplay(latestClip);
   if (replaying) {
-    tell("replay");
+    if (!alreadyReplaying) tell("replay");
   } else if (!replay) {
     stopReplay();
     latestClip = null;
@@ -18255,13 +18380,110 @@ async function stop(reason = "", replay = true) {
   }
   if (reason) tell("stopped", replay && !replaying ? "\u041F\u043E\u0442\u043E\u043A \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D. \u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C \u0444\u0440\u0430\u0433\u043C\u0435\u043D\u0442." : reason);
 }
-window.stopMascot = () => stop("\u041F\u043E\u0442\u043E\u043A \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D.");
-window.closeMascot = () => stop("", false);
-window.reactMascot = async (data, action, context = "", appearance = "") => {
+function stop(reason = "", replay = true, saveIdle2 = false) {
+  if (stopping) return stopping;
+  const work = performStop(reason, replay, saveIdle2);
+  const pending = work.finally(() => {
+    if (stopping === pending) stopping = null;
+  });
+  stopping = pending;
+  return pending;
+}
+var restartRequest = 0;
+var restartQueue = Promise.resolve();
+var restartFramePending = false;
+var waitingForResetChunk = false;
+window.stopMascot = () => {
+  restartRequest++;
+  return stop("\u041F\u043E\u0442\u043E\u043A \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D.");
+};
+window.closeMascot = () => {
+  restartRequest++;
+  restartFramePending = false;
+  return stop("", false);
+};
+window.restartMascot = (data, action, context = "", appearance = "", reply = "") => {
+  const request = ++restartRequest;
+  restartQueue = restartQueue.catch(() => {
+  }).then(async () => {
+    if (request !== restartRequest) return;
+    if (startupTask) await startupTask.catch(() => {
+    });
+    if (warmPause) await warmPause;
+    if (request !== restartRequest) return;
+    const current = model, id = generation;
+    if (current && reference) {
+      const version = ++actionVersion;
+      clearTimeout(identityTimer);
+      clearTimeout(warmTimer);
+      clearTimeout(firstFrameTimer);
+      await actionQueue.catch(() => {
+      });
+      await finishRecorder(false);
+      if (request !== restartRequest || id !== generation || model !== current) return;
+      resetInProgress = true;
+      resetFrameReady = false;
+      waitingForResetChunk = false;
+      pausedForReplay = false;
+      liveVisible = false;
+      restartFramePending = true;
+      draw(liveVideo);
+      stopReplay();
+      lastCondition = { action, context, appearance, reply };
+      recordingContext = reply ? context : "";
+      try {
+        await current.reset();
+        if (request !== restartRequest || id !== generation || model !== current) return;
+        await current.setImageStrength({ image_strength: 1 });
+        await conditionMascot(current, reference, action, context, appearance, reply);
+        if (request !== restartRequest || id !== generation || model !== current) return;
+        firstFrameTimer = setTimeout(() => {
+          if (model === current) void stop("\u0412\u0438\u0434\u0435\u043E\u043F\u043E\u0442\u043E\u043A \u043D\u0435 \u043F\u043E\u044F\u0432\u0438\u043B\u0441\u044F: \u043F\u0440\u043E\u0432\u0435\u0440\u044C \u0441\u0435\u0442\u044C \u0438 \u043F\u043E\u043F\u0440\u043E\u0431\u0443\u0439 \u043F\u043E\u0437\u0436\u0435.");
+        }, 25e3);
+        waitingForResetChunk = true;
+        await current.start();
+        if (request !== restartRequest || id !== generation || model !== current) return;
+        tell("diagnostic", "warm-reset");
+        if (version === actionVersion) scheduleIdentityRefresh(current, id, REACTION_REFRESH_DELAY_MS);
+      } catch (e) {
+        if (id === generation && model === current) {
+          tell("error", e.message || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0430\u043D\u0438\u043C\u0430\u0446\u0438\u044E.");
+          await stop();
+        }
+      }
+    } else {
+      await stop("", false);
+      if (request !== restartRequest) return;
+      restartFramePending = true;
+      await window.reactMascot(data, action, context, appearance, reply);
+    }
+  });
+  return restartQueue;
+};
+window.replyMascot = (data, action, context = "", appearance = "", reply = "") => {
+  const request = restartRequest;
+  return restartQueue.catch(() => {
+  }).then(async () => {
+    if (request !== restartRequest) return;
+    if (model) return window.reactMascot(data, action, context, appearance, reply);
+    if (request === 0) return window.restartMascot(data, action, context, appearance, reply);
+  });
+};
+async function runMascotReaction(data, action, context = "", appearance = "", reply = "", prewarm = false) {
+  if (!prewarm) {
+    clearTimeout(prewarmTimer);
+    prewarmTimer = null;
+  }
+  prewarmActive = prewarm;
   if (starting) {
-    pendingAction = { action, context, appearance };
+    pendingAction = { action, context, appearance, reply };
     if (model) armTimer();
     return;
+  }
+  if (!model && stopping) {
+    starting = true;
+    await stopping;
+    starting = false;
   }
   const id = generation;
   try {
@@ -18274,28 +18496,45 @@ window.reactMascot = async (data, action, context = "", appearance = "") => {
       const current = new HeliosModel();
       model = current;
       armTimer();
+      let wasReady = false;
+      current.on("statusChanged", (state) => {
+        if (model !== current || id !== generation) return;
+        if (state === "ready") wasReady = true;
+        else if (state === "disconnected" && wasReady) {
+          tell("error", "\u0421\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435 Helios \u043F\u0440\u0435\u0440\u0432\u0430\u043B\u043E\u0441\u044C. \u041F\u044B\u0442\u0430\u0435\u043C\u0441\u044F \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F \u0441\u043D\u043E\u0432\u0430.");
+          void stop();
+        }
+      });
+      current.onChunkComplete(() => {
+        if (model === current && id === generation && resetInProgress && waitingForResetChunk) resetFrameReady = true;
+      });
       current.onMainVideo((track, stream) => {
         if (model !== current) return;
         liveTrack = track;
         liveVideo.srcObject = stream || new MediaStream([track]);
         let started = performance.now(), lastCheck = 0, reported = false;
         function inspect(now) {
-          if (model !== current || id !== generation) return;
+          if (model !== current || id !== generation || liveTrack !== track) return;
           try {
-            if (liveVisible) {
-              draw(liveVideo);
-            } else if (now - lastCheck > 250) {
-              lastCheck = now;
-              sampleCtx.drawImage(liveVideo, 0, 0, 96, 54);
-              if (hasVisibleDetail(sampleCtx.getImageData(0, 0, 96, 54).data)) {
+            if (!pausedForReplay && (!resetInProgress || resetFrameReady)) {
+              if (liveVisible) {
                 draw(liveVideo);
-                liveVisible = true;
-                startRecorder(track, id, recordingContext);
-                stopReplay();
-                frame.style.opacity = "1";
-                clearTimeout(firstFrameTimer);
-                firstFrameTimer = null;
-                tell("frame");
+              } else if (now - lastCheck > 250) {
+                lastCheck = now;
+                sampleCtx.drawImage(liveVideo, 0, 0, 96, 54);
+                if (hasVisibleDetail(sampleCtx.getImageData(0, 0, 96, 54).data)) {
+                  draw(liveVideo);
+                  liveVisible = true;
+                  resetInProgress = false;
+                  waitingForResetChunk = false;
+                  startRecorder(track, id, recordingContext);
+                  stopReplay();
+                  frame.style.opacity = "1";
+                  clearTimeout(firstFrameTimer);
+                  firstFrameTimer = null;
+                  tell(restartFramePending ? "restart-frame" : "frame");
+                  restartFramePending = false;
+                }
               }
             }
           } catch {
@@ -18307,7 +18546,12 @@ window.reactMascot = async (data, action, context = "", appearance = "") => {
           liveVideo.requestVideoFrameCallback(inspect);
         }
         liveVideo.requestVideoFrameCallback(inspect);
-        liveVideo.play().catch(() => tell("error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u043F\u043E\u0442\u043E\u043A."));
+        liveVideo.play().catch(() => {
+          if (model === current) {
+            tell("error", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u043F\u043E\u0442\u043E\u043A.");
+            void stop();
+          }
+        });
       });
       current.onCommandError((e) => {
         if (model === current) {
@@ -18323,10 +18567,11 @@ window.reactMascot = async (data, action, context = "", appearance = "") => {
       reference = await current.uploadFile(await referenceBlob(data));
       if (id !== generation) return;
       await current.setImageStrength({ image_strength: 1 });
-      const firstAction = pendingAction || { action, context, appearance };
+      const firstAction = pendingAction || { action, context, appearance, reply };
       pendingAction = null;
-      recordingContext = firstAction.context;
-      await conditionMascot(current, reference, firstAction.action, firstAction.context, firstAction.appearance);
+      lastCondition = firstAction;
+      recordingContext = firstAction.reply ? firstAction.context : "";
+      await conditionMascot(current, reference, firstAction.action, firstAction.context, firstAction.appearance, firstAction.reply);
       if (id !== generation) return;
       firstFrameTimer = setTimeout(() => {
         if (model === current) void stop("\u0412\u0438\u0434\u0435\u043E\u043F\u043E\u0442\u043E\u043A \u043D\u0435 \u043F\u043E\u044F\u0432\u0438\u043B\u0441\u044F: \u043F\u0440\u043E\u0432\u0435\u0440\u044C \u0441\u0435\u0442\u044C \u0438 \u043F\u043E\u043F\u0440\u043E\u0431\u0443\u0439 \u043F\u043E\u0437\u0436\u0435.");
@@ -18336,25 +18581,36 @@ window.reactMascot = async (data, action, context = "", appearance = "") => {
         await current.disconnect();
         return;
       }
-      if (pendingAction && id === generation) {
+      scheduleIdentityRefresh(current, id, firstAction.reply ? REACTION_REFRESH_DELAY_MS : IDENTITY_REFRESH_MS);
+      while (pendingAction && id === generation) {
         const next = pendingAction;
         pendingAction = null;
-        await applyAction(current, id, next.action, next.context, next.appearance);
+        await applyAction(current, id, next.action, next.context, next.appearance, next.reply);
       }
-      starting = false;
+      if (id === generation) starting = false;
     } else {
       const current = model;
-      await applyAction(current, id, action, context, appearance);
+      await applyAction(current, id, action, context, appearance, reply);
     }
   } catch (e) {
     if (id === generation) {
-      tell("error", e.message || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C Helios.");
+      tell("error", e.message || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F \u043A Helios.");
       await stop();
     }
   }
+}
+window.reactMascot = (...args) => {
+  const task = runMascotReaction(...args);
+  if (starting && !startupTask) {
+    startupTask = task;
+    void task.finally(() => {
+      if (startupTask === task) startupTask = null;
+    });
+  }
+  return task;
 };
 window.addEventListener("pagehide", () => void stop("", false));
-tell("ready");
+tell("ready", "missing");
 tell("status", "");
 /*! Bundled license information:
 
