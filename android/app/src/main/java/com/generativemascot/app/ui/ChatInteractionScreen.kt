@@ -10,27 +10,28 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import coil.compose.AsyncImage
-import com.generativemascot.app.R
-import com.generativemascot.app.data.HeroLocalStore
 
 private class InteractionBridge(private val select: (Int) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
@@ -40,89 +41,168 @@ private class InteractionBridge(private val select: (Int) -> Unit) {
     }
 }
 
-private val headings = listOf("ГОТОВЛЮ РЕШЕНИЯ,\nКОГДА ПОПРОСИТЕ", "НА ШАГ ВПЕРЕДИ", "РЯДОМ, КОГДА НУЖЕН", "ЗАМЕЧАЮ И\nПОДСКАЗЫВАЮ")
-private val descriptions = listOf("Помогу разобраться в сложном\nи предложу готовый следующий шаг.",
-    "Сам замечаю важное и готовлю решения,\nчтобы вам оставалось только выбрать.",
-    "Отвечу на ваш вопрос и подскажу путь.\nРешение всегда остаётся за вами.",
-    "Вовремя поделюсь идеей или советом.\nВы сами выбираете, что делать дальше.")
-private val fieldTitles = listOf("Готовлю решения\nкогда попросите", "На шаг\nвпереди", "Рядом, когда\nнужен", "Замечаю\nи подсказываю")
+internal val interactionDescriptions = listOf("По запросу подготовлю готовое решение,\nа выполнять действия будете вы.",
+    "Сам добавляю встречи в календарь\nи ставлю напоминание за час.",
+    "Только отвечаю на вопросы и объясняю,\nкак сделать всё самостоятельно.",
+    "Замечаю важное, напоминаю и советую.\nРешения и действия остаются за вами.")
+internal val interactionFieldTitles = listOf("Готовлю решения\nкогда попросите", "На шаг\nвпереди", "Рядом, когда\nнужен", "Замечаю\nи подсказываю")
+internal val interactionDisplayTitles = listOf("Готовлю решения, когда попросишь", "На шаг впереди", "Рядом, когда нужен", "Замечаю и подсказываю")
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-internal fun ChatInteractionScreen(mascotId: String, heroName: String, previewUrl: String?, selectedIndex: Int,
-    onSave: (Int) -> Unit, onBack: () -> Unit) {
+internal fun InteractionPersonalityField(choice: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val select by rememberUpdatedState(onSelect)
+    val initialIndex = remember { choice.coerceIn(0, 3) }
+    var fieldView by remember { mutableStateOf<WebView?>(null) }
+    Box(modifier.clip(RoundedCornerShape(28.dp))) {
+        AndroidView(modifier = Modifier.fillMaxSize(), factory = { context ->
+            WebView(context).apply {
+                fieldView = this
+                setBackgroundColor(android.graphics.Color.rgb(234, 235, 236))
+                settings.javaScriptEnabled = true
+                settings.allowFileAccess = true
+                settings.allowContentAccess = false
+                settings.blockNetworkLoads = true
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        view?.post {
+                            val height = (view.height / view.resources.displayMetrics.density).toInt().coerceAtLeast(1)
+                            view.evaluateJavascript("""(function(){
+                              const style=document.createElement('style');
+                              style.textContent='html,body,#surface,#content{height:${height}px!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important} #characterTitle,.intro,.axis,.selection{display:none!important} #content{max-width:none!important} .matrix-wrap{width:100%!important;max-width:none!important;height:100%!important;margin:0!important} #field{width:100%!important;height:100%!important;aspect-ratio:auto!important}';
+                              document.head.append(style);
+                            })();""".trimIndent(), null)
+                            view.requestLayout(); view.invalidate()
+                        }
+                    }
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
+                }
+                addJavascriptInterface(InteractionBridge { select(it) }, "MascotPersonality")
+                loadUrl("file:///android_asset/personality/index.html?selection=$initialIndex")
+            }
+        }, onRelease = { view -> fieldView = null; view.removeJavascriptInterface("MascotPersonality"); view.destroy() })
+        Text(interactionFieldTitles[choice.coerceIn(0, 3)], modifier = Modifier.align(Alignment.Center), fontFamily = SbSansDisplayMedium,
+            fontSize = 22.sp, lineHeight = 25.sp, textAlign = TextAlign.Center, color = Color.White)
+        // Consume the gesture in Compose before the parent scroll can claim it.
+        // WebView remains responsible for drawing the animated field.
+        Box(Modifier.matchParentSize().pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                fun update(x: Float, y: Float) {
+                    val nx = (x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    val ny = (y / size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    fieldView?.evaluateJavascript("window.setPersonalityPoint && window.setPersonalityPoint($nx,$ny)", null)
+                }
+                update(down.position.x, down.position.y)
+                down.consume()
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    update(change.position.x, change.position.y)
+                    change.consume()
+                    if (!change.pressed) break
+                }
+            }
+        })
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+internal fun ChatInteractionScreen(selectedIndex: Int,
+    largePortrait: Boolean,
+    calendarEnabled: Boolean, onCalendarChange: (Boolean) -> Unit,
+    profanityEnabled: Boolean, onProfanityChange: (Boolean) -> Unit,
+    overlayStreamEnabled: Boolean,
+    streamEnabled: Boolean,
+    onSave: (Int, Boolean, Boolean, Boolean) -> Unit, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     MascotSystemBars(FigmaCanvas, FigmaCanvas)
     var choice by remember { mutableIntStateOf(selectedIndex.coerceIn(0, 3)) }
-    val select by rememberUpdatedState<(Int) -> Unit>({ choice = it })
-    val initialIndex = remember { choice }
-    val image = remember(mascotId) { HeroLocalStore.current?.baseFile(mascotId) }
-    val extended = remember { FontFamily(Font(R.font.sb_sans_display_extended_semibold)) }
+    var portraitChoice by remember { mutableStateOf(largePortrait) }
+    var overlayStreamChoice by remember { mutableStateOf(overlayStreamEnabled) }
+    var streamChoice by remember { mutableStateOf(streamEnabled) }
     val regular = SbSansTextRegular
     BoxWithConstraints(Modifier.fillMaxSize().background(FigmaCanvas).safeDrawingPadding()) {
-        val w = maxWidth
-        val h = maxHeight
-        val fieldWidth = (w - 78.dp).coerceAtMost(315.dp)
-        val fieldHeight = fieldWidth * (281f / 315f)
-        MascotChatIdentity(heroName, Modifier.align(Alignment.TopStart).offset(x = 20.dp, y = MascotChatIdentityTop).size(MascotChatIdentitySize)) {
-            AsyncImage(model = image ?: previewUrl, contentDescription = heroName, contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize())
-        }
-        Column(Modifier.align(Alignment.TopCenter).offset(y = h * .265f).fillMaxWidth().padding(horizontal = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(headings[choice], fontFamily = extended, fontSize = 20.sp, lineHeight = 23.sp,
-                textAlign = TextAlign.Center, color = Color.Black)
-            Spacer(Modifier.height(4.dp))
-            Text(descriptions[choice], fontFamily = regular, fontSize = 14.sp, lineHeight = 19.6.sp,
-                color = Color.Black.copy(alpha = .5f), textAlign = TextAlign.Center)
-        }
-        Box(Modifier.align(Alignment.TopCenter).offset(y = h * .449f).width(fieldWidth).height(fieldHeight)) {
-            AndroidView(modifier = Modifier.fillMaxSize(), factory = { context ->
-                WebView(context).apply {
-                    setBackgroundColor(android.graphics.Color.rgb(234, 235, 236))
-                    settings.javaScriptEnabled = true
-                    settings.allowFileAccess = true
-                    settings.allowContentAccess = false
-                    settings.blockNetworkLoads = true
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            view?.post {
-                                val height = (view.height / view.resources.displayMetrics.density).toInt().coerceAtLeast(1)
-                                view.evaluateJavascript("""(function(){
-                                  const style=document.createElement('style');
-                                  style.textContent='html,body,#surface,#content{height:${height}px!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important} #characterTitle,.intro,.axis,.selection{display:none!important} #content{max-width:none!important} .matrix-wrap{width:100%!important;max-width:none!important;height:100%!important;margin:0!important} #field{width:100%!important;height:100%!important;aspect-ratio:auto!important}';
-                                  document.head.append(style);
-                                })();""".trimIndent(), null)
-                                view.requestLayout(); view.invalidate()
-                            }
-                        }
-                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
-                    }
-                    addJavascriptInterface(InteractionBridge { select(it) }, "MascotPersonality")
-                    loadUrl("file:///android_asset/personality/index.html?selection=$initialIndex")
+        val fieldWidth = (maxWidth - 40.dp).coerceAtMost(353.dp)
+        val fieldHeight = fieldWidth * (315f / 353f)
+        val integrationsEnabled = choice == 1 || choice == 3
+        Column(Modifier.fillMaxSize().padding(top = 113.dp, start = 20.dp, end = 20.dp)
+            .verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.align(Alignment.CenterHorizontally).width(fieldWidth).height(fieldHeight)) {
+                InteractionPersonalityField(choice, { choice = it }, Modifier.fillMaxSize())
+                Text("Готовлю решения", modifier = Modifier.align(Alignment.TopCenter).padding(top = 15.dp),
+                    fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.White.copy(alpha = .55f))
+                Text("Проактивно", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)
+                    .graphicsLayer { rotationZ = -90f }, fontFamily = SbSansTextMedium,
+                    fontSize = 11.sp, maxLines = 1, color = Color.White.copy(alpha = .55f))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(interactionDisplayTitles[choice], fontFamily = SbSansDisplayMedium,
+                    fontSize = 18.sp, lineHeight = 21.6.sp, letterSpacing = (-0.45).sp, color = Color.Black)
+                Text(interactionDescriptions[choice].replace('\n', ' '), fontFamily = regular,
+                    fontSize = 14.sp, lineHeight = 19.6.sp, letterSpacing = (-0.35).sp, color = Color.Black)
+            }
+            HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp),
+                color = Color.Black.copy(alpha = .08f))
+            ChatCapabilitiesCard(calendarEnabled, onCalendarChange, profanityEnabled, onProfanityChange,
+                controlsEnabled = integrationsEnabled)
+            HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp),
+                color = Color.Black.copy(alpha = .08f))
+            Row(Modifier.fillMaxWidth().toggleable(value = portraitChoice, role = Role.Switch,
+                onValueChange = { portraitChoice = it }).padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Крупный план в чате", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = FigmaInk)
+                    Text("Выключено — персонаж целиком по центру", fontFamily = SbSansTextMedium,
+                        fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
                 }
-            }, onRelease = { view -> view.removeJavascriptInterface("MascotPersonality"); view.destroy() })
-            Text(fieldTitles[choice], modifier = Modifier.align(Alignment.Center), fontFamily = SbSansDisplayMedium,
-                fontSize = 22.sp, lineHeight = 25.sp, textAlign = TextAlign.Center, color = Color.White)
+                Spacer(Modifier.width(12.dp))
+                Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
+                    .background(if (portraitChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
+                    contentAlignment = if (portraitChoice) Alignment.CenterEnd else Alignment.CenterStart) {
+                    Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color.Black.copy(alpha = .08f))
+            Row(Modifier.fillMaxWidth().toggleable(value = streamChoice, role = Role.Switch,
+                onValueChange = { streamChoice = it }).padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Потоковая анимация в чате", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = FigmaInk)
+                    Text("При выключении поток в чате отключается и токены на него не расходуются",
+                        fontFamily = SbSansTextMedium, fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
+                }
+                Spacer(Modifier.width(12.dp))
+                Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
+                    .background(if (streamChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
+                    contentAlignment = if (streamChoice) Alignment.CenterEnd else Alignment.CenterStart) {
+                    Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
+                }
+            }
+            if (!com.generativemascot.app.BuildConfig.USE_OMNI) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color.Black.copy(alpha = .08f))
+                Row(Modifier.fillMaxWidth().toggleable(value = overlayStreamChoice, role = Role.Switch,
+                    onValueChange = { overlayStreamChoice = it }).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Потоковая анимация в оверлее", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = FigmaInk)
+                        Text("Персонаж оживает в оверлее; время соединения оплачивается", fontFamily = SbSansTextMedium,
+                            fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
+                        .background(if (overlayStreamChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
+                        contentAlignment = if (overlayStreamChoice) Alignment.CenterEnd else Alignment.CenterStart) {
+                        Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
+                    }
+                }
+            }
+            Spacer(Modifier.height(110.dp))
         }
-        Text("Готовлю решения", modifier = Modifier.align(Alignment.TopCenter).offset(x = w * .19f, y = h * .42f),
-            fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.Black.copy(alpha = .32f))
-        Text("Подсказываю", modifier = Modifier.align(Alignment.TopCenter).offset(x = -w * .20f, y = h * .449f + fieldHeight + 8.dp),
-            fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.Black.copy(alpha = .32f))
-        val fieldLeft = (w - fieldWidth) / 2
-        val fieldTop = h * .449f
-        Box(Modifier.align(Alignment.TopStart).offset(x = fieldLeft - 24.dp, y = fieldTop + fieldHeight * .67f - 42.dp)
-            .width(16.dp).height(84.dp), contentAlignment = Alignment.Center) {
-            Text("По запросу", modifier = Modifier.wrapContentSize(unbounded = true).graphicsLayer { rotationZ = -90f },
-                fontFamily = SbSansTextMedium, fontSize = 11.sp, maxLines = 1, softWrap = false, color = Color.Black.copy(alpha = .32f))
-        }
-        Box(Modifier.align(Alignment.TopStart).offset(x = fieldLeft + fieldWidth + 8.dp, y = fieldTop + fieldHeight * .25f - 42.dp)
-            .width(16.dp).height(84.dp), contentAlignment = Alignment.Center) {
-            Text("Проактивно", modifier = Modifier.wrapContentSize(unbounded = true).graphicsLayer { rotationZ = -90f },
-                fontFamily = SbSansTextMedium, fontSize = 11.sp, maxLines = 1, softWrap = false, color = Color.Black.copy(alpha = .32f))
-        }
+        MascotSettingsHeader("Поведение и доступы", onBack = onBack,
+            modifier = Modifier.align(Alignment.TopCenter).background(FigmaCanvas))
         Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 33.dp).clip(CircleShape).background(FigmaInk)
-            .clickable { onSave(choice) }.padding(horizontal = 28.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
+            .clickable { onSave(choice, portraitChoice, overlayStreamChoice, streamChoice) }.padding(horizontal = 28.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
             Text("СОХРАНИТЬ", fontFamily = SbSansDisplayMedium, fontSize = 13.4.sp, color = Color.White)
         }
     }

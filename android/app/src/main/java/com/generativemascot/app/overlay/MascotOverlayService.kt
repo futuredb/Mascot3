@@ -43,6 +43,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +58,9 @@ class MascotOverlayService : Service() {
     private lateinit var windows: WindowManager
     private val prefs by lazy { getSharedPreferences(OverlaySize.PREFERENCES, MODE_PRIVATE) }
     private var load: Job? = null
+    internal var loadPhysics: suspend (String) -> com.generativemascot.app.physics.InstalledPhysics? = {
+        com.generativemascot.app.physics.PhysicsStore(this).load(it)
+    }
     private var activeHeroId: String? = null
     private var appMonitor: Job? = null
     private var appRules = OverlayAppRules()
@@ -72,6 +76,7 @@ class MascotOverlayService : Service() {
     private var compactParams: WindowManager.LayoutParams? = null
     private var bubbleVisible = true
     private var hintIndex = 0
+    private var hasMessage = true
     private var position = OverlayPoint(0, 0)
     private var compactPosition = OverlayPoint(0, 0)
     private var collapsed = false
@@ -81,6 +86,7 @@ class MascotOverlayService : Service() {
     private var bubbleAdded = false
     private var compactAdded = false
     private var heroWindow: OverlayHeroWindow? = null
+    private var stateJob: Job? = null
     private var gestureWindow: OverlayGestureWindow? = null
     private var pendingLongPress: Runnable? = null
     private val cancelTouches = mutableListOf<() -> Unit>()
@@ -89,6 +95,7 @@ class MascotOverlayService : Service() {
     private val choreographer by lazy { Choreographer.getInstance() }
     private var motionRunning = false
     private var previousFrame = 0L
+    private var lastBubbleFrame = 0L
     private val unlockCheck = Runnable { showIfUnlocked() }
     private val motionFrame = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -99,13 +106,17 @@ class MascotOverlayService : Service() {
             if (previousFrame > 0) {
                 hero?.updateLighting((frameTimeNanos - previousFrame) / 1e9f, sample)
                 hero?.applyPhonePose(movement.advance((frameTimeNanos - previousFrame) / 1e9f, sample))
-                updateBubble(motionOnly = true)
+                if (lastBubbleFrame == 0L || frameTimeNanos - lastBubbleFrame >= 33_000_000L) {
+                    lastBubbleFrame = frameTimeNanos
+                    updateBubble(motionOnly = true)
+                }
             }
             previousFrame = frameTimeNanos
             choreographer.postFrameCallback(this)
         }
     }
     private val sizeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "stream_enabled") main.post { if (!destroyed && !stopping) hero?.setStreaming(activeHeroId, prefs.getBoolean("stream_enabled", false)) }
         if (key == OverlaySize.KEY) main.post { if (!destroyed && !stopping) resizeHero() }
         if (key == OverlayAppRules.MODE_KEY || key == OverlayAppRules.APPS_KEY)
             main.post { if (!destroyed && !stopping) showIfUnlocked() }
@@ -158,10 +169,11 @@ class MascotOverlayService : Service() {
                 packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
                     android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
             else null
-            bubbleVisible = true
-            prefs.edit().putBoolean("collapsed", false).putBoolean("bubble_visible", true).apply()
-            if (collapsed && artwork != null) setCollapsed(false)
-            else collapsed = false
+            hasMessage = prefs.getBoolean("hint_available", true)
+            bubbleVisible = hasMessage
+            prefs.edit().putBoolean("collapsed", !hasMessage).putBoolean("bubble_visible", hasMessage).apply()
+            if (collapsed && artwork != null && hasMessage) setCollapsed(false)
+            else collapsed = !hasMessage
         }
         if (activeHeroId == id && (load?.isActive == true || artwork != null)) {
             showIfUnlocked()
@@ -170,53 +182,99 @@ class MascotOverlayService : Service() {
         activeHeroId = id
         mutableStatus.value = OverlayStatus(loading = true)
         load?.cancel()
+        stateJob?.cancel(); stateJob = null
         detachWindows()
         cancelTouches.clear()
         heroWindow?.removeAllViews(); heroWindow = null
         hero = null; bubble = null; compact = null
-        collapsed = prefs.getBoolean("collapsed", false)
-        bubbleVisible = prefs.getBoolean("bubble_visible", true)
+        hasMessage = prefs.getBoolean("hint_available", true)
+        collapsed = !hasMessage || prefs.getBoolean("collapsed", false)
+        bubbleVisible = hasMessage && prefs.getBoolean("bubble_visible", true)
         hintIndex = prefs.getInt("hint_index", 0).coerceIn(0, overlayDemoHints.lastIndex)
         artwork?.recycle(); artwork = null
         load = scope.launch {
             // Retain ownership on cancellation: a late decode must never leak bitmaps or re-add a window.
             var decoded: OverlayArtwork? = null
             try {
-                withContext(Dispatchers.IO) { decoded = loadOverlayArtwork(this@MascotOverlayService, id) }
-                val physics = try { com.generativemascot.app.physics.PhysicsStore(this@MascotOverlayService).load(id) }
-                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { null }
+                withContext(Dispatchers.IO) { decoded = loadOverlayArtwork(this@MascotOverlayService, id, fast = true) }
                 if (destroyed) return@launch
                 artwork = decoded
-                hero = OverlayHeroView(this@MascotOverlayService, requireNotNull(decoded), physics, phoneMotion).apply {
-                    contentDescription = "Плавающий герой. Нажмите для реакции. Разведите или сведите два пальца, чтобы изменить размер. Удерживайте, чтобы скрыть или показать подсказку. Перетащите, чтобы переместить."
+                hero = OverlayHeroView(this@MascotOverlayService, requireNotNull(decoded)).apply {
+                    contentDescription = "Плавающий герой. Касания проходят к приложению под ним."
                     setOnLongClickListener {
+                        if (!hasMessage) return@setOnLongClickListener true
                         bubbleVisible = !bubbleVisible
                         prefs.edit().putBoolean("bubble_visible", bubbleVisible).apply()
                         updateBubble(); true
                     }
                     installDrag(this)
                 }
-                if (physics == null) scope.launch {
-                    while (isActive && !destroyed && !stopping && activeHeroId == id) {
-                        delay(10_000)
-                        val prepared = try { com.generativemascot.app.physics.PhysicsStore(this@MascotOverlayService).load(id) }
-                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                            catch (_: Exception) { null }
-                        if (prepared != null && activeHeroId == id && !destroyed && !stopping) {
-                            hero?.installPhysics(prepared, phoneMotion)
-                            break
-                        }
-                    }
-                }
+                hero?.setStreaming(id, prefs.getBoolean("stream_enabled", false))
                 compact = OverlayCompactView(this@MascotOverlayService, requireNotNull(decoded)) { setCollapsed(false) }
-                    .also { installDrag(it) }
+                    .also { control ->
+                        control.setHasMessage(hasMessage)
+                        control.setOnLongClickListener {
+                            val menu = android.widget.LinearLayout(this@MascotOverlayService).apply {
+                                orientation = android.widget.LinearLayout.VERTICAL
+                                background = android.graphics.drawable.GradientDrawable().apply {
+                                    setColor(android.graphics.Color.rgb(34, 34, 34)); cornerRadius = overlayDp(14).toFloat()
+                                }
+                            }
+                            fun menuItem(title: String, icon: Int) = android.widget.TextView(this@MascotOverlayService).apply {
+                                text = title; textSize = 13.4f; setTextColor(android.graphics.Color.WHITE)
+                                typeface = androidx.core.content.res.ResourcesCompat.getFont(this@MascotOverlayService, R.font.sb_sans_display_medium)
+                                gravity = android.view.Gravity.CENTER_VERTICAL
+                                includeFontPadding = false
+                                isSingleLine = true
+                                setPadding(overlayDp(10), 0, overlayDp(12), 0)
+                                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
+                                compoundDrawablePadding = overlayDp(6)
+                                minHeight = overlayDp(38)
+                            }.also { menu.addView(it) }
+                            val home = menuItem("Гоу домой", R.drawable.ic_overlay_home)
+                            val open = menuItem("Перейти в приложение", R.drawable.ic_overlay_open_app)
+                            fun setFigmaIcon(label: android.widget.TextView, asset: String, tint: Boolean = false) {
+                                runCatching {
+                                    val side = overlayDp(16)
+                                    val icon = overlayMenuIcon(this@MascotOverlayService, asset, side, tint)
+                                    label.setCompoundDrawables(icon, null, null, null)
+                                }
+                            }
+                            setFigmaIcon(home, "overlay-go-home-figma.svg")
+                            setFigmaIcon(open, "figma-home/hero-grid.svg", tint = true)
+                            menu.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                            val popup = android.widget.PopupWindow(menu, menu.measuredWidth, menu.measuredHeight, true).apply {
+                                isOutsideTouchable = true
+                                setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                            }
+                            home.setOnClickListener { popup.dismiss(); dismiss() }
+                            open.setOnClickListener {
+                                popup.dismiss()
+                                startActivity(Intent(this@MascotOverlayService, com.generativemascot.app.MainActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+                            }
+                            popup.showAsDropDown(control, (control.width - menu.measuredWidth) / 2,
+                                -control.height - menu.measuredHeight - overlayDp(8))
+                            true
+                        }
+                        installDrag(control)
+                    }
                 decoded = null
                 bubble = OverlayHintView(this@MascotOverlayService, onNext = {
-                    hintIndex = (hintIndex + 1) % overlayDemoHints.size
-                    prefs.edit().putInt("hint_index", hintIndex).apply()
-                    bubble?.setHint(overlayDemoHints[hintIndex]); updateBubble()
-                }, onHide = { dismiss() }, onCollapse = { setCollapsed(true) })
+                    if (hintIndex < overlayDemoHints.lastIndex) {
+                        hintIndex++
+                        prefs.edit().putInt("hint_index", hintIndex).apply()
+                        bubble?.setHint(overlayDemoHints[hintIndex]); updateBubble()
+                    } else {
+                        hasMessage = false
+                        prefs.edit().putBoolean("hint_available", false).apply()
+                        compact?.setHasMessage(false)
+                        setCollapsed(true)
+                    }
+                }, onHide = { dismiss() }, onCollapse = { setCollapsed(true) }, onChat = {
+                    startActivity(com.generativemascot.app.MainActivity.overlayChatIntent(this@MascotOverlayService, id))
+                })
                     .apply { setHint(overlayDemoHints[hintIndex]); installDrag(this); installOverlayTouchRegion(this) { touchRegion() } }
                 measureWindows()
                 restorePosition()
@@ -224,18 +282,83 @@ class MascotOverlayService : Service() {
                     prefs.getFloat("compact_x", .04f), prefs.getFloat("compact_y", .75f))
                 showIfUnlocked()
                 if (!destroyed && !stopping && hero != null) mutableStatus.value = OverlayStatus(running = true)
-                val preparedArtwork = artwork
-                if (preparedArtwork?.video != null) scope.launch {
-                    val envelope = withContext(Dispatchers.IO) {
-                        android.graphics.Rect().apply {
-                            (listOfNotNull(preparedArtwork.video) + preparedArtwork.reactions).forEach { clip ->
-                                union(videoEnvelope(clip, preparedArtwork.frames.first().width, preparedArtwork.frames.first().height))
+                val preparedArtwork = requireNotNull(artwork)
+                // Depth verification reads and hashes large files; never block the first window.
+                scope.launch {
+                    val store = com.generativemascot.app.physics.PhysicsStore(this@MascotOverlayService)
+                    var revision: String? = null
+                    while (isActive && !destroyed && !stopping && activeHeroId == id && artwork === preparedArtwork) {
+                        val currentRevision = withContext(Dispatchers.IO) { store.revision(id) }
+                        if (revision == null || currentRevision != revision || hero?.needsPhysicsRetry == true) {
+                            val prepared = try { loadPhysics(id) }
+                                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (_: Exception) { null }
+                            if (prepared != null && activeHeroId == id && !destroyed && !stopping && artwork === preparedArtwork) {
+                                hero?.installPhysics(prepared, phoneMotion)
+                                revision = prepared.directory.name
                             }
                         }
+                        delay(10_000)
                     }
-                    if (!destroyed && !stopping && artwork === preparedArtwork) {
-                        preparedArtwork.canvasBounds = envelope
-                        showIfUnlocked()
+                }
+                // Decode extra clips, matte corrections and frame bounds only after the first window.
+                scope.launch {
+                    val idle = preparedArtwork.video
+                    if (idle != null) {
+                        val refined = withContext(Dispatchers.IO) { refineOverlayIdle(this@MascotOverlayService, id, idle) }
+                        if (!destroyed && !stopping && activeHeroId == id && artwork === preparedArtwork)
+                            hero?.applyPreparedClips(refined, emptyList())
+                        val clips = withContext(Dispatchers.IO) { loadOverlayReactions(this@MascotOverlayService, id, idle) }
+                        if (destroyed || stopping || activeHeroId != id || artwork !== preparedArtwork) return@launch
+                        hero?.applyPreparedClips(refined, clips)
+                        stateJob?.cancel()
+                        stateJob = scope.launch {
+                            val app = application as com.generativemascot.app.MascotApp
+                            app.behavior.store.states.collectLatest { record ->
+                                if (destroyed || stopping || activeHeroId != id || artwork !== preparedArtwork) return@collectLatest
+                                val action = if (record.heroId == id)
+                                    com.generativemascot.app.state.renderedAction(record, app.heroStore.actionVideoUrls(id).keys)
+                                else "idle"
+                                val file = app.heroStore.actionVideoFile(id, action) ?: idle.file
+                                val selected = if (file == idle.file) refined else withContext(Dispatchers.IO) {
+                                    val url = file.toURI().toString()
+                                    val neutral = app.heroStore.neutralVideoFrameFile(id)?.toURI()?.toString()
+                                    OverlayVideo(file, app.heroStore.videoMatteColor(id) ?: com.generativemascot.app.ui.detectBackgroundColor(url),
+                                        com.generativemascot.app.ui.detectAdaptiveGreenMatte(url, neutral))
+                                }
+                                if (!destroyed && !stopping && activeHeroId == id && artwork === preparedArtwork) {
+                                    hero?.setStateClip(selected)
+                                    app.behavior.observed("overlay", action)
+                                }
+                            }
+                        }
+                        val frameWidth = preparedArtwork.frames.first().width
+                        val frameHeight = preparedArtwork.frames.first().height
+                        val envelope = withContext(Dispatchers.IO) {
+                            val cached = (listOf(refined) + clips).map { cachedVideoEnvelope(it, frameWidth, frameHeight) }
+                            if (cached.any { it == null }) null
+                            else android.graphics.Rect().apply { cached.filterNotNull().forEach { union(it) } }
+                        }
+                        if (envelope != null && !destroyed && !stopping && activeHeroId == id && artwork === preparedArtwork) {
+                            preparedArtwork.canvasBounds = envelope
+                            showIfUnlocked()
+                        }
+                    } else {
+                        var full: OverlayArtwork? = null
+                        try {
+                            withContext(Dispatchers.IO) { full = loadOverlayArtwork(this@MascotOverlayService, id) }
+                            val complete = full ?: return@launch
+                            if (!destroyed && !stopping && activeHeroId == id && artwork === preparedArtwork && complete.video == null) {
+                                val oldFrames = preparedArtwork.frames
+                                preparedArtwork.frames = complete.frames
+                                preparedArtwork.bounds = complete.bounds
+                                preparedArtwork.intervalMs = complete.intervalMs
+                                full = null // Frames now belong to preparedArtwork.
+                                hero?.refreshPosterFrames()
+                                showIfUnlocked()
+                                oldFrames.forEach { if (!it.isRecycled) it.recycle() }
+                            }
+                        } finally { full?.recycle() }
                     }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -256,7 +379,7 @@ class MascotOverlayService : Service() {
         val notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_overlay_notification)
             .setContentTitle("Герой рядом")
-            .setContentText("Нажмите — герой отреагирует. Удерживайте — скрыть подсказку.")
+            .setContentText("Перемещайте и изменяйте размер за карточку героя.")
             .setContentIntent(open).setOngoing(true).setSilent(true)
             .addAction(0, "Скрыть героя", stop).build()
         ServiceCompat.startForeground(this, NOTIFICATION, notification,
@@ -299,8 +422,8 @@ class MascotOverlayService : Service() {
         }
         compactParams = params(minOf(overlayDp(48), area.width), minOf(overlayDp(48), area.height))
         val card = bubble ?: return
-        card.compositionScale = OverlaySize.read(this)
-        val width = minOf((overlayDp(248) * card.compositionScale).roundToInt(), area.width)
+        card.compositionScale = 1f
+        val width = minOf(overlayDp(248), area.width)
         card.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(area.height, View.MeasureSpec.AT_MOST))
         bubbleParams = params(width, card.measuredHeight.coerceAtLeast(1))
@@ -310,7 +433,7 @@ class MascotOverlayService : Service() {
         val old = heroParams ?: return // A pending load will read the latest preference itself.
         val previous = OverlayDimensions(old.width, old.height)
         val size = OverlaySize.dimensions(OverlaySize.read(this), resources.displayMetrics.density, usableArea(), artwork)
-        if (size == previous && bubble?.compositionScale == OverlaySize.read(this)) return // Persisting a pinch must not reposition it or restart playback.
+        if (size == previous && bubble?.compositionScale == 1f) return // Persisting a pinch must not reposition it or restart playback.
         measureWindows()
         val next = heroParams ?: return
         position = heroPlacement(next.width, next.height).reposition(position,
@@ -320,7 +443,7 @@ class MascotOverlayService : Service() {
     }
 
     private fun setCollapsed(value: Boolean) {
-        if (value == collapsed || destroyed || stopping) return
+        if ((!value && !hasMessage) || value == collapsed || destroyed || stopping) return
         collapsed = value
         if (!value) bubbleVisible = true
         prefs.edit().putBoolean("collapsed", value).putBoolean("bubble_visible", bubbleVisible).apply()
@@ -414,7 +537,7 @@ class MascotOverlayService : Service() {
             choreographer.removeFrameCallback(motionFrame)
             phoneMotion.stop()
         }
-        previousFrame = 0L; movement.reset()
+        previousFrame = 0L; lastBubbleFrame = 0L; movement.reset()
         hero?.resetLighting()
         hero?.applyPhonePose(PhonePose())
     }
@@ -422,7 +545,7 @@ class MascotOverlayService : Service() {
     private fun updateBubble(motionOnly: Boolean = false) {
         updateCompact()
         val card = bubble ?: return
-        if (collapsed || !bubbleVisible || !heroAdded) {
+        if (!hasMessage || collapsed || !bubbleVisible || !heroAdded) {
             removeBubble(); updateGestureWindow(); return
         }
         try {
@@ -464,8 +587,8 @@ class MascotOverlayService : Service() {
         val hp = heroParams ?: return
         val visible = hero?.hintBounds(hp.width, hp.height, transformed = false) ?: return
         val target = OverlayLayout.clamp(usableArea(), p.width, p.height,
-            position.x + visible.right.roundToInt() - p.width * 5 / 6,
-            position.y + visible.bottom.roundToInt() - p.height * 5 / 6)
+            position.x + visible.right.roundToInt() - p.width * 4 / 5,
+            position.y + visible.bottom.roundToInt() - p.height * 2 / 3)
         compactPosition = target
         val changed = p.x != target.x || p.y != target.y
         p.x = target.x; p.y = target.y
@@ -475,38 +598,9 @@ class MascotOverlayService : Service() {
         } else if (changed) windows.updateViewLayout(view, p)
     }
 
-    private fun updateGestureWindow() {
-        if (Build.VERSION.SDK_INT < 33 || !heroAdded) { removeGestureWindow(); return }
-        if (gestureWindow == null) {
-            val input = OverlayGestureWindow(this) {
-                buildList {
-                    if (compactAdded) compact?.let { bell -> compactParams?.let { p ->
-                        add(bell to android.graphics.Region(p.x, p.y, p.x + p.width, p.y + p.height))
-                    } }
-                    if (bubbleAdded) bubble?.let { card -> bubbleParams?.let { p ->
-                        add(card to card.touchRegion().apply { translate(p.x, p.y) })
-                    } }
-                    if (heroAdded) hero?.let { view -> heroParams?.let { p ->
-                        add(view to view.touchRegion().apply { translate(p.x, p.y) })
-                    } }
-                }
-            }
-            installOverlayTouchRegion(input) { input.touchRegion() }
-            val bounds = windows.currentWindowMetrics.bounds
-            val p = params(bounds.width(), bounds.height()).apply {
-                x = 0; y = 0
-                flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                // No pixels are drawn. One UI drops input at very low window alpha.
-                // Stay below Android's .8 untrusted-overlay occlusion limit while
-                // keeping input enabled on Samsung; touchRegion still limits hits.
-                alpha = .5f
-                title = "Mascot gestures"
-            }
-            windows.addView(input, p)
-            gestureWindow = input
-        }
-        gestureWindow?.invalidate()
-    }
+    // The card and compact window accept their own input. Avoid a transparent
+    // full-screen window, which would force the hero to be much more translucent.
+    private fun updateGestureWindow() { removeGestureWindow() }
 
     private fun removeGestureWindow() {
         gestureWindow?.let { runCatching { windows.removeViewImmediate(it) } }
@@ -521,6 +615,11 @@ class MascotOverlayService : Service() {
         var scale = OverlaySize.read(this)
         var scaleDirty = false
         var anchorX = .5f; var anchorY = .5f
+        var resizeScheduled = false
+        val resizeFrame = android.view.Choreographer.FrameCallback {
+            resizeScheduled = false
+            if (!destroyed && !stopping && heroAdded) showIfUnlocked()
+        }
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         fun persistSize() {
             if (!scaleDirty) return
@@ -528,7 +627,7 @@ class MascotOverlayService : Service() {
             OverlaySize.save(this, scale)
             savePosition()
         }
-        val detector = if (compactMode) null else OverlayPinchGesture(overlayDp(2).toFloat(),
+        val detector = if (compactMode) null else OverlayPinchGesture(overlayDp(8).toFloat(),
                 onBegin = begin@ { focusX, focusY ->
                     val p = heroParams ?: return@begin false
                     if (!accepting || !heroAdded) return@begin false
@@ -551,12 +650,13 @@ class MascotOverlayService : Service() {
                         (focusX - anchorX * size.width).roundToInt(),
                         (focusY - anchorY * size.height).roundToInt())
                     scaleDirty = true
-                    bubble?.compositionScale = scale
-                    bubbleParams?.width = minOf((overlayDp(248) * scale).roundToInt(), area.width)
                     if (p.width != size.width || p.height != size.height || position != target || bubble?.isLayoutRequested == true) {
                         p.width = size.width; p.height = size.height
                         position = target
-                        showIfUnlocked() // Resize the existing surface; keep the current animation.
+                        if (!resizeScheduled) {
+                            resizeScheduled = true
+                            android.view.Choreographer.getInstance().postFrameCallback(resizeFrame)
+                        }
                     }
                 },
                 onEnd = ::persistSize)
@@ -591,7 +691,7 @@ class MascotOverlayService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     // Wait for all fingers to lift before allowing a new drag or reaction.
-                    if (multiTouch || view is OverlayHintView) return@OnTouchListener true
+                    if (multiTouch) return@OnTouchListener true
                     val dx = event.rawX - downX; val dy = event.rawY - downY
                     if (hypot(dx, dy) > slop) { dragging = true; cancelLongPress() }
                     if (dragging) {

@@ -1,5 +1,6 @@
 package com.generativemascot.app.ui
 
+import android.app.Application
 import android.graphics.Color
 import android.net.Uri
 import org.junit.Assert.assertFalse
@@ -7,9 +8,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.nio.file.Files
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = Application::class)
 class LoopSeamTest {
     private val green = Color.rgb(0, 255, 0)
     private val character = Color.rgb(100, 80, 70)

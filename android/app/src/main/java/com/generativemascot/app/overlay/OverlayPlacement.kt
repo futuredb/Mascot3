@@ -5,7 +5,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
-/** Horizontal limits follow the body, not transparent padding in a generated video. */
+/** Limits follow the visible body, not transparent padding in a generated video. */
 internal class OverlayPlacement(
     private val area: OverlayArea,
     private val size: OverlayDimensions,
@@ -16,8 +16,10 @@ internal class OverlayPlacement(
     private val right = (body.right + motionMargin).coerceAtMost(size.width.toFloat())
     private val minX = ceil(area.left - left).toInt()
     private val maxX = floor(area.right - right).toInt().coerceAtLeast(minX)
-    private val minY = area.top
-    private val maxY = (area.bottom - size.height).coerceAtLeast(minY)
+    private val top = (body.top - motionMargin).coerceAtLeast(0f)
+    private val bottom = (body.bottom + motionMargin).coerceAtMost(size.height.toFloat())
+    private val minY = ceil(area.top - top).toInt()
+    private val maxY = floor(area.bottom - bottom).toInt().coerceAtLeast(minY)
 
     fun clamp(x: Int, y: Int) = OverlayPoint(x.coerceIn(minX, maxX), y.coerceIn(minY, maxY))
 

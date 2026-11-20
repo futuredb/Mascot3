@@ -5,8 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items as lazyRowItems
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -42,29 +43,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 val ANIMATION_STATE_KEYS = HeroLocalStore.LIBRARY_VIDEO_ACTIONS
 val ANIMATION_PACK_SIZE = ANIMATION_STATE_KEYS.size
-private val actionDescriptions = mapOf(
-    "idle" to "Тихо осматривается и ждёт, когда ты снова окажешься рядом",
-    "resting" to "Отпускает напряжение и спокойно отдыхает, оставаясь рядом",
-    "thinking" to "Неторопливо ищет ответ и перебирает идеи",
-    "at_glass" to "Подходит совсем близко и будто касается стекла",
-    "watching" to "Внимательно следит за тем, что происходит вокруг",
-    "joyful" to "Искренне радуется твоему вниманию",
-    "sleeping" to "Засыпает и спокойно дышит",
-    "sad" to "Немного грустит и ждёт твоей поддержки",
-    "angry" to "Сердится выразительно, но совсем не страшно",
-    "refusal" to "Уверенно показывает, что сейчас не согласен",
-    "frightened" to "Пугается неожиданности и осторожно приходит в себя",
-    "curious" to "С любопытством изучает что-то новое",
-    "tender" to "Делится тихим и очень тёплым моментом",
-    "stretching" to "Хорошенько потягивается и снова становится бодрым",
-    "greeting" to "Приветствует тебя своим особенным способом",
-    "signature_move" to "Показывает фирменный жест, который умеет только он",
-    "dancing" to "Пускается в свой самый любимый танец",
-)
-
 @Composable
 private fun AnimationLibraryTopBar(title: String, onBack: () -> Unit, onDelete: () -> Unit, canDelete: Boolean) {
     Box(Modifier.fillMaxWidth().height(104.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
@@ -113,11 +95,10 @@ fun AnimationLibraryScreen(
     }
     var confirmPack by remember { mutableStateOf(false) }
     var selectedAction by remember { mutableStateOf<String?>(null) }
-    var selectedChatClip by remember(mascotId) { mutableStateOf<ChatAnimationClip?>(null) }
     var chatClips by remember(mascotId) { mutableStateOf(emptyList<ChatAnimationClip>()) }
     val foreground = rememberAppResumed()
-    LaunchedEffect(mascotId, foreground, selectedAction, selectedChatClip?.id) {
-        if (!foreground || selectedAction != null || selectedChatClip != null) return@LaunchedEffect
+    LaunchedEffect(mascotId, foreground, selectedAction) {
+        if (!foreground || selectedAction != null) return@LaunchedEffect
         while (isActive && mascotId != null) {
             chatClips = withContext(Dispatchers.IO) { HeroLocalStore.current?.chatAnimations(mascotId).orEmpty() }
             delay(10_000)
@@ -130,6 +111,13 @@ fun AnimationLibraryScreen(
     LaunchedEffect(Unit) { onRefresh() }
     val progress = animationPackProgress(videoUrls)
     val playableActions = animationPlayableActions(videoUrls, animations, !legacyVideoUrl.isNullOrBlank())
+    val previewItems = remember(playableActions, videoUrls, animations, legacyVideoUrl, chatClips) {
+        ANIMATION_STATE_KEYS.filter { it in playableActions }.map { action ->
+            AnimationPreviewItem(action, stateTitle(action), action, videoUrls[action], animations[action].orEmpty(), false)
+        } + chatClips.map { clip ->
+            AnimationPreviewItem("chat:${clip.id}", clip.title, "idle", clip.videoUrl, emptyList(), true)
+        }
+    }
     val readyCount = progress.readyCount
     var selectedCount by rememberSaveable(mascotId) {
         mutableIntStateOf(defaultAnimationBatchSize(progress.remainingCount))
@@ -175,28 +163,18 @@ fun AnimationLibraryScreen(
             onRefresh()
         }
     }
-    BackHandler { if (selectedChatClip != null) selectedChatClip = null else if (selectedAction != null) selectedAction = null else onBack() }
+    BackHandler { if (selectedAction != null) selectedAction = null else onBack() }
     val baseStill = remember(mascotId) { mascotId?.let { HeroLocalStore.current?.baseFile(it)?.toURI()?.toString() } }
     val palette = heroPalette(baseStill ?: neutralFrameUrl)
-    MascotSystemBars(if (selectedAction == null && selectedChatClip == null) FigmaCanvas else palette.top,
-        if (selectedAction == null && selectedChatClip == null) FigmaCanvas else palette.end)
-    if (selectedChatClip != null) {
-        val clip = selectedChatClip!!
-        Column(Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
-            MascotTopBar(displayName, onBack = { selectedChatClip = null }, backArrow = true, lightTitle = true)
-            Spacer(Modifier.height(8.dp))
-            Text(clip.title, fontFamily = SbSansDisplayMedium, color = Color.White.copy(alpha = .85f), fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
-            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
-                SoraMascotVideo(videoUrl = clip.videoUrl, action = "idle", fullClip = true, modifier = Modifier.fillMaxSize())
-            }
-        }
-    } else MascotTransition(selectedAction, Modifier.fillMaxSize()) { action ->
-        if (action != null) {
+    MascotSystemBars(if (selectedAction == null) FigmaCanvas else palette.top,
+        if (selectedAction == null) FigmaCanvas else palette.end)
+    MascotTransition(selectedAction, Modifier.fillMaxSize(), contentKey = { it != null }) { action ->
+        val selected = previewItems.firstOrNull { it.id == action }
+        if (selected != null) {
             ActionDetail(
-                mascotId, action, displayName, animations[action].orEmpty(),
-                videoUrls, legacyVideoUrl, neutralFrameUrl, baseStill, palette,
-                onSelect = { selectedAction = it },
-                onClose = { selectedAction = null },
+                mascotId = mascotId, selected = selected, items = previewItems, heroName = displayName,
+                legacyVideoUrl = legacyVideoUrl, neutralFrameUrl = neutralFrameUrl, baseStill = baseStill, palette = palette,
+                onSelect = { selectedAction = it }, onClose = { selectedAction = null },
             )
         } else {
             Column(
@@ -245,7 +223,7 @@ fun AnimationLibraryScreen(
                             Text("ИЗ ЧАТА", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
                         }
                         items(chatClips, key = { "chat-${it.id}" }) { clip ->
-                            Column(Modifier.fillMaxWidth().mascotClickable(onClickLabel = "Посмотреть реакцию из чата") { selectedChatClip = clip }, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(Modifier.fillMaxWidth().mascotClickable(onClickLabel = "Посмотреть реакцию из чата") { selectedAction = "chat:${clip.id}" }, horizontalAlignment = Alignment.CenterHorizontally) {
                                 Box(Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
                                     .background(Color.White.copy(alpha = .48f)).border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp))) {
                                     ActionThumbnail(clip.videoUrl, baseStill, clip.title, Modifier.fillMaxSize().padding(8.dp))
@@ -365,7 +343,7 @@ fun AnimationLibraryScreen(
                             }
                         }
                     }
-                    Text("Seedance 2 Mini · каждый ролик — 6–8 секунд платной генерации. " +
+                    Text("Каждый ролик — 6–8 секунд платной генерации. " +
                         "Готовые ролики пропустим, сохранённые задания продолжим. " +
                         "После выбранного количества остановимся. Результаты сохраняются по одному.")
                 }
@@ -465,13 +443,21 @@ private fun AnimationPackStatus(
     }
 }
 
+private data class AnimationPreviewItem(
+    val id: String,
+    val title: String,
+    val action: String,
+    val videoUrl: String?,
+    val frames: List<String>,
+    val isChat: Boolean,
+)
+
 @Composable
 private fun ActionDetail(
     mascotId: String?,
-    action: String,
+    selected: AnimationPreviewItem,
+    items: List<AnimationPreviewItem>,
     heroName: String?,
-    frames: List<String>,
-    videoUrls: Map<String, String>,
     legacyVideoUrl: String?,
     neutralFrameUrl: String?,
     baseStill: String?,
@@ -479,71 +465,86 @@ private fun ActionDetail(
     onSelect: (String) -> Unit,
     onClose: () -> Unit,
 ) {
-    // Do not allocate a decoder while the grid is still exiting.
-    var play by remember(action) { mutableStateOf(false) }
-    LaunchedEffect(action) { delay(300); play = true }
-    val videoUrl = videoUrls[action]
-    val phoneInteraction=rememberHeroPhoneInteraction(mascotId,play) {}
-    Column(
-        Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        MascotTopBar(heroName?.takeIf { it.isNotBlank() } ?: "Герой", onBack = onClose, backArrow = true, lightTitle = true)
-        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
-            if (play && videoUrl != null) {
-                SoraMascotVideo(
-                    videoUrls = mapOf(action to videoUrl),
-                    lighting = phoneInteraction.lighting,
-                    neutralFrameUrl = neutralFrameUrl, action = action,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else if (play && legacyVideoUrl != null) {
-                SoraMascotVideo(videoUrl = legacyVideoUrl, action = action, modifier = Modifier.fillMaxSize(), lighting = phoneInteraction.lighting)
-            } else if (play && frames.isNotEmpty()) {
-                PngSequence(frames = frames, fps = HeroLocalStore.FULL_FRAME_FPS, decodeSize = 500, fallback = baseStill,
-                    mascotIdHint = mascotId, puppetAction = action, contentDescription = stateTitle(action),
-                    modifier = Modifier.fillMaxSize())
-            } else ActionThumbnail(videoUrl, baseStill, stateTitle(action), Modifier.fillMaxSize())
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).clip(RoundedCornerShape(32.dp))
-                .background(Color.White.copy(alpha = .32f))
-                .border(1.dp, Color.White.copy(alpha = .24f), RoundedCornerShape(32.dp))
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+    val strip = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val currentSelection by rememberUpdatedState(selected.id)
+    var play by remember(selected.id) { mutableStateOf(false) }
+    var frameVisible by remember(selected.id) { mutableStateOf(false) }
+    val hasVideo = selected.videoUrl != null || (legacyVideoUrl != null && selected.action in LEGACY_PERFORMANCE_ACTIONS)
+    LaunchedEffect(selected.id) { delay(200); play = true }
+    val phoneInteraction = rememberHeroPhoneInteraction(mascotId, play) {}
+    BoxWithConstraints(Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding()) {
+        val width = maxWidth
+        val height = maxHeight
+        MascotPickerBackButton(onBack = onClose, modifier = Modifier.align(Alignment.TopStart).padding(start = 15.dp, top = 33.dp))
+        HomeHeading(heroName?.takeIf { it.isNotBlank() } ?: "Герой", Modifier.align(Alignment.TopCenter)
+            .padding(top = height * .115f, start = 24.dp, end = 24.dp).fillMaxWidth())
+        Box(
+            Modifier.align(Alignment.TopCenter).padding(top = height * .205f)
+                .requiredSize(width = width * 1.18f, height = height * .50f)
+                .testTag("animation-preview-swipe-area")
+                .pointerInput(items.map { it.id }) {
+                    var startIndex = 0
+                    var drag = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { startIndex = items.indexOfFirst { it.id == currentSelection }.coerceAtLeast(0); drag = 0f },
+                        onHorizontalDrag = { change, amount -> change.consume(); drag += amount; strip.dispatchRawDelta(-amount) },
+                        onDragEnd = {
+                            val info = strip.layoutInfo
+                            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+                            val nearest = info.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }?.index ?: startIndex
+                            val target = if (nearest == startIndex && kotlin.math.abs(drag) >= 32.dp.toPx())
+                                startIndex + if (drag < 0f) 1 else -1 else nearest
+                            if (items.isNotEmpty()) scope.launch { strip.animateScrollToItem(target.coerceIn(0, items.lastIndex)) }
+                        },
+                        onDragCancel = {
+                            val index = items.indexOfFirst { it.id == currentSelection }
+                            if (index >= 0) scope.launch { strip.animateScrollToItem(index) }
+                        },
+                    )
+                }, contentAlignment = Alignment.Center,
         ) {
-            Icon(painterResource(R.drawable.quote_mark_vector), null, tint = palette.top,
-                modifier = Modifier.size(24.dp))
-            Text(actionDescriptions[action].orEmpty(), color = palette.top,
-                fontFamily = SbSansDisplayMedium, fontSize = 16.sp, lineHeight = 22.sp,
-                textAlign = TextAlign.Center)
-        }
-        Spacer(Modifier.height(16.dp))
-        LazyRow(
-            Modifier.fillMaxWidth().height(64.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-            contentPadding = PaddingValues(horizontal = 24.dp),
-        ) {
-            lazyRowItems(ANIMATION_STATE_KEYS, key = { it }) { key ->
-                val available = videoUrls[key] != null || key == action
-                Box(
-                    Modifier.size(56.dp).clip(CircleShape)
-                        .background(Color.White.copy(alpha = if (key == action) .60f else .20f))
-                        .border(2.dp, if (key == action) Color.White else Color.Transparent, CircleShape)
-                        .mascotClickable(enabled = available, onClickLabel = stateTitle(key)) { onSelect(key) },
-                ) {
-                    ActionThumbnail(videoUrls[key], baseStill, stateTitle(key), Modifier.fillMaxSize().padding(4.dp))
+            key(selected.id) {
+                when {
+                    play && selected.videoUrl != null && selected.isChat -> SoraMascotVideo(
+                        videoUrl = selected.videoUrl, action = "idle", fullClip = true,
+                        lighting = phoneInteraction.lighting, modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })
+                    play && selected.videoUrl != null -> SoraMascotVideo(
+                        videoUrls = mapOf(selected.action to selected.videoUrl), neutralFrameUrl = neutralFrameUrl,
+                        action = selected.action, lighting = phoneInteraction.lighting, modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })
+                    play && legacyVideoUrl != null && selected.action in LEGACY_PERFORMANCE_ACTIONS -> SoraMascotVideo(
+                        videoUrl = legacyVideoUrl, action = selected.action, lighting = phoneInteraction.lighting,
+                        modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })
+                    play && selected.frames.isNotEmpty() -> PngSequence(
+                        frames = selected.frames, fps = HeroLocalStore.FULL_FRAME_FPS, decodeSize = 500, fallback = baseStill,
+                        mascotIdHint = mascotId, puppetAction = selected.action, contentDescription = selected.title,
+                        modifier = Modifier.fillMaxSize())
+                    else -> ActionThumbnail(selected.videoUrl, baseStill, selected.title, Modifier.fillMaxSize())
                 }
             }
+            if (hasVideo && !frameVisible) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(32.dp),
+                    color = Color.White.copy(alpha = .8f), strokeWidth = 2.5.dp,
+                )
+            }
         }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun CloseControl(description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(painterResource(R.drawable.close_gallery_icon), description, Modifier.size(24.dp), tint = FigmaInk)
+        Text(selected.title, fontFamily = SbSansDisplayMedium, fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp, color = Color.White.copy(alpha = .9f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = height * .285f, start = 24.dp, end = 24.dp))
+        MascotPickerCarousel(
+            items = items.map { MascotPickerItem(it.id, "Посмотреть ${it.title}") },
+            selectedId = selected.id, onSelected = onSelect, state = strip,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = height * .153f)
+                .width((width - 48.dp).coerceAtLeast(1.dp)).height(80.dp).testTag("animation-preview-carousel"),
+        ) { item, isSelected, modifier ->
+            val animation = items.first { it.id == item.id }
+            Box(modifier.clip(CircleShape).background(Color.White.copy(alpha = .25f))
+                .border(2.dp, if (isSelected) Color.White.copy(alpha = .92f) else Color.White.copy(alpha = .24f), CircleShape),
+                contentAlignment = Alignment.Center) {
+                ActionThumbnail(animation.videoUrl, baseStill, animation.title, Modifier.fillMaxSize().padding(3.dp))
+            }
+        }
     }
 }

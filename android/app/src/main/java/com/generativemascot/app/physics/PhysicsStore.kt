@@ -82,6 +82,11 @@ class PhysicsStore(private val context: Context) {
         verify(id, staging, expected)
         val root = directory(id).apply { mkdirs() }
         val destination = File(root, expected)
+        if (destination.exists() && runCatching { verify(id, destination, expected) }.isFailure) {
+            // Keep the damaged revision for recovery; never overwrite a good pack.
+            val previous = File(root, "corrupt-$expected-${java.util.UUID.randomUUID()}")
+            check(destination.renameTo(previous)) { "Не удалось восстановить карты героя" }
+        }
         if (!destination.exists()) check(staging.renameTo(destination)) { "Не удалось сохранить карты героя" }
         verify(id, destination, expected)
         activate(root, expected)

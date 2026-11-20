@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Циклы диалога Mascot 3</title>
+<style>
+body{margin:32px;background:#17171e;color:#eee;font:16px system-ui}
+main{max-width:720px;margin:auto}section{display:flex;flex-wrap:wrap;gap:28px}
+figure{margin:0;text-align:center}canvas{display:block;width:160px;height:160px;border-radius:50%;background:#eaebec;margin-bottom:8px}
+button{font:inherit;margin:0 8px 20px 0}p{color:#aaa}
+</style>
+<main><h1>Циклы диалога</h1><nav aria-label="Персонаж"></nav><section></section><h2>Архивный клип Helios</h2>
+<p>Аким · запись из предыдущей версии. Масштаб соответствует текущему кружку.</p>
+<canvas id="archive-frame" width="320" height="320" aria-label="Аким с бананом"></canvas>
+<button id="play-archive">Воспроизвести</button>
+<video id="archive-video" muted loop playsinline hidden src="/helios-archive.webm"></video>
+</main>
+<script type="module">
+import { createReplayTransition } from '/replay-transition.js';
+
+const archive = document.querySelector('#archive-video');
+const archiveFrame = document.querySelector('#archive-frame');
+const archiveContext = archiveFrame.getContext('2d');
+const archiveButton = document.querySelector('#play-archive');
+const replay = createReplayTransition(archiveFrame, archiveContext, undefined, {
+  warm: '#e65362', cool: '#a99cff'
+});
+function drawArchive(source) {
+  const width = 320 * 1.45;
+  const height = width * source.videoHeight / source.videoWidth;
+  archiveContext.clearRect(0, 0, 320, 320);
+  archiveContext.drawImage(source, (320-width)/2, (320-height)/2, width, height);
+}
+archive.addEventListener('loadeddata', () => drawArchive(archive), {once:true});
+function archiveTick(now, frame) {
+  replay.render(archive, now, frame.mediaTime, drawArchive);
+  if (!archive.paused) archive.requestVideoFrameCallback(archiveTick);
+}
+archiveButton.onclick = async () => {
+  if (!archive.paused) {
+    archive.pause();
+    archiveButton.textContent = 'Воспроизвести';
+    return;
+  }
+  await archive.play();
+  archiveButton.textContent = 'Пауза';
+  archive.requestVideoFrameCallback(archiveTick);
+};
+const heroes = {
+  'Уна': '716cdb43-703b-4d7e-8a79-27f03d92b99c',
+  'Аким': '9f226b89-df35-4d3a-9b36-96c28ea1bb62',
+  'Марс': 'a83e9d30-1270-40e6-902c-b44774e84c17'
+};
+let players = [];
+function show(hero) {
+  for (const video of players) { video.pause(); video.removeAttribute('src'); video.load(); }
+  players = [];
+  const section = document.querySelector('section');
+  section.replaceChildren();
+  for (const [mode, label] of [['listening', 'Слушает'], ['speaking', 'Говорит']]) {
+    const figure = document.createElement('figure');
+    const canvas = Object.assign(document.createElement('canvas'), {width:320,height:320});
+    const caption = document.createElement('figcaption');
+    caption.textContent = label;
+    const status = document.createElement('p');
+    status.textContent = 'Загрузка…';
+    figure.append(canvas, caption, status);
+    section.append(figure);
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    const video = Object.assign(document.createElement('video'), {muted:true,loop:true,playsInline:true});
+    players.push(video);
+    video.addEventListener('error', () => { status.textContent = 'Клип ещё не готов'; });
+    function draw() {
+      if (!players.includes(video)) return;
+      ctx.drawImage(video, 0, 0, 320, 320);
+      const frame = ctx.getImageData(0, 0, 320, 320);
+      for (let i = 0; i < frame.data.length; i += 4) {
+        const d = frame.data[i+1] - Math.max(frame.data[i],frame.data[i+2]);
+        if (d > 42) frame.data[i+3] = 0;
+      }
+      ctx.putImageData(frame, 0, 0);
+      video.requestVideoFrameCallback(draw);
+    }
+    video.src = '/dialogue-media/' + hero + '/' + mode + '.mp4';
+    video.play().then(() => { status.textContent = ''; video.requestVideoFrameCallback(draw); }).catch(() => {});
+  }
+}
+for (const [name,id] of Object.entries(heroes)) {
+  const button = document.createElement('button');
+  button.textContent = name;
+  button.onclick = () => show(id);
+  document.querySelector('nav').append(button);
+}
+show(heroes['Уна']);
+</script>

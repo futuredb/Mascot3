@@ -24,6 +24,10 @@ data class WidgetAnimationFrames(
     val files: List<File>,
     val frameIntervalMs: Int,
     val fromVideoCache: Boolean = false,
+    val videoFile: File? = null,
+    val cropInset: Float? = null,
+    val sourceDurationUs: Long? = null,
+    val sourceFrameCount: Int? = null,
 )
 
 data class ChatAnimationClip(val id: String, val title: String, val videoUrl: String, val createdAt: Long)
@@ -66,10 +70,11 @@ class HeroLocalStore(context: Context) {
 
     /** Dedicated chat activities are separate from the user's animation pack. */
     fun chatActivityVideos(mascotId: String): Map<String, String> =
-        (listOf("idle-look", "idle-stretch", "idle-sway", "idle-ponder").mapNotNull { name ->
+        (listOfNotNull(actionVideoFile(mascotId, "thinking")?.let { "thinking" to it.toURI().toString() }) +
+            listOf("listening", "speaking", "thinking", "idle-look", "idle-stretch", "idle-sway", "idle-ponder").mapNotNull { name ->
             File(root, "$mascotId/chat-activity/$name.mp4").takeIf { it.isFile && it.length() > 1024 }
                 ?.let { name to it.toURI().toString() }
-        } + listOfNotNull(actionVideoFile(mascotId, "thinking")?.let { "thinking" to it.toURI().toString() })).toMap()
+        }).toMap()
 
     /** Chat clips live separately from the fixed-action animation pack. */
     fun chatAnimationDirectory(mascotId: String): File {
@@ -309,7 +314,7 @@ class HeroLocalStore(context: Context) {
         mp4: ByteArray,
         costUsd: Double?,
     ): File = withContext(Dispatchers.IO) {
-        require(mp4.size > 1024) { "OpenRouter вернул пустое видео" }
+        require(mp4.size > 1024) { "Сервис генерации вернул пустое видео" }
         val normalized = normalizeVideoAction(action)
         val destination = File(root, "$mascotId/videos/$normalized.mp4")
         LightingPreparation(appContext).trackHero(mascotId)
@@ -903,6 +908,7 @@ class HeroLocalStore(context: Context) {
         val video = widgetVideoForState(mascotId, stateKey)
         if (video != null) {
             readWidgetVideoCache(mascotId, video)?.let { return it }
+            readWidgetVideoCache(mascotId, video, WIDGET_FRAME_MAX_SIDE, 4)?.let { return it }
             // Retain published v3 frames while the quality upgrade is prepared locally.
             readWidgetVideoCache(mascotId, video, 160, 3)?.let { return it }
         }
@@ -932,7 +938,12 @@ class HeroLocalStore(context: Context) {
                     ?.coerceIn(WIDGET_MIN_FRAME_INTERVAL_MS, WIDGET_MAX_FRAME_INTERVAL_MS)
                     // Keep the legacy eight-frame cache visibly animated until the worker replaces it.
                     ?: if (cached.size <= 8) WIDGET_MAX_FRAME_INTERVAL_MS else 1_000 / WIDGET_TARGET_FPS
-                return WidgetAnimationFrames(animationFramesWithoutZero(cached, File::getName), interval, fromVideoCache = true)
+                val metadata = File(cacheRoot, WIDGET_FRAME_LIGHTING).takeIf(File::isFile)?.readText()?.split(':')
+                val inset = metadata?.getOrNull(0)?.toFloatOrNull()?.takeIf { it in 0f..0.2f }
+                val duration = metadata?.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 }
+                return WidgetAnimationFrames(animationFramesWithoutZero(cached, File::getName), interval,
+                    fromVideoCache = true, videoFile = video, cropInset = inset, sourceDurationUs = duration,
+                    sourceFrameCount = expectedCount)
             }
         return null
     }
@@ -967,7 +978,7 @@ class HeroLocalStore(context: Context) {
                 if (existing.size == frameCount && existing.all { it.length() > 100L } &&
                     File(cacheRoot, WIDGET_FRAME_SOURCE).takeIf(File::isFile)?.readText() == fingerprint
                 ) {
-                    return@withContext WidgetAnimationFrames(animationFramesWithoutZero(existing, File::getName), frameIntervalMs, fromVideoCache = true)
+                    return@withContext requireNotNull(readWidgetVideoCache(mascotId, video))
                 }
 
                 val sourceWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
@@ -1024,6 +1035,7 @@ class HeroLocalStore(context: Context) {
                     }
                     File(staging, WIDGET_FRAME_SOURCE).writeText(fingerprint)
                     File(staging, WIDGET_FRAME_INTERVAL).writeText(frameIntervalMs.toString())
+                    File(staging, WIDGET_FRAME_LIGHTING).writeText("${crop.inset}:${durationMs * 1000L}")
 
                     val previous = File(parent, "${cacheRoot.name}-previous-${UUID.randomUUID()}")
                     if (cacheRoot.exists()) require(cacheRoot.renameTo(previous)) {
@@ -1034,7 +1046,9 @@ class HeroLocalStore(context: Context) {
                         error("Не удалось установить кадры виджета")
                     }
                     previous.deleteRecursively()
-                    WidgetAnimationFrames(animationFramesWithoutZero(widgetFrameFiles(cacheRoot), File::getName), frameIntervalMs, fromVideoCache = true)
+                    WidgetAnimationFrames(animationFramesWithoutZero(widgetFrameFiles(cacheRoot), File::getName), frameIntervalMs,
+                        fromVideoCache = true, videoFile = video, cropInset = crop.inset,
+                        sourceDurationUs = durationMs * 1000L, sourceFrameCount = frameCount)
                 } finally {
                     staging.deleteRecursively()
                 }
@@ -1191,10 +1205,11 @@ class HeroLocalStore(context: Context) {
         const val WIDGET_FRAME_MAX_SIDE = WIDGET_CACHE_MAX_SIDE
         private const val WIDGET_MIN_FRAME_INTERVAL_MS = 1
         private const val WIDGET_MAX_FRAME_INTERVAL_MS = 10_000
-        private const val WIDGET_CACHE_VERSION = 4
+        private const val WIDGET_CACHE_VERSION = 5
         private val widgetCacheLock = Mutex()
         private const val WIDGET_FRAME_SOURCE = "source.txt"
         private const val WIDGET_FRAME_INTERVAL = "interval-ms.txt"
+        private const val WIDGET_FRAME_LIGHTING = "lighting.txt"
         private const val MIN_FULL_FRAME_COUNT = FULL_FRAME_COUNT
         private const val MIN_DISTINCT_FRAME_COUNT = 8
         private const val SHEET_COLUMNS = 3
@@ -1216,6 +1231,8 @@ class HeroLocalStore(context: Context) {
             "happy", "joyful", "content", "eating" -> "joyful"
             "stretch", "stretching" -> "stretching"
             "playful", "dancing", "working" -> "dancing"
+            "listening", "chat_idle" -> stateKey
+            "speaking", "talking" -> "speaking"
             "thinking", "at_glass", "watching", "sad", "angry", "refusal", "frightened", "curious",
             "tender", "greeting", "signature_move", "welcome" -> stateKey
             else -> "idle"

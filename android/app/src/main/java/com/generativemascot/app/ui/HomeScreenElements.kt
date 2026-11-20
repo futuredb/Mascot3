@@ -1,16 +1,24 @@
 package com.generativemascot.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -19,15 +27,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -179,27 +192,9 @@ internal fun HomeChatButton(onClick: () -> Unit, enabled: Boolean, modifier: Mod
 @Composable
 internal fun HomeSettingsMenu(onClose: () -> Unit, onHeroes: () -> Unit, onAnimations: () -> Unit,
     onOverlay: () -> Unit, onBehavior: () -> Unit, onCapabilities: () -> Unit,
-    onPinWidget: () -> Unit, onDelete: () -> Unit, modifier: Modifier = Modifier, contentModifier: Modifier = Modifier) {
-    BackHandler(onBack = onClose)
-    var choice by remember { mutableStateOf<String?>(null) }
-    if (choice != null) {
-        val widgetChoice = choice == "widget"
-        AlertDialog(
-            onDismissRequest = { choice = null },
-            title = { Text(if (widgetChoice) "Виджет на главном" else "Поведение и доступы") },
-            text = {
-                Column {
-                    TextButton(onClick = { choice = null; if (widgetChoice) onPinWidget() else onBehavior() }) {
-                        Text(if (widgetChoice) "Добавить виджет" else "Настроить поведение")
-                    }
-                    TextButton(onClick = { choice = null; if (widgetChoice) onOverlay() else onCapabilities() }) {
-                        Text(if (widgetChoice) "Поверх приложений" else "Доступы и подключения")
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { choice = null }) { Text("Отмена") } },
-        )
-    }
+    onApiKeys: () -> Unit, onExportHeroes: () -> Unit, onPinWidget: () -> Unit, onDelete: () -> Unit,
+    modifier: Modifier = Modifier, contentModifier: Modifier = Modifier) {
+    BackHandler { onClose() }
     Box(modifier.fillMaxSize().background(Color(0xFFEAEBEC).copy(alpha = .90f))
         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)) {
         Box(contentModifier.align(Alignment.TopEnd).padding(top = 42.dp, end = 27.dp).size(30.dp)
@@ -208,11 +203,13 @@ internal fun HomeSettingsMenu(onClose: () -> Unit, onHeroes: () -> Unit, onAnima
         }
         Column(contentModifier.align(Alignment.TopEnd).fillMaxWidth().padding(top = 103.dp, end = 36.dp),
             horizontalAlignment = Alignment.End) {
-            HomeMenuItem("Настройки персонажа", "menu-edit", 13.35.dp, onHeroes, height = 72.dp)
-            HomeMenuItem("Оживить персонажа", "menu-play", 20.23.dp, onAnimations, height = 100.dp, prominent = true)
-            HomeMenuItem("Виджет на главном", "menu-widget", 18.dp, { choice = "widget" }, height = 72.dp)
-            HomeMenuItem("Поведение и доступы", "menu-lightning", 16.dp, { choice = "behavior" }, height = 80.dp)
-            Box(Modifier.height(72.dp).mascotClickable(onClickLabel = "Удалить персонажа", onClick = onDelete), contentAlignment = Alignment.CenterEnd) {
+            HomeMenuItem("Настройки персонажа", "menu-edit", 13.35.dp, onHeroes)
+            HomeMenuItem("Оживить персонажа", "menu-play", 15.74.dp, onAnimations)
+            HomeMenuItem("Виджет на главном", "menu-widget", 18.dp, onOverlay)
+            HomeMenuItem("Поведение и доступы", "menu-lightning", 16.dp, onBehavior)
+            HomeMenuItem("API-ключи", "menu-key", 16.dp, onApiKeys)
+            HomeMenuItem("Экспорт героев", "menu-widget", 16.dp, onExportHeroes)
+            Box(Modifier.height(72.dp).homeMenuClickable("Удалить персонажа", onDelete), contentAlignment = Alignment.CenterEnd) {
                 Text("Удалить персонажа", color = Color(0xFF777777),
                     fontFamily = SbSansTextMedium, fontSize = 14.sp)
             }
@@ -221,14 +218,25 @@ internal fun HomeSettingsMenu(onClose: () -> Unit, onHeroes: () -> Unit, onAnima
 }
 
 @Composable
-private fun HomeMenuItem(label: String, icon: String, iconSize: Dp, onClick: () -> Unit,
-    height: Dp, prominent: Boolean = false) {
-    Row(Modifier.height(height).mascotClickable(onClickLabel = label, onClick = onClick),
+private fun HomeMenuItem(label: String, icon: String, iconSize: Dp, onClick: () -> Unit) {
+    Row(Modifier.height(72.dp).homeMenuClickable(label, onClick),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = Color.Black, fontFamily = SbSansTextMedium, fontSize = if (prominent) 18.sp else 14.sp)
-        Box(Modifier.size(if (prominent) 36.dp else 28.dp).clip(CircleShape).background(FigmaInk),
+        Text(label, color = Color.Black, fontFamily = SbSansTextMedium, fontSize = 14.sp)
+        Box(Modifier.size(28.dp).clip(CircleShape).background(FigmaInk),
             contentAlignment = Alignment.Center) {
             HomeFigmaIcon(icon, null, size = iconSize)
         }
     }
+}
+
+private fun Modifier.homeMenuClickable(label: String, onClick: () -> Unit): Modifier = composed {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 18f / 14f else 1f,
+        tween(130, easing = MascotEase), label = "menu press response")
+    graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+        transformOrigin = TransformOrigin(1f, .5f)
+    }.clickable(interactionSource = source, indication = null, onClickLabel = label, onClick = onClick)
 }

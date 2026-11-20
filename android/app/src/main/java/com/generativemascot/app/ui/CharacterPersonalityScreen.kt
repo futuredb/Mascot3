@@ -68,9 +68,10 @@ internal fun personalityIndexNearestCenter(items: List<PersonalityItemPosition>,
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CharacterPersonalityScreen(type: String, preview: Int, previewAspect: Float, onFinish: (CharacterCreationChoice) -> Boolean,
+    onFailure: () -> String,
     onBack: () -> Unit, onClose: () -> Unit, canNavigateBack: Boolean = true, showPreview: Boolean = true) {
     var selectedId by remember { mutableStateOf(characterPersonalities.first().id) }
-    var error by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     val selected = characterPersonalities.first { it.id == selectedId }
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -85,7 +86,7 @@ internal fun CharacterPersonalityScreen(type: String, preview: Int, previewAspec
         }.collect { index ->
             if (index != null && index in characterPersonalities.indices) {
                 selectedId = characterPersonalities[index].id
-                error = false
+                error = null
             }
         }
     }
@@ -128,14 +129,14 @@ internal fun CharacterPersonalityScreen(type: String, preview: Int, previewAspec
         MascotSmallCircleAction(
             icon = Icons.Rounded.Check,
             label = "Подтвердить характер ${selected.name}",
-            onClick = { error = !onFinish(CharacterCreationChoice(type, selected.id)) },
+            onClick = { error = if (onFinish(CharacterCreationChoice(type, selected.id))) null else onFailure() },
             enabled = canNavigateBack,
             background = Color(0xff222222), tint = Color.White,
             modifier = Modifier.offset(x = (maxWidth - MascotSmallActionSize) / 2, y = sy * 745),
         )
-        if (error) {
-            Text("Для создания героя с характером включи OpenRouter в настройках генерации.",
-                modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 28.dp).offset(y = sy * 60),
+        error?.let { message ->
+            Text(message,
+                modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 28.dp).offset(y = sy * 105),
                 color = Color(0xff9e3030), fontFamily = regular, fontSize = 13.sp)
         }
     }

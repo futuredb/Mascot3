@@ -26,7 +26,7 @@ import com.generativemascot.app.physics.PhysicsView
 import com.generativemascot.app.physics.TiltLighting
 import com.generativemascot.app.ui.applyBackgroundKey
 import com.generativemascot.app.ui.createMascotVideoPlayer
-import com.generativemascot.app.ui.loadVideoLighting
+import com.generativemascot.app.ui.awaitVideoLighting
 import com.generativemascot.app.ui.VideoLightingBinding
 import com.generativemascot.app.ui.releaseMascotVideoPlayer
 import kotlinx.coroutines.CoroutineScope
@@ -41,18 +41,42 @@ import kotlin.math.roundToInt
 class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
     initialPhysics: InstalledPhysics? = null, sharedMotion: PhoneMotion? = null) : FrameLayout(context) {
     private val content = FrameLayout(context)
+    private var streamHeroId: String? = null
+    private var stream: OverlayX2Stream? = null
+    private var activeStreamHeroId: String? = null
+    internal fun setStreaming(heroId: String?, enabled: Boolean) {
+        streamHeroId = heroId.takeIf { enabled && !com.generativemascot.app.BuildConfig.USE_OMNI }
+        updateStream()
+    }
+    private fun updateStream() {
+        val id = streamHeroId
+        if (!isAttachedToWindow || windowVisibility != VISIBLE || !isShown || id == null) {
+            stream?.let { it.dispose(); removeView(it) }; stream = null; activeStreamHeroId = null
+            content.alpha = 1f
+        } else if (stream == null || activeStreamHeroId != id) {
+            stream?.let { it.dispose(); removeView(it) }
+            content.alpha = 1f
+            activeStreamHeroId = id
+            stream = OverlayX2Stream(context, id) { live -> content.alpha = if (live) 0f else 1f }.also {
+                addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            }
+        }
+    }
     private val poster = OverlayBitmapView(context, artwork, fullCanvas = true)
     private var phonePose = PhonePose()
     private var player: ExoPlayer? = null
     private var videoView: PlayerView? = null
     private var resumePosition = 0L
     private var failed = false
-    private val reactions = OverlayReactions(artwork.reactions)
+    private var reactions = OverlayReactions(artwork.reactions)
+    private var activeLighting: VideoLightingBinding? = null
     private var playbackListener: Player.Listener? = null
     private val lighting = TiltLighting()
     private var installed: InstalledPhysics? = null
     private var physicsView: PhysicsView? = null
     private var physicsReady = false
+    internal var needsPhysicsRetry = false
+        private set
     private var videoReady = false
     private val playbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var prepareClip: Job? = null
@@ -78,7 +102,10 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
     }
 
     internal fun installPhysics(pack: InstalledPhysics, sharedMotion: PhoneMotion) {
-        if (physicsView != null) return
+        if (physicsView != null && installed?.directory == pack.directory && !needsPhysicsRetry) return
+        physicsView?.let { old -> old.pause(); content.removeView(old) }
+        physicsView = null; physicsReady = false; needsPhysicsRetry = false
+        if (videoReady) { videoView?.alpha = 1f; player?.play() } else poster.visibility = VISIBLE
         installed = pack
         val physics = PhysicsView(context, pack, sharedMotion = sharedMotion, sharedLighting = lighting)
         physicsView = physics
@@ -86,16 +113,20 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
             // A non-zero alpha keeps the TextureView consuming frames while
             // the first GL frame is prepared (zero alpha can stall readiness).
             physics.alpha = .01f
-            physics.onReady = {
-                physicsReady = true
-                physics.alpha = if (reactions.active == null) 1f else .01f
-                if (reactions.active == null) { videoView?.alpha = 0f; player?.pause() }
+            physics.onReady = onReady@ {
+                if (physicsView !== physics) return@onReady
+                physicsReady = true; needsPhysicsRetry = false
+                physics.alpha = if (videoReady) .01f else 1f
+                if (videoReady) { videoView?.alpha = 1f; player?.play() }
                 poster.visibility = INVISIBLE
                 applyPhonePose(phonePose)
             }
-            physics.onFailure = {
-                physicsReady = false; physics.alpha = 0f
+            physics.onFailure = onFailure@ {
+                if (physicsView !== physics) return@onFailure
+                physicsReady = false; needsPhysicsRetry = true; physics.alpha = 0f
                 if (videoReady) { videoView?.alpha = 1f; poster.visibility = INVISIBLE; player?.play() }
+                else poster.visibility = VISIBLE
+                applyPhonePose(phonePose)
             }
             content.addView(physics, 1)
         }
@@ -152,6 +183,33 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
             .coerceIn(-projected.top, height - projected.bottom)
     }
 
+    /** Apply expensive clip analysis after the visible window is already on screen. */
+    internal fun applyPreparedClips(idle: OverlayVideo, clips: List<OverlayVideo>) {
+        artwork.video = idle
+        artwork.reactions = clips
+        if (reactions.active == null) reactions = OverlayReactions(clips)
+        val current = player
+        if (current != null && reactions.active == null &&
+            current.currentMediaItem?.localConfiguration?.uri == Uri.fromFile(idle.file)) {
+            videoView?.let { applyBackgroundKey(it, idle.keyColor, activeLighting, tuning = idle.tuning, forceVideoEffect = true) }
+        }
+    }
+
+    internal fun refreshPosterFrames() {
+        poster.invalidate()
+        requestLayout()
+    }
+
+    /** The selected shared state is the looping base; tap reactions return to it. */
+    internal fun setStateClip(clip: OverlayVideo) {
+        if (artwork.video?.file == clip.file) return
+        artwork.video = clip
+        resumePosition = 0
+        val current = player
+        if (current != null && reactions.active == null && isAttachedToWindow)
+            playClip(current, clip, repeat = true)
+    }
+
     /** Repeated taps during a reaction are consumed, never queued or restarted. */
     fun react(): Boolean {
         val current = player ?: return false
@@ -164,6 +222,7 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
     private fun playClip(current: ExoPlayer, clip: OverlayVideo, repeat: Boolean, position: Long = 0) {
         prepareClip?.cancel()
         videoView?.animate()?.cancel()
+        activeLighting = null
         val uri = Uri.fromFile(clip.file)
         videoView?.let { applyBackgroundKey(it, clip.keyColor, tuning = clip.tuning, forceVideoEffect = true) }
         current.repeatMode = if (repeat) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
@@ -171,29 +230,33 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
         current.prepare()
         current.play()
         prepareClip = playbackScope.launch {
-            val pack = loadVideoLighting(context, clip.file.toURI().toString())
+            val pack = awaitVideoLighting(context, clip.file.toURI().toString())
             if (player !== current || !isAttachedToWindow || current.currentMediaItem?.localConfiguration?.uri != uri) return@launch
-            if (pack != null) videoView?.let { applyBackgroundKey(it, clip.keyColor, VideoLightingBinding(pack, lighting), tuning = clip.tuning, forceVideoEffect = true) }
+            if (pack != null) {
+                val binding = VideoLightingBinding(pack, lighting)
+                activeLighting = binding
+                val tuning = if (reactions.active == null && artwork.video?.file == clip.file)
+                    artwork.video?.tuning ?: clip.tuning else clip.tuning
+                videoView?.let { applyBackgroundKey(it, clip.keyColor, binding, tuning = tuning, forceVideoEffect = true) }
+            }
         }
     }
 
     private fun returnToIdle(current: ExoPlayer) {
         reactions.finish()
         resumePosition = 0
-        if (physicsReady) {
-            physicsView?.alpha = 1f
-            videoView?.animate()?.alpha(0f)?.setDuration(150)?.withEndAction { if (player === current && reactions.active == null) current.pause() }?.start()
-            applyPhonePose(phonePose)
-        } else artwork.video?.let { playClip(current, it, repeat = true) }
+        artwork.video?.let { playClip(current, it, repeat = true) }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         failed = false
         updatePlayback()
+        updateStream()
     }
 
     override fun onDetachedFromWindow() {
+        stream?.let { it.dispose(); removeView(it) }; stream = null; content.alpha = 1f
         stopPlayback()
         physicsReady = false
         physicsView?.pause()
@@ -202,13 +265,14 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
 
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
-        if (childCount > 0) updatePlayback()
+        if (childCount > 0) { updatePlayback(); updateStream() }
     }
 
     override fun onVisibilityAggregated(isVisible: Boolean) {
         super.onVisibilityAggregated(isVisible)
         if (childCount > 0) {
             if (isVisible) updatePlayback() else stopPlayback()
+            updateStream()
         }
     }
 
@@ -243,9 +307,8 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
                 override fun onRenderedFirstFrame() {
                     if (player !== current || !isAttachedToWindow) return
                     videoReady = true
-                    view.alpha = if (physicsReady && reactions.active == null) 0f else 1f
-                    if (physicsReady && reactions.active != null) physicsView?.alpha = .01f
-                    if (physicsReady && reactions.active == null) current.pause()
+                    view.alpha = 1f
+                    if (physicsReady) physicsView?.alpha = .01f
                     poster.visibility = INVISIBLE
                 }
                 override fun onPlayerError(error: PlaybackException) {
@@ -280,6 +343,7 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
         val current = player
         player = null // Ignore queued callbacks from a detached/previous decoder.
         videoReady = false
+        activeLighting = null
         videoView?.let { it.player = null; content.removeView(it) }
         videoView = null
         if (current != null) {
@@ -319,9 +383,27 @@ class OverlayHeroView(context: Context, private val artwork: OverlayArtwork,
             val x = frame.left.roundToInt(); val y = frame.top.roundToInt()
             view.layout(x, y, x + view.measuredWidth, y + view.measuredHeight)
             installed?.let { pack ->
-                val fitted = minOf(view.width.toFloat() / pack.pack.width, view.height.toFloat() / pack.pack.height) * pack.pack.width
-                view.scaleX = pack.framing.scale; view.scaleY = pack.framing.scale
-                view.translationX = pack.framing.offsetX * fitted; view.translationY = pack.framing.offsetY * fitted
+                val fitted = minOf(view.width.toFloat() / pack.pack.width, view.height.toFloat() / pack.pack.height)
+                val bounds = pack.bounds
+                if (bounds != null && bounds.right > bounds.left && bounds.bottom > bounds.top) {
+                    val source = OverlayFraming.source(artwork)
+                    val targetScale = frame.width() / source.width()
+                    val target = RectF((artwork.bounds.left - source.left) * targetScale,
+                        (artwork.bounds.top - source.top) * targetScale,
+                        (artwork.bounds.right - source.left) * targetScale,
+                        (artwork.bounds.bottom - source.top) * targetScale)
+                    val scale = minOf(target.width() / ((bounds.right - bounds.left) * fitted),
+                        target.height() / ((bounds.bottom - bounds.top) * fitted))
+                    view.scaleX = scale; view.scaleY = scale
+                    view.translationX = target.centerX() - view.width / 2f -
+                        ((bounds.left + bounds.right) / 2f - pack.pack.width / 2f) * fitted * scale
+                    view.translationY = target.bottom - view.height / 2f -
+                        (bounds.bottom - pack.pack.height / 2f) * fitted * scale
+                } else {
+                    val fittedWidth = fitted * pack.pack.width
+                    view.scaleX = pack.framing.scale; view.scaleY = pack.framing.scale
+                    view.translationX = pack.framing.offsetX * fittedWidth; view.translationY = pack.framing.offsetY * fittedWidth
+                }
             }
         }
         applyPhonePose(phonePose)

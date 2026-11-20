@@ -10,7 +10,7 @@ const check = process.argv.includes("--check");
 const writeAudit = process.argv.includes("--write-audit");
 
 const prefix = "The character in the picture moves with the body it actually has.";
-const suffix = "It floats free in open space with nothing beneath it. Movement runs through it continuously. Its body stays one shape. Its complete silhouette, every limb and carried thing stay inside the central seventy percent of the picture, leaving fifteen percent of the unchanged flat background visible on every side. Loose parts follow and settle. Anything this description names drifts in when it is wanted, moves as it is used, and drifts off again by the end; nothing else appears, and the flat empty background behind it stays exactly as it is. The camera does not move.";
+const suffix = "It floats free with nothing beneath it. Motion is continuous; the body stays whole. Keep every limb and carried thing in the central seventy percent, with fifteen percent empty margin on every side. Loose parts follow and settle. Keep the objects already in the picture; add no new objects. Keep the flat background unchanged. Preserve soft neutral diffuse lighting, fixed exposure, white balance and material roughness, including loop seams. No glossy hotspots, clipped highlights, bloom or flickering glow. The camera does not move.";
 
 // Every beat below is written by hand and read aloud. If a clause does not make a
 // picture on its own, it does not belong here.
@@ -53,9 +53,8 @@ function auditEntry(entry, animation, catalogSuffix = suffix, catalogPrefix = pr
   if (IDENTITY_LEAK.test(entry.template)) failures.push("template contains a gendered pronoun");
   if (/\b(first_frame|last_frame|anchor|chroma|green background)\b/i.test(resolved)) failures.push("prompt contains payload-only language");
   if (!catalogSuffix.endsWith("The camera does not move.")) failures.push("suffix must end with the static-camera sentence");
-  if (!/the flat empty background behind it stays exactly as it is/i.test(catalogSuffix)) failures.push("suffix must hold the keyframe background still: v38 work repainted it into a scene");
-  if (!/nothing else appears/i.test(catalogSuffix)) failures.push("suffix must still forbid anything the beat has not named");
-  if (!/drifts in when it is wanted.*drifts off again by the end/i.test(catalogSuffix)) failures.push("suffix must give named objects an arrival, a use and an exit, because the clip ends on a keyframe that holds none of them");
+  if (!/Keep the flat background unchanged/i.test(catalogSuffix)) failures.push("suffix must hold the keyframe background still");
+  if (!/add no new objects/i.test(catalogSuffix)) failures.push("suffix must forbid new objects");
   if (resolved.length > PROMPT_LIMIT) failures.push(`assembled prompt exceeds ${PROMPT_LIMIT} characters: ${resolved.length}`);
   if (entry.duration_seconds < animation.duration.min_seconds || entry.duration_seconds > animation.duration.max_seconds) failures.push("duration outside dictionary bounds");
   return failures;

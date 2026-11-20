@@ -6,20 +6,27 @@ import android.os.Build
 import com.generativemascot.app.ui.keyBitmap
 import java.io.File
 
-/** Cached envelope of decoded poses; never crop to just the first frame. Runs on IO. */
+/** Read existing validated bounds without decoding any video frames. */
+internal fun cachedVideoEnvelope(clip: OverlayVideo, width: Int, height: Int): Rect? {
+    val full = Rect(0, 0, width, height)
+    val cache = File(clip.file.parentFile, clip.file.name + ".overlay-bounds-v1")
+    val stamp = "${clip.file.length()}:${clip.file.lastModified()}:${clip.keyColor}:$width:$height"
+    return runCatching {
+        val lines = cache.readLines()
+        if (lines.first() != stamp) return@runCatching null
+        val n = lines[1].split(',').map(String::toInt)
+        val rect = Rect(n[0], n[1], n[2], n[3])
+        rect.takeIf { !it.isEmpty && full.contains(it) }
+    }.getOrNull()
+}
+
+/** Optional full analysis; callers may safely use the entire canvas when uncached. */
 internal fun videoEnvelope(clip: OverlayVideo, width: Int, height: Int): Rect {
     val full = Rect(0, 0, width, height)
     if (Build.VERSION.SDK_INT < 27) return full
+    cachedVideoEnvelope(clip, width, height)?.let { return it }
     val cache = File(clip.file.parentFile, clip.file.name + ".overlay-bounds-v1")
     val stamp = "${clip.file.length()}:${clip.file.lastModified()}:${clip.keyColor}:$width:$height"
-    runCatching {
-        val lines = cache.readLines()
-        if (lines.first() == stamp) {
-            val n = lines[1].split(',').map(String::toInt)
-            val r = Rect(n[0], n[1], n[2], n[3])
-            if (!r.isEmpty && full.contains(r)) return r
-        }
-    }
     val retriever = MediaMetadataRetriever()
     return try {
         retriever.setDataSource(clip.file.path)

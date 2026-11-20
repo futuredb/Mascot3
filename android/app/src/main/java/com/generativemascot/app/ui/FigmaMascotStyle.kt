@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,24 +120,44 @@ private val paletteCache = android.util.LruCache<String, HeroPalette>(64)
 internal fun heroPalette(url: String?): HeroPalette {
     val context = LocalContext.current
     val fallback = HeroPalette(
-        top = Color(0xFF183A71),
-        middle = Color(0xFF275EA4),
-        bottom = Color(0xFF8BDDE8),
-        end = Color(0xFFE8D7E4),
+        top = FigmaCanvas, middle = FigmaCanvas, bottom = FigmaCanvas, end = FigmaCanvas,
     )
-    val target by produceState(url?.let(paletteCache::get) ?: fallback, url) {
+    val paletteId = remember(url) {
+        url?.let { Regex("[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}").find(it)?.value ?: it }
+    }
+    val preferences = remember(context) { context.getSharedPreferences("mascot_hero_palettes", Context.MODE_PRIVATE) }
+    val saved = remember(paletteId) {
+        paletteId?.let { key ->
+            if (preferences.contains("$key.top")) HeroPalette(
+                Color(preferences.getInt("$key.top", FigmaCanvas.toArgb())),
+                Color(preferences.getInt("$key.middle", FigmaCanvas.toArgb())),
+                Color(preferences.getInt("$key.bottom", FigmaCanvas.toArgb())),
+                Color(preferences.getInt("$key.end", FigmaCanvas.toArgb())),
+            ) else null
+        }
+    }
+    // Bundled heroes have a known starting hue, avoiding an unrelated blue frame
+    // while their palette is extracted for the first time.
+    val preset = when (paletteId) {
+        "716cdb43-703b-4d7e-8a79-27f03d92b99c" -> paletteFromPrimary(Color(0xFFCC3344))
+        "a83e9d30-1270-40e6-902c-b44774e84c17" -> paletteFromPrimary(Color(0xFFAA5533))
+        "9f226b89-df35-4d3a-9b36-96c28ea1bb62" -> paletteFromPrimary(Color(0xFF7777DD))
+        else -> fallback
+    }
+    val target by produceState(url?.let(paletteCache::get) ?: saved ?: preset, url) {
         if (url.isNullOrBlank()) return@produceState
         paletteCache.get(url)?.let { value = it; return@produceState }
         val bitmap = runCatching {
             context.imageLoader.execute(
-                ImageRequest.Builder(context)
-                    .data(resolveMediaUrl(url))
-                    .allowHardware(false)
-                    .build(),
+                ImageRequest.Builder(context).data(resolveMediaUrl(url)).allowHardware(false).build(),
             ).drawable?.toBitmap(96, 96)
         }.getOrNull() ?: return@produceState
-        value = withContext(Dispatchers.Default) { extractHeroPalette(bitmap, fallback) }
-        paletteCache.put(url, value)
+        val extracted = withContext(Dispatchers.Default) { extractHeroPalette(bitmap, fallback) }
+        value = extracted
+        paletteCache.put(url, extracted)
+        paletteId?.let { key -> preferences.edit().putInt("$key.top", extracted.top.toArgb())
+            .putInt("$key.middle", extracted.middle.toArgb()).putInt("$key.bottom", extracted.bottom.toArgb())
+            .putInt("$key.end", extracted.end.toArgb()).apply() }
     }
     val top by animateColorAsState(target.top, tween(280), label = "palette top")
     val middle by animateColorAsState(target.middle, tween(280), label = "palette middle")
@@ -175,13 +196,15 @@ private fun extractHeroPalette(bitmap: Bitmap, fallback: HeroPalette): HeroPalet
         green = ((key shr 4) and 15) * 17,
         blue = (key and 15) * 17,
     )
-    return HeroPalette(
+    return paletteFromPrimary(primary)
+}
+
+private fun paletteFromPrimary(primary: Color) = HeroPalette(
         top = primary.withTone(lightness = 0.25f, saturationScale = 0.86f),
         middle = primary.withTone(lightness = 0.45f, saturationScale = 0.88f),
         bottom = lerp(primary, Color.White, 0.70f),
         end = lerp(primary, Color(0xFFF0D9E3), 0.86f),
     )
-}
 
 private fun Color.withTone(lightness: Float, saturationScale: Float): Color {
     val hsl = FloatArray(3)

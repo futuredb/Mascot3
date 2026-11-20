@@ -46,9 +46,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 private const val CROSSFADE_MS = 360L
-private const val REACTION_HANDOFF_MS = 90L
 private const val PREPARE_BEFORE_END_MS = 500L
 private const val TRANSITION_BEFORE_END_MS = 220L
 // Closed sleep clips have matching endpoints: swap on the last frame, not
@@ -135,10 +136,14 @@ fun SoraMascotVideo(
     fullClip: Boolean = false,
     onPlaybackError: (() -> Unit)? = null,
     playbackEnabled: Boolean = true,
+    onFirstFrame: (() -> Unit)? = null,
+    useNeutralTransitions: Boolean = true,
+    switchActionsPromptly: Boolean = false,
+    independentMatteActions: Set<String> = emptySet(),
 ) {
     val playbackAllowed = playbackEnabled && rememberAppResumed()
     if (videoUrls.isEmpty()) {
-        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier, lighting, fullClip, onAnimationVisible, onPlaybackError, playbackAllowed)
+        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier, lighting, fullClip, onAnimationVisible, onPlaybackError, playbackAllowed, onFirstFrame)
         return
     }
 
@@ -160,10 +165,14 @@ fun SoraMascotVideo(
         initialValue = emptyMap(),
         normalizedUrls,
         neutralFrameUrl,
+        independentMatteActions,
     ) {
         value = withContext(Dispatchers.IO) {
             val anchorKey=neutralFrameUrl?.let(::detectBackgroundColor)
-            normalizedUrls.mapValues { (_, url) -> anchorKey ?: detectBackgroundColor(url) }
+            normalizedUrls.mapValues { (action, url) ->
+                if (action in independentMatteActions) detectBackgroundColor(url)
+                else anchorKey ?: detectBackgroundColor(url)
+            }
         }
     }
     val neutralBackgroundKey by produceState<Int?>(
@@ -204,7 +213,7 @@ fun SoraMascotVideo(
         queue(normalized)
     }
     LaunchedEffect(interaction.actionSerial) {
-        if (interaction.actionSerial > 0) interaction.actionName?.let(::queue)
+        if (interaction.actionSerial > 0) interaction.actionName?.let { queue(it) }
     }
     LaunchedEffect(interaction.tapSerial) { if (interaction.tapSerial > 0) queue("joyful") }
     LaunchedEffect(interaction.petSerial) { if (interaction.petSerial > 0) queue("joyful") }
@@ -215,6 +224,7 @@ fun SoraMascotVideo(
 
     val context = LocalContext.current
     val visibleCallback by rememberUpdatedState(onAnimationVisible)
+    val firstFrameCallback by rememberUpdatedState(onFirstFrame)
     val finishedCallback by rememberUpdatedState(onOneShotFinished)
     val playbackAllowedState by rememberUpdatedState(playbackAllowed)
     val firstFrameRendered = remember(normalizedUrls) { BooleanArray(2) }
@@ -255,7 +265,7 @@ fun SoraMascotVideo(
                         frame.addView(view)
                     }
                 }
-                neutralFrameUrl?.let { url ->
+                neutralFrameUrl?.takeIf { useNeutralTransitions }?.let { url ->
                     ImageView(viewContext).also { image ->
                         image.layoutParams = FrameLayout.LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -301,6 +311,7 @@ fun SoraMascotVideo(
         val closedSleepSeams = mutableMapOf<String, Boolean>()
         val verifiedGeneratedSeams = mutableMapOf<String, Boolean>()
         val verifiedGeneratedSleepSeams = mutableMapOf<String, Boolean>()
+        val lightingJobs = arrayOfNulls<Job>(2)
         // Start at zero instead of copying requestSerial: a detail screen can
         // request its action before the players finish initializing.
         var consumedSerial = 0
@@ -326,6 +337,7 @@ fun SoraMascotVideo(
 
         suspend fun prepare(index: Int, actionName: String) {
             val url = normalizedUrls[actionName] ?: normalizedUrls.getValue(idleAction)
+            lightingJobs[index]?.cancel()
             firstFrameRendered[index] = false
             val item = MediaItem.Builder()
                 .setUri(mediaUri(url))
@@ -342,7 +354,7 @@ fun SoraMascotVideo(
                 .build()
             val lightPack=if(lighting!=null)loadVideoLighting(context,url) else null
             val binding=lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }
-            val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl) }
+            val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl.takeUnless { actionName in independentMatteActions }) }
                 .also { matteTunings[url] = it }
             if (actionName == "sleep_loop" && !derivedSleepLoop && url !in closedSleepSeams) {
                 closedSleepSeams[url] = withContext(Dispatchers.IO) {
@@ -363,62 +375,19 @@ fun SoraMascotVideo(
                 stop()
                 clearMediaItems()
                 applyBackgroundKey(playerViews[index],backgroundKeys[actionName] ?: Color.rgb(232,244,252),binding, tuning = tuning)
-                repeatMode = Player.REPEAT_MODE_OFF
+                repeatMode = if (switchActionsPromptly) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 setMediaItem(item)
                 prepare()
             }
-        }
-
-        suspend fun handOffNow(actionName: String) {
-            val outgoingIndex = activeIndex
-            val incomingIndex = 1 - outgoingIndex
-            val outgoing = players[outgoingIndex]
-            val incoming = players[incomingIndex]
-            val outgoingView = playerViews[outgoingIndex]
-            val incomingView = playerViews[incomingIndex]
-
-            if (preparedAction != actionName) {
-                prepare(incomingIndex, actionName)
-                preparedAction = actionName
-            }
-            if (!waitForReady(incomingIndex)) { queuedAction = null; preparedAction = null; return }
-            if (!isActive) return
-
-            incomingView.alpha = 0f
-            incoming.seekTo(0)
-            incoming.play()
-            val anchor = neutralView
-            val steps = 5
-            if (anchor != null) {
-                repeat(steps) { step ->
-                    anchor.alpha = (step + 1f) / steps
-                    delay(REACTION_HANDOFF_MS / steps)
+            if (binding == null && lighting != null) {
+                lightingJobs[index] = launch {
+                    val ready = awaitVideoLighting(context, url) ?: return@launch
+                    if (players[index].currentMediaItem?.localConfiguration?.uri == mediaUri(url)) {
+                        applyBackgroundKey(playerViews[index], backgroundKeys[actionName] ?: Color.rgb(232,244,252),
+                            VideoLightingBinding(ready, lighting), tuning = tuning)
+                    }
                 }
             }
-            outgoing.pause()
-            if (!waitForFirstFrame(incomingIndex)) {
-                incoming.pause(); anchor?.let { it.alpha = 0f }; outgoing.play()
-                queuedAction = null; preparedAction = null
-                return
-            }
-            if (!isActive) return
-            outgoingView.alpha = 0f
-            incomingView.alpha = 1f
-            if (anchor != null) {
-                repeat(steps) { step ->
-                    anchor.alpha = 1f - (step + 1f) / steps
-                    delay(REACTION_HANDOFF_MS / steps)
-                }
-                anchor.alpha = 0f
-            }
-            outgoing.seekTo(0)
-            activeIndex = incomingIndex
-            currentAction = actionName
-            oneShotBoundaryReportedAt = null
-            visibleCallback?.invoke(currentAction)
-            if (queuedAction == currentAction) queuedAction = null
-            preparedAction = null
-            Log.i("MascotPlayback", "immediate transition current=$currentAction")
         }
 
         prepare(activeIndex, currentAction)
@@ -428,6 +397,7 @@ fun SoraMascotVideo(
         players[activeIndex].play()
         if (!waitForFirstFrame(activeIndex) || !isActive) return@LaunchedEffect
         playerViews[activeIndex].alpha = 1f
+        firstFrameCallback?.invoke()
         visibleCallback?.invoke(currentAction)
         neutralView?.let { anchor ->
             val steps = 9
@@ -467,17 +437,6 @@ fun SoraMascotVideo(
                 requestedAction
             }
 
-            // Idle is ambient, not a user-authored action. Never make a tap
-            // wait up to six seconds for its loop boundary. Sleep must also be
-            // interruptible so a normal tap always wakes the hero. Joy and
-            // dance still play to completion once they have begun.
-            if (
-                queuedAction != null &&
-                shouldInterruptHomeClip(currentAction, desiredNext, idleAction)
-            ) {
-                handOffNow(desiredNext)
-                continue
-            }
             val sleepAnchor = minOf(
                 if (derivedSleepLoop) DERIVED_SLEEP_ANCHOR_MS else SLEEP_ANCHOR_MS,
                 (active.duration - 750L).coerceAtLeast(500L),
@@ -607,6 +566,11 @@ fun SoraMascotVideo(
                 // Fall through to the normal transition and crossfade directly
                 // from the closed sleep loop to the requested action.
             }
+            if (switchActionsPromptly && desiredNext == currentAction) {
+                queuedAction = null
+                delay(32)
+                continue
+            }
             val remaining = if (currentAction == "sleep_loop" && queuedAction != null) {
                 0L
             } else if (active.duration > 0) {
@@ -629,7 +593,8 @@ fun SoraMascotVideo(
             } else {
                 TRANSITION_BEFORE_END_MS
             }
-            val atBoundary = remaining <= boundaryWindow || active.playbackState == Player.STATE_ENDED
+            val actionChanged = switchActionsPromptly && desiredNext != currentAction
+            val atBoundary = actionChanged || remaining <= boundaryWindow || active.playbackState == Player.STATE_ENDED
             if (atBoundary) {
                 // Report the actual first clip boundary rather than relying on the
                 // resolver's one-second safety timer. Do not begin a second greeting
@@ -662,7 +627,7 @@ fun SoraMascotVideo(
                 incomingView.alpha = 0f
                 val steps = 9
                 val anchor = neutralView
-                if (anchor != null && desiredNext != currentAction) {
+                if (useNeutralTransitions && anchor != null && desiredNext != currentAction) {
                     repeat(steps) { step ->
                         anchor.alpha = (step + 1f) / steps
                         delay(CROSSFADE_MS / steps)
@@ -709,7 +674,9 @@ fun SoraMascotVideo(
                     incomingView.translationZ = 1f
                     neutralView?.translationZ = 2f
                     repeat(steps) { step ->
-                        incomingView.alpha = (step + 1f) / steps
+                        val blend = (step + 1f) / steps
+                        incomingView.alpha = blend
+                        if (switchActionsPromptly) outgoingView.alpha = 1f - blend
                         delay(CROSSFADE_MS / steps)
                     }
                 }
@@ -725,7 +692,9 @@ fun SoraMascotVideo(
                 if (queuedAction == currentAction) queuedAction = null
                 preparedAction = null
             }
-            delay(16)
+            // There is no visual work between transitions. Poll slowly while a
+            // clip is far from its boundary, then keep frame-level precision.
+            delay(if (remaining > PREPARE_BEFORE_END_MS + 250 && queuedAction == null) 50 else 16)
         }
     }
 
@@ -863,6 +832,7 @@ private fun LegacyPerformanceVideo(
     onAnimationVisible: ((String) -> Unit)?,
     onPlaybackError: (() -> Unit)?,
     playbackAllowed: Boolean,
+    onFirstFrame: (() -> Unit)?,
 ) {
     val context = LocalContext.current
     val uri = remember(videoUrl) { mediaUri(videoUrl) }
@@ -875,6 +845,7 @@ private fun LegacyPerformanceVideo(
     }
     var readySerial by remember(videoUrl) { mutableIntStateOf(0) }
     val visibleCallback by rememberUpdatedState(onAnimationVisible)
+    val firstFrameCallback by rememberUpdatedState(onFirstFrame)
     val errorCallback by rememberUpdatedState(onPlaybackError)
     val player = remember(videoUrl) {
         createMascotVideoPlayer(context).apply {
@@ -885,6 +856,7 @@ private fun LegacyPerformanceVideo(
                     if (playbackState == Player.STATE_READY) readySerial += 1
                 }
                 override fun onRenderedFirstFrame() {
+                    firstFrameCallback?.invoke()
                     if (fullClip) visibleCallback?.invoke("reaction")
                 }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -899,6 +871,11 @@ private fun LegacyPerformanceVideo(
 
     suspend fun showReaction(name: String) {
         val token = ++reactionToken
+        if (player.playbackState == Player.STATE_READY && player.isPlaying) {
+            val end = videoBeat(reaction ?: action).endMs
+            delay((end - player.currentPosition).coerceIn(0L, 8_000L))
+        }
+        if (reactionToken != token) return
         reaction = name
         val beat = videoBeat(name)
         delay(beat.endMs - beat.startMs)
@@ -931,12 +908,21 @@ private fun LegacyPerformanceVideo(
         },
         onRelease = { if(playbackView===it)playbackView=null },
     )
-    LaunchedEffect(player,keyColor,lightReady,lightBinding,playbackView) {
+    LaunchedEffect(player,keyColor,lightReady,playbackView) {
         val key=keyColor;val view=playbackView
         if(key!=null && lightReady && view!=null) {
             applyBackgroundKey(view,key,lightBinding,conservative = fullClip)
             player.setMediaItem(MediaItem.fromUri(uri));player.prepare()
         }
+    }
+    LaunchedEffect(player, keyColor, lightReady, playbackView, videoUrl, lighting) {
+        val key = keyColor ?: return@LaunchedEffect
+        val view = playbackView ?: return@LaunchedEffect
+        val input = lighting ?: return@LaunchedEffect
+        if (!lightReady || lightBinding != null) return@LaunchedEffect
+        val pack = awaitVideoLighting(context, videoUrl) ?: return@LaunchedEffect
+        lightBinding = VideoLightingBinding(pack, input)
+        applyBackgroundKey(view, key, lightBinding, conservative = fullClip)
     }
 
     LaunchedEffect(player, readySerial, activeBeat, playbackAllowed) {

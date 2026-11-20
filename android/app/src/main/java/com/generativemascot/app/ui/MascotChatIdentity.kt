@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -17,6 +19,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -32,7 +35,9 @@ internal val MascotChatIdentityTop = 29.dp
 /** The same borderless portrait and Figma typeface in chat and interaction settings. */
 @Composable
 internal fun MascotChatIdentity(name: String, modifier: Modifier = Modifier, circleBackground: Color? = null,
-    onClick: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null, showName: Boolean = true, onClickLabel: String = "Настроить общение",
+    loading: Boolean = false,
+    overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit) {
     val context = LocalContext.current
     val typeface = remember { ResourcesCompat.getFont(context, R.font.sb_sans_display_extended_semibold) }
@@ -42,25 +47,43 @@ internal fun MascotChatIdentity(name: String, modifier: Modifier = Modifier, cir
         else Modifier.fillMaxSize().clipToBounds()
         Box(portrait, contentAlignment = Alignment.Center) {
             Box(Modifier.size(MascotChatPortraitSize), contentAlignment = Alignment.Center, content = content)
+            overlay()
         }
-        if (onClick != null) Box(Modifier.matchParentSize().clickable(onClickLabel = "Настроить общение", onClick = onClick))
-        Canvas(Modifier.fillMaxSize().semantics { contentDescription = name }) {
+        if (onClick != null) Box(Modifier.matchParentSize().clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClickLabel = onClickLabel,
+            onClick = onClick,
+        ))
+        if (showName) Canvas(Modifier.fillMaxSize().semantics { contentDescription = name }) {
             // Keep the text away from the edge while retaining room for the portrait.
-            val radius = size.minDimension * .32f
+            val radius = size.minDimension * .35f
             val cx = size.width / 2f
             val cy = size.height / 2f
             val arc = android.graphics.Path().apply {
-                addArc(cx - radius, cy - radius, cx + radius, cy + radius, -145f, 120f)
+                addArc(cx - radius, cy - radius, cx + radius, cy + radius, -140f, 100f)
             }
             val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color = android.graphics.Color.BLACK
                 this.typeface = typeface
-                textSize = 14.4.sp.toPx()
+                textSize = 12.sp.toPx()
+                textAlign = android.graphics.Paint.Align.LEFT
             }
             val available = android.graphics.PathMeasure(arc, false).length
             val fittedName = android.text.TextUtils.ellipsize(name, android.text.TextPaint(paint),
                 available, android.text.TextUtils.TruncateAt.END).toString()
-            drawContext.canvas.nativeCanvas.drawTextOnPath(fittedName, arc, 0f, 0f, paint)
+            val startOffset = ((available - paint.measureText(fittedName)) / 2f).coerceAtLeast(0f)
+            // A subtle background-colored outline keeps the name legible over moving video.
+            if (circleBackground != null) {
+                val outline = android.graphics.Paint(paint).apply {
+                    color = circleBackground.toArgb()
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = 3.dp.toPx()
+                    strokeJoin = android.graphics.Paint.Join.ROUND
+                }
+                drawContext.canvas.nativeCanvas.drawTextOnPath(fittedName, arc, startOffset, 0f, outline)
+            }
+            drawContext.canvas.nativeCanvas.drawTextOnPath(fittedName, arc, startOffset, 0f, paint)
         }
     }
 }

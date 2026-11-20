@@ -16,7 +16,6 @@ internal class OverlayHeroWindow(context: Context, val hero: OverlayHeroView,
     init {
         clipChildren = true
         addView(hero)
-        installOverlayTouchRegion(this) { hero.touchRegion().apply { translate(-crop.left, -crop.top) } }
     }
     fun configure(p: WindowManager.LayoutParams): WindowManager.LayoutParams {
         virtualWidth = p.width; virtualHeight = p.height
@@ -38,6 +37,14 @@ internal class OverlayHeroWindow(context: Context, val hero: OverlayHeroView,
         return WindowManager.LayoutParams().apply {
             copyFrom(p); x = p.x + crop.left; y = p.y + crop.top
             width = crop.width(); height = crop.height()
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            // Android 12+ permits pass-through only up to the system opacity limit.
+            // Only the card owns input, so the hero can use almost the full limit.
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                val limit = context.getSystemService(android.hardware.input.InputManager::class.java)
+                    .maximumObscuringOpacityForTouch.coerceIn(0f, 1f)
+                alpha = limit
+            }
         }
     }
     override fun onMeasure(w: Int, h: Int) {

@@ -12,6 +12,8 @@ import coil.decode.ImageDecoderDecoder
 import com.generativemascot.app.data.BundledHeroImporter
 import com.generativemascot.app.data.HeroLocalStore
 import com.generativemascot.app.data.OpenRouterSettingsStore
+import com.generativemascot.app.data.ReactorSettingsStore
+import com.generativemascot.app.data.FalSettingsStore
 import com.generativemascot.app.data.SessionStore
 import com.generativemascot.app.data.createApi
 import com.generativemascot.app.worker.ContextRefreshWorker
@@ -31,6 +33,10 @@ class MascotApp : Application(), ImageLoaderFactory {
     lateinit var heroStore: HeroLocalStore
         private set
     lateinit var openRouterSettings: OpenRouterSettingsStore
+        private set
+    lateinit var reactorSettings: ReactorSettingsStore
+        private set
+    lateinit var falSettings: FalSettingsStore
         private set
     private val bundledHeroesMutex = Mutex()
     private var bundledHeroesImported = false
@@ -54,6 +60,8 @@ class MascotApp : Application(), ImageLoaderFactory {
         session = SessionStore(this)
         heroStore = HeroLocalStore(this)
         openRouterSettings = OpenRouterSettingsStore(this)
+        reactorSettings = ReactorSettingsStore(this)
+        falSettings = FalSettingsStore(this)
         HeroLocalStore.attach(heroStore)
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO).launchLightingRecovery()
         behavior = com.generativemascot.app.state.BehaviorCoordinator(this)
@@ -83,6 +91,7 @@ class MascotApp : Application(), ImageLoaderFactory {
                     openAsset = { path -> assets.open(path) },
                     destinationRoot = File(filesDir, "hero"),
                     isDeleted = heroStore::isDeleted,
+                    onImported = { id, directory -> com.generativemascot.app.data.BundledHeroSettings.importIfAbsent(this@MascotApp, id, directory) },
                 ).importAll()
                 bundledHeroesImported = true
             }

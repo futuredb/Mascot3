@@ -23,12 +23,19 @@ fun quotedBuildConfig(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val localEnvironment = dotenv("../.env")
+val privateBuildConfig = dotenv("${System.getProperty("user.home")}/.config/mascot-chat/build.properties")
 val embeddedOpenRouterKey = providers.gradleProperty("MASCOT3_OPENROUTER_API_KEY").orNull
     ?: localEnvironment["OPENROUTER_API_KEY"]
+    ?: privateBuildConfig["TEAM_OPENROUTER_KEY"]
+    ?: ""
+val embeddedFalH3Key = providers.gradleProperty("MASCOT3_FAL_H3_API_KEY").orNull
+    ?: dotenv("../live-chat/.env.local")["FAL_TURBO_KEY"]
     ?: ""
 
 // Release keys/passwords are supplied by the build host, never committed to this repository.
-val embeddedReactorKey = providers.gradleProperty("TEAM_REACTOR_KEY").orElse("").get()
+val embeddedReactorKey = providers.gradleProperty("TEAM_REACTOR_KEY").orNull
+    ?: privateBuildConfig["TEAM_REACTOR_KEY"]
+    ?: ""
 
 val releaseStorePath = providers.environmentVariable("MASCOT3_RELEASE_STORE_FILE").orNull
 val releaseStorePassword = providers.environmentVariable("MASCOT3_RELEASE_STORE_PASSWORD").orNull
@@ -45,14 +52,17 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 108
-        versionName = "0.1.107-helios-identity"
+        versionCode = 196
+        versionName = "0.1.195-dialogue-timing"
         val serverUrl = providers.gradleProperty("MASCOT3_SERVER_URL").orElse("http://127.0.0.1:8788")
         val clientToken = providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orElse("")
         buildConfigField("String", "API_BASE_URL", quotedBuildConfig(serverUrl.get()))
         buildConfigField("String", "MASCOT3_CLIENT_TOKEN", quotedBuildConfig(clientToken.get()))
         buildConfigField("String", "OPENROUTER_API_KEY", quotedBuildConfig(embeddedOpenRouterKey))
+        buildConfigField("String", "FAL_H3_API_KEY", quotedBuildConfig(embeddedFalH3Key))
         buildConfigField("String", "REACTOR_API_KEY", quotedBuildConfig(embeddedReactorKey))
+        buildConfigField("boolean", "USE_X2", "false")
+        buildConfigField("boolean", "USE_OMNI", "false")
     }
 
     signingConfigs {
@@ -68,6 +78,23 @@ android {
     }
 
     buildTypes {
+        create("omni") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".omni"
+            versionNameSuffix = "-omni"
+            matchingFallbacks += "debug"
+            resValue("string", "app_name", "Маскот · Omni")
+            buildConfigField("boolean", "USE_X2", "true")
+            buildConfigField("boolean", "USE_OMNI", "true")
+        }
+        create("x2") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".x2"
+            versionNameSuffix = "-x2"
+            matchingFallbacks += "debug"
+            resValue("string", "app_name", "Маскот · X2")
+            buildConfigField("boolean", "USE_X2", "true")
+        }
         create("flowdemo") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".flowdemo"
@@ -77,6 +104,7 @@ android {
             resValue("string", "app_name", "Маскот · Демо")
             // Offline preview must never inherit the production credentials from .env.
             buildConfigField("String", "OPENROUTER_API_KEY", "\"\"")
+            buildConfigField("String", "FAL_H3_API_KEY", "\"\"")
             buildConfigField("String", "REACTOR_API_KEY", "\"\"")
             buildConfigField("String", "MASCOT3_CLIENT_TOKEN", "\"\"")
             buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:1\"")
@@ -90,6 +118,7 @@ android {
         create("updateCompatible") {
             initWith(getByName("release"))
             matchingFallbacks += "release"
+            buildConfigField("String", "FAL_H3_API_KEY", quotedBuildConfig(embeddedFalH3Key))
             // Existing team installations use this identity. Never uninstall to
             // replace it with the separate production-distribution certificate.
             signingConfig = signingConfigs.getByName("debug")
@@ -134,6 +163,9 @@ tasks.register("validateProductionConfiguration") {
         check(providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orNull?.isNotBlank() == true) {
             "Release requires the existing team-server client token"
         }
+        check(embeddedOpenRouterKey.isNotBlank() && embeddedFalH3Key.isNotBlank() && embeddedReactorKey.isNotBlank()) {
+            "Release requires all configured team API credentials"
+        }
     }
 }
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
@@ -146,6 +178,10 @@ tasks.register("validateUpdateCompatibleConfiguration") {
         val uri = runCatching { URI(server) }.getOrNull()
         check(uri?.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) {
             "Update-compatible release requires an explicit HTTPS server URL"
+        }
+        check(embeddedOpenRouterKey.isNotBlank() && embeddedFalH3Key.isNotBlank() && embeddedReactorKey.isNotBlank() &&
+            providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orNull?.isNotBlank() == true) {
+            "Update-compatible release requires all configured team API credentials"
         }
         check(android.signingConfigs.getByName("debug").storeFile?.isFile == true) {
             "The existing team signing identity is required; do not generate a replacement"
@@ -197,6 +233,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-svg:2.7.0")
+    implementation("com.caverock:androidsvg-aar:1.4")
     implementation("io.coil-kt:coil-gif:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")

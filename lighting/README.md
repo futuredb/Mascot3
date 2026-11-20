@@ -24,7 +24,8 @@ regenerated or silently reinterpreted with a different prompt.
 4. `GET /v1/lighting/jobs/{id}` returns status and hash-addressed asset metadata.
    Android downloads with byte/hash/dimension checks. Only complete validated
    packs become active. The static renderer watches the active revision; video
-   players pick up the downloaded maps at their next preparation/clip change.
+   players watch for the corresponding downloaded maps and attach them to the
+   current playback when ready, without restarting the clip.
 
 Generation completion never waits for maps. Network interruptions retain the
 saved hero/video and retry the background work. Inference failures keep ordinary

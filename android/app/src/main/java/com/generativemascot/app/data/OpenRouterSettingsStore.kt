@@ -45,12 +45,12 @@ internal fun normalizeOpenRouterApiKey(raw: String): String {
  * A user-entered override stays encrypted with Android Keystore. Team builds
  * can additionally provide a bundled fallback through BuildConfig.
  */
-class OpenRouterSettingsStore(context: Context) {
+class OpenRouterSettingsStore(context: Context, bundledKey: String = BuildConfig.OPENROUTER_API_KEY) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val secretFile = java.io.File(appContext.noBackupFilesDir, SECRET_FILE)
     private val bundledApiKey = runCatching {
-        BuildConfig.OPENROUTER_API_KEY
+        bundledKey
             .takeIf { it.isNotBlank() }
             ?.let(::normalizeOpenRouterApiKey)
     }.getOrNull()
@@ -80,7 +80,18 @@ class OpenRouterSettingsStore(context: Context) {
     fun isDirectModeEnabled(): Boolean =
         route() == GenerationRoute.OPENROUTER_DIRECT && hasApiKey()
 
+    /** Character creation needs the direct route; team APKs already include its key. */
+    internal fun enableBundledRouteForCharacterCreation(): Boolean {
+        if (isDirectModeEnabled()) return true
+        if (bundledApiKey == null || !hasApiKey()) return false
+        setRoute(GenerationRoute.OPENROUTER_DIRECT)
+        return true
+    }
+
     fun hasApiKey(): Boolean = apiKey() != null
+
+    /** True only for a key entered on this device, not the bundled team fallback. */
+    fun hasUserApiKey(): Boolean = secretFile.isFile && apiKey() != null
 
     fun saveApiKey(raw: String) {
         val plain = normalizeOpenRouterApiKey(raw).toByteArray(Charsets.UTF_8)
@@ -183,7 +194,9 @@ class OpenRouterSettingsStore(context: Context) {
 }
 
 /** Performs only read-only OpenRouter calls; checking a key cannot spend credits. */
-class OpenRouterKeyVerifier {
+class OpenRouterKeyVerifier(
+    private val hasFalKey: () -> Boolean = { BuildConfig.FAL_H3_API_KEY.isNotBlank() },
+) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -194,9 +207,11 @@ class OpenRouterKeyVerifier {
         val key = normalizeOpenRouterApiKey(raw)
         val keyInfo = get("$OPENROUTER_BASE_URL/key", key)
         val imageModels = get("$OPENROUTER_BASE_URL/images/models", key)
-        val videoModels = get("$OPENROUTER_BASE_URL/videos/models", key)
         requireModel(imageModels, IMAGE_MODEL, "GPT Image 2")
-        requireModel(videoModels, VIDEO_MODEL, "Seedance 2.0 Mini")
+        if (!hasFalKey()) {
+            val videoModels = get("$OPENROUTER_BASE_URL/videos/models", key)
+            requireModel(videoModels, VIDEO_MODEL, "Seedance 2.0 Mini")
+        }
         val data = JSONObject(keyInfo).optJSONObject("data")
         val remaining = data?.takeIf { it.has("limit_remaining") && !it.isNull("limit_remaining") }
             ?.optDouble("limit_remaining")
@@ -204,7 +219,7 @@ class OpenRouterKeyVerifier {
         OpenRouterKeyCheck(
             remainingUsd = remaining,
             imageModel = IMAGE_MODEL,
-            videoModel = VIDEO_MODEL,
+            videoModel = if (hasFalKey()) "minimax/h3-max-turbo" else VIDEO_MODEL,
         )
     }
 

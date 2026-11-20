@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.media.MediaMetadataRetriever
+import com.generativemascot.app.BuildConfig
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.UUID
@@ -33,6 +34,7 @@ import org.json.JSONObject
 class OnDeviceMascotGenerator(
     private val store: HeroLocalStore,
     rawApiKey: String,
+    rawFalKey: String? = BuildConfig.FAL_H3_API_KEY,
 ) {
     private val apiKey = normalizeOpenRouterApiKey(rawApiKey)
     private val generationLock = Mutex()
@@ -45,6 +47,8 @@ class OnDeviceMascotGenerator(
         .callTimeout(6, TimeUnit.MINUTES)
         .retryOnConnectionFailure(false)
         .build()
+    private val falVideo = rawFalKey?.takeIf { it.isNotBlank() }
+        ?.let { FalVideoProvider(client, it) }
 
     suspend fun generateBase(mascotId: String): MascotDto = generationLock.withLock {
         ensureImageModelAvailable()
@@ -151,13 +155,17 @@ class OnDeviceMascotGenerator(
         // This immutable, persisted set is the paid limit. Never replace already
         // completed entries with more missing actions when a worker restarts.
         val batchActions = validateAnimationBatch(actions)
-        ensureVideoModelAvailable()
+        if (falVideo == null) ensureVideoModelAvailable()
         val base = store.baseFile(mascotId) ?: error("Сначала нужно создать основного героя")
         val savedCharacter = store.creativeContract(mascotId)
         val creativeSeed = savedCharacter?.seed ?: mascotId.hashCode()
         // Reuse the actual character created by the art director. Rebuilding
         // from the seed alone loses the user's human/animal/creature choice.
-        val character = savedCharacter ?: mobileCharacterContract(creativeSeed, store.characterChoice(mascotId))
+        val choice = store.characterChoice(mascotId)
+        val original = savedCharacter ?: mobileCharacterContract(creativeSeed, choice)
+        val style = choice?.let { characterPersonalityById(it.style) }
+        val character = if (style != null) original.copy(behavior = original.behavior.copy(
+            motivation = "Express a ${style.name} personality: ${style.tone}", worldview = style.tone)) else original
         val hasExistingCoreVideo = HeroLocalStore.CORE_VIDEO_ACTIONS.any {
             store.actionVideoFile(mascotId, it) != null
         }
@@ -195,7 +203,9 @@ class OnDeviceMascotGenerator(
                 }
                 val durationSeconds = videoDurationSeconds(action)
                 val matteHex = colorHex(actionReference.matteColor)
-                val prompt = buildCharacterAnimationPrompt(
+                val prompt = if (falVideo != null && existingJobId == null && action == "greeting") {
+                    buildFalGreetingPrompt(matteHex, "${character.behavior.motivation} ${character.behavior.worldview}")
+                } else buildCharacterAnimationPrompt(
                     action = action,
                     seed = creativeSeed,
                     durationSeconds = durationSeconds,
@@ -220,16 +230,15 @@ class OnDeviceMascotGenerator(
                 val enforceLoop = (store.animationPromptRecord(mascotId, action)?.catalogVersion ?: 0) >= 5
                 val jobId = existingJobId ?: run {
                     store.claimVideoSubmission(requestToken, action)
-                    createVideoJob(action, actionReference.file, prompt)
+                    submitSelectedVideo(action, actionReference.file, prompt, durationSeconds)
                 }.also {
                     // Persist before polling. If Android kills the worker, the next run
                     // resumes this paid job instead of submitting another one.
                     store.saveOpenRouterVideoJobId(mascotId, action, it)
                 }
-                val completed = pollVideo(jobId, action)
-                val cost = completed.optJSONObject("usage")?.optDouble("cost")
-                    ?.takeIf { !it.isNaN() }
-                val video = downloadVideo(jobId)
+                val completed = fetchSelectedVideo(jobId, action)
+                val cost = completed.cost
+                val video = completed.bytes
                 val inspectionFile = withContext(Dispatchers.IO) {
                     java.io.File.createTempFile("video-qa-$action-", ".mp4", base.parentFile)
                         .also { it.writeBytes(video) }
@@ -269,10 +278,29 @@ class OnDeviceMascotGenerator(
         MascotDto(
             id = mascotId,
             status = "READY",
-            promptVersion = "pet-generation-v2.6-seedance-2.0-mini-loop-v1",
+            promptVersion = if (falVideo != null) "pet-generation-v2.7-fal-h3-max-turbo-loop-v1"
+                else "pet-generation-v2.6-seedance-2.0-mini-loop-v1",
             previewUrl = base.toURI().toString(),
             previewAnimationUrl = store.actionVideoFile(mascotId, "idle")?.toURI()?.toString(),
         )
+    }
+
+    private data class CompletedVideo(val bytes: ByteArray, val cost: Double?)
+
+    private suspend fun submitSelectedVideo(action: String, reference: java.io.File, prompt: String, duration: Int): String {
+        val provider = falVideo ?: return createVideoJob(action, reference, prompt)
+        return provider.submit(reference, prompt, duration)
+    }
+
+    private suspend fun fetchSelectedVideo(jobId: String, action: String): CompletedVideo {
+        if (jobId.startsWith(FAL_JOB_PREFIX)) {
+            val provider = falVideo ?: throw IOException("Ключ fal недоступен для сохранённой задачи")
+            provider.poll(jobId, action)
+            return CompletedVideo(provider.download(jobId), null)
+        }
+        val result = pollVideo(jobId, action)
+        val cost = result.optJSONObject("usage")?.optDouble("cost")?.takeIf { !it.isNaN() }
+        return CompletedVideo(downloadVideo(jobId), cost)
     }
 
     private suspend fun createVideoJob(action: String, reference: java.io.File, prompt: String): String =

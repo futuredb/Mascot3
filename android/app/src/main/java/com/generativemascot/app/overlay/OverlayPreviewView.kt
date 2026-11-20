@@ -15,9 +15,7 @@ internal class OverlayPreviewView(context: Context, private val artwork: Overlay
     private var pinching = false
     private val pinch = OverlayPinchGesture(context.overlayDp(2).toFloat(),
         onBegin = { _, _ -> true },
-        onScale = { factor, _, _ ->
-            heroScale = OverlaySize.constrain(heroScale * factor)
-        },
+        onScale = { factor, _, _ -> heroScale = OverlaySize.constrain(heroScale * factor) },
         onEnd = { OverlaySize.save(context, heroScale) })
     var heroScale = 1f
         set(value) { if (field != value) { field = value; requestLayout() } }
@@ -63,8 +61,8 @@ internal class OverlayPreviewView(context: Context, private val artwork: Overlay
         val gap = context.overlayDp(12)
         val area = OverlayArea(context.overlayDp(8), top, width - context.overlayDp(8), context.overlayDp(2_000))
         val size = OverlaySize.dimensions(heroScale, resources.displayMetrics.density, area, artwork)
-        card.compositionScale = heroScale
-        card.measure(MeasureSpec.makeMeasureSpec(minOf((context.overlayDp(248) * heroScale).roundToInt(), area.width), MeasureSpec.EXACTLY),
+        card.compositionScale = 1f
+        card.measure(MeasureSpec.makeMeasureSpec(minOf((context.overlayDp(248) * card.compositionScale).roundToInt(), area.width), MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(context.overlayDp(1_000), MeasureSpec.AT_MOST))
         val bodyHeight = card.measuredHeight - card.tailHeight
         val visible = OverlayFraming.visibleBounds(artwork, size.width, size.height)
@@ -73,7 +71,7 @@ internal class OverlayPreviewView(context: Context, private val artwork: Overlay
         val height = resolveSize(maxOf(context.overlayDp(360), kotlin.math.ceil(required).toInt()), heightMeasureSpec)
         // The settings block grows with the composition. A fixed-height host can
         // still fit the preview without changing the real overlay size preference.
-        val fit = minOf(1f, ((height - top - bodyHeight - gap - bottom) / heroBelowHead).coerceAtLeast(.1f))
+        val fit = minOf(1f, ((height - top - gap - bottom) / (bodyHeight + heroBelowHead)).coerceAtLeast(.1f))
         hero.measure(MeasureSpec.makeMeasureSpec((size.width * fit).roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec((size.height * fit).roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY))
         compact.measure(MeasureSpec.makeMeasureSpec(context.overlayDp(48), MeasureSpec.EXACTLY),

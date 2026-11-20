@@ -147,8 +147,14 @@ fun PngSequence(
                 .mapNotNull { file -> decodeFile(file.absolutePath, decodeSize) }
         }
     }
-    LaunchedEffect(bitmaps, fullFrameBitmaps, playbackAllowed) {
-        while (isActive && playbackAllowed && (fullFrameBitmaps.size > 1 || bitmaps.size > 1)) withFrameNanos { frameTime = it }
+    LaunchedEffect(bitmaps, fullFrameBitmaps, playbackAllowed, fps, genericReactionStartedAt, genericReaction) {
+        val frameDuration = 1_000_000_000L / fps.coerceIn(1, 60)
+        val start = genericReactionStartedAt.takeIf { genericReaction != null } ?: 0L
+        var previousFrame = Long.MIN_VALUE
+        while (isActive && playbackAllowed && (fullFrameBitmaps.size > 1 || bitmaps.size > 1)) withFrameNanos { now ->
+            val frame = (now - start).coerceAtLeast(0L) / frameDuration
+            if (frame != previousFrame) { previousFrame = frame; frameTime = now }
+        }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val activeReaction = genericReaction ?: puppetAction

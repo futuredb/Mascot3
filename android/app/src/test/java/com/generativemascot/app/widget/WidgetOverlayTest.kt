@@ -111,6 +111,22 @@ class WidgetOverlayTest {
             val view = widgets.getViewFor(201) as? ImageView
             assertNotNull("The 2.5D frame must reach the launcher", view?.drawable)
             assertEquals(true, field("sensorsRunning"))
+            // A prepared depth pack must not divert the tap into a widget reaction.
+            ShadowSettings.setCanDrawOverlays(true)
+            app.getSharedPreferences("mascot_overlay", 0).edit().putBoolean("permission_intro_v1", true).apply()
+            view!!.performClick()
+            val launch = shadowOf(app).nextStartedActivity
+            assertEquals(OverlayLaunchActivity::class.java.name, launch.component!!.className)
+            assertEquals(heroId, launch.getStringExtra(MascotOverlayService.EXTRA_HERO))
+            val activity = Robolectric.buildActivity(OverlayLaunchActivity::class.java, launch).setup()
+            try {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+                val start = shadowOf(app).nextStartedService
+                assertNotNull("Tapping the depth widget must start the overlay", start)
+                assertEquals(MascotOverlayService::class.java.name, start.component!!.className)
+                assertEquals(MascotOverlayService.ACTION_WIDGET, start.action)
+                assertEquals(heroId, start.getStringExtra(MascotOverlayService.EXTRA_HERO))
+            } finally { activity.pause().stop().destroy() }
             val rendered = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
             try {
                 view!!.measure(View.MeasureSpec.makeMeasureSpec(200, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(200, View.MeasureSpec.EXACTLY))

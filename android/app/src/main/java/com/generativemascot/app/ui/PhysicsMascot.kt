@@ -5,6 +5,9 @@ import android.net.Uri
 import android.view.LayoutInflater
 import android.view.TextureView
 import android.widget.FrameLayout
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,29 +63,42 @@ fun PhysicsMascot(
     var revision by remember(mascotId) { mutableStateOf<String?>(null) }
     LaunchedEffect(mascotId, playbackEnabled) {
         if (!playbackEnabled) return@LaunchedEffect
+        var first = true
         while (isActive) {
             val next = withContext(Dispatchers.IO) { store.revision(mascotId) }
-            if (next != revision) {
-                revision = next
-                withContext(Dispatchers.IO) { runCatching { store.load(mascotId) } }
-                    .onSuccess { installed = it; failure = null }.onFailure { installed = null; failure = it.message }
+            if (first || next != revision || failure != null) {
+                first = false
+                val result = try { Result.success(store.load(mascotId)) }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (error: Exception) { Result.failure(error) }
+                result.onSuccess {
+                    installed = it; failure = null
+                    revision = store.revision(mascotId)
+                }.onFailure { installed = null; failure = it.message ?: "Не удалось загрузить карту глубины"; revision = next }
             }
             status = store.status(mascotId)
-            delay(2000)
+            delay(if (failure == null) 2_000 else 10_000)
         }
     }
     val activeCallback by rememberUpdatedState(onPhysicsActive)
-    DisposableEffect(installed, failure) {
-        activeCallback(installed != null && failure == null)
+    val pack = installed?.takeIf { failure == null }
+    var physicsReady by remember(mascotId, pack?.directory?.name) { mutableStateOf(false) }
+    DisposableEffect(pack, physicsReady) {
+        activeCallback(pack != null && physicsReady)
         onDispose { activeCallback(false) }
     }
     Box(modifier) {
-        val pack = installed
-        if (pack != null && failure == null) {
+        if (pack != null) {
             key(mascotId, pack.directory.name) {
-                PhysicsPlayback(pack, videoUrls, neutralFrameUrl, action, interaction, onAnimationVisible, onOneShotFinished, { failure = it }, phoneMotion, lighting, playbackEnabled)
+                PhysicsPlayback(pack, videoUrls, neutralFrameUrl, action, interaction, onAnimationVisible, onOneShotFinished,
+                    { failure = it }, phoneMotion, lighting, playbackEnabled, onPhysicsReady = { physicsReady = true })
             }
-        } else fallback()
+        }
+        // Keep the existing image/player covering the new GL surface until it
+        // has rendered a frame, then fade it away without showing an empty view.
+        AnimatedVisibility(visible = pack == null || !physicsReady, exit = fadeOut(tween(220))) {
+            fallback()
+        }
         if (mascotId == PhysicsStore.PILOT_ID && failure != null) {
             Column(Modifier.align(Alignment.BottomCenter).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 (failure ?: status)?.let { Text(it, fontSize = 12.sp) }
@@ -99,6 +115,7 @@ private fun PhysicsPlayback(
     installed: InstalledPhysics, videoUrls: Map<String, String>, neutralFrameUrl: String?, action: String,
     interaction: PuppetInteraction, visible: ((String) -> Unit)?, finished: ((String) -> Unit)?, failed: (String) -> Unit,
     phoneMotion: PhoneMotion?, lighting: TiltLighting?, playbackEnabled: Boolean,
+    onPhysicsReady: () -> Unit,
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
@@ -118,17 +135,22 @@ private fun PhysicsPlayback(
     val visibleCallback by rememberUpdatedState(visible)
     val finishedCallback by rememberUpdatedState(finished)
     val failureCallback by rememberUpdatedState(failed)
-    fun request(raw: String) {
+    val readyCallback by rememberUpdatedState(onPhysicsReady)
+    fun request(raw: String, repeatCurrent: Boolean = false) {
         val next = HeroLocalStore.normalizeVideoAction(raw)
         if (playing == "sleeping" && next !in setOf("sleeping", "sleep_loop")) {
             waking = true; pending = next.takeIf { it != "idle" && it in urls }; return
         }
-        if (next == "idle" || next !in urls || next == pending || (next == playing && phase == PhysicsPhase.VIDEO)) return
-        pending = next
-        if (phase == PhysicsPhase.IDLE) { phase = PhysicsPhase.SETTLING; settleToken++ }
+        if (next == "idle" || next !in urls || next == pending || (!repeatCurrent && next == playing && phase == PhysicsPhase.VIDEO)) return
+        if (phase == PhysicsPhase.IDLE) {
+            pending = null; playing = next; waking = false; videoVisible = false
+            playbackSerial++; phase = PhysicsPhase.VIDEO
+        } else pending = next
     }
     LaunchedEffect(action) { request(action) }
-    LaunchedEffect(interaction.actionSerial) { if (interaction.actionSerial > 0) interaction.actionName?.let(::request) }
+    LaunchedEffect(interaction.actionSerial) {
+        if (interaction.actionSerial > 0) interaction.actionName?.let { request(it, repeatCurrent = true) }
+    }
     LaunchedEffect(interaction.tapSerial) { if (interaction.tapSerial > 0) request("joyful") }
     LaunchedEffect(interaction.petSerial) { if (interaction.petSerial > 0) request("joyful") }
     LaunchedEffect(interaction.playSerial) { if (interaction.playSerial > 0) request("joyful") }
@@ -162,7 +184,7 @@ private fun PhysicsPlayback(
                 view.neutral = phase != PhysicsPhase.IDLE
                 view.settleToken = settleToken
                 view.onFailure = failureCallback
-                view.onReady = { if (phase == PhysicsPhase.IDLE) visibleCallback?.invoke("idle") }
+                view.onReady = { readyCallback(); if (phase == PhysicsPhase.IDLE) visibleCallback?.invoke("idle") }
                 view.onSettled = {
                     when (phase) {
                         PhysicsPhase.SETTLING, PhysicsPhase.RETURNING -> {
@@ -204,6 +226,7 @@ private fun PhysicsPlayback(
                 }
             }
         }
+
     }
 }
 
@@ -247,6 +270,13 @@ private fun PhysicsPlayback(
             applyBackgroundKey(view,key,lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }, tuning = matteTuning)
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url.substringBefore('?')))); player.prepare()
         }
+    }
+    LaunchedEffect(player, keyColor, matteTuning, playbackView, url, lighting) {
+        val key = keyColor ?: return@LaunchedEffect
+        val view = playbackView ?: return@LaunchedEffect
+        val light = lighting ?: return@LaunchedEffect
+        val pack = awaitVideoLighting(context, url) ?: return@LaunchedEffect
+        applyBackgroundKey(view, key, VideoLightingBinding(pack, light), tuning = matteTuning)
     }
     LaunchedEffect(player, running, keyColor) { player.playWhenReady = running && keyColor != null }
 }

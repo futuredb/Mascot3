@@ -4,7 +4,14 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class ChatMessage(val user: Boolean, val text: String, val imagePath: String? = null, val capabilities: Boolean = false)
+internal data class ChatMessage(val user: Boolean, val text: String, val imagePath: String? = null, val capabilities: Boolean = false,
+    val interactionSetup: Boolean = false)
+
+internal fun initialChatMessages(saved: List<ChatMessage>, hasInteractionSetting: Boolean, heroName: String): List<ChatMessage> =
+    if (saved.isEmpty() && !hasInteractionSetting) listOf(
+        ChatMessage(false, "Привет! Рад познакомиться. Я $heroName."),
+        ChatMessage(false, "", interactionSetup = true),
+    ) else saved
 
 /** Conversations stay on this device and are isolated by saved character ID. */
 internal class ChatHistoryStore(context: Context) {
@@ -16,15 +23,15 @@ internal class ChatHistoryStore(context: Context) {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 val text = row.optString("text")
-                if (row.has("user") && (text.isNotBlank() || row.optString("imagePath").isNotBlank() || row.optBoolean("capabilities")))
-                    add(ChatMessage(row.optBoolean("user"), text, row.optString("imagePath").takeIf { it.isNotBlank() }, row.optBoolean("capabilities")))
+                if (row.has("user") && (text.isNotBlank() || row.optString("imagePath").isNotBlank() || row.optBoolean("capabilities") || row.optBoolean("interactionSetup")))
+                    add(ChatMessage(row.optBoolean("user"), text, row.optString("imagePath").takeIf { it.isNotBlank() }, row.optBoolean("capabilities"), row.optBoolean("interactionSetup")))
             }
         }
     }.getOrDefault(emptyList())
 
     fun write(heroId: String, messages: List<ChatMessage>) {
         val rows = JSONArray()
-        messages.forEach { rows.put(JSONObject().put("user", it.user).put("text", it.text).put("imagePath", it.imagePath).put("capabilities", it.capabilities)) }
+        messages.forEach { rows.put(JSONObject().put("user", it.user).put("text", it.text).put("imagePath", it.imagePath).put("capabilities", it.capabilities).put("interactionSetup", it.interactionSetup)) }
         preferences.edit().putString(heroId, rows.toString()).apply()
     }
 }

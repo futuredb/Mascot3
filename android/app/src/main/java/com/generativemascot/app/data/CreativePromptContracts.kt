@@ -43,6 +43,12 @@ internal data class BehaviorProfile(
 )
 
 @Serializable
+internal data class CharacterGlitchPalette(
+    val warmHex: String = "#FFAD7A",
+    val coolHex: String = "#AAA0FF",
+)
+
+@Serializable
 internal data class MobileCharacterContract(
     val contract: String = "pet-generator.mobile-character.v5",
     // Nullable keeps contracts saved by older APKs distinguishable from an
@@ -54,6 +60,7 @@ internal data class MobileCharacterContract(
     val visualSignature: VisualSignature,
     val behavior: BehaviorProfile,
     val palette: String,
+    val glitchPalette: CharacterGlitchPalette = deriveCharacterGlitchPalette(palette),
     val materialAndTechnique: String,
     val faceSystem: String,
     val plasticity: String,
@@ -420,6 +427,41 @@ private val palettes = listOf(
     "dark teal, tangerine and warm off-white; keep every color clearly separated from vivid #00FF00 chroma green",
 )
 
+private data class GlitchColorName(val keywords: List<String>, val hex: String, val warm: Boolean)
+
+private val glitchColorNames = listOf(
+    GlitchColorName(listOf("golden yellow", "gold", "yellow", "lemon"), "#FFC45C", true),
+    GlitchColorName(listOf("coral", "peach", "apricot"), "#FF806B", true),
+    GlitchColorName(listOf("orange", "tangerine", "copper"), "#F28F3B", true),
+    GlitchColorName(listOf("raspberry", "pink", "rose"), "#F05C78", true),
+    GlitchColorName(listOf("red", "crimson", "brick"), "#E94E5B", true),
+    GlitchColorName(listOf("caramel"), "#C98745", true),
+    GlitchColorName(listOf("violet", "lavender", "lilac"), "#AAA0FF", false),
+    GlitchColorName(listOf("cobalt", "blue", "cyan", "turquoise"), "#668EFF", false),
+    GlitchColorName(listOf("teal", "jade", "mint"), "#55C8B2", false),
+    GlitchColorName(listOf("indigo", "navy"), "#454E9B", false),
+    GlitchColorName(listOf("plum", "burgundy", "violet"), "#9655A8", false),
+    GlitchColorName(listOf("ivory", "cream", "pearl"), "#E8D7B7", false),
+    GlitchColorName(listOf("charcoal", "black"), "#70717D", false),
+)
+
+/** Stable color accents derived from the same palette text placed in the visual prompt. */
+internal fun deriveCharacterGlitchPalette(palette: String): CharacterGlitchPalette {
+    val normalized = palette.lowercase()
+    val matches = glitchColorNames.filter { color -> color.keywords.any(normalized::contains) }
+    val warm = matches.firstOrNull { it.warm }?.hex ?: matches.firstOrNull()?.hex ?: "#FF806B"
+    val cool = matches.firstOrNull { !it.warm && it.hex != warm }?.hex
+        ?: when (warm) {
+            "#FFC45C" -> "#6E63C8"
+            "#F28F3B" -> "#5486D9"
+            "#F05C78" -> "#625BD0"
+            "#E94E5B" -> "#6877D0"
+            "#C98745" -> "#597BC4"
+            else -> "#AAA0FF"
+        }
+    return CharacterGlitchPalette(warmHex = warm, coolHex = cool)
+}
+
 private val techniques = listOf(
     "soft stop-motion felt with controlled fibers, clean sculpted joins and no visible construction seams",
     "hand-shaped animated-film clay with rounded planes and subtle fingerprints",
@@ -521,7 +563,8 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
     val choiceFingerprint = MessageDigest.getInstance("SHA-256")
         .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}".toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
-    return base.copy(body = chosenBody, palette = style.palette, fingerprint = choiceFingerprint,
+    return base.copy(body = chosenBody, palette = style.palette,
+        glitchPalette = deriveCharacterGlitchPalette(style.palette), fingerprint = choiceFingerprint,
         materialAndTechnique = if (choice.type == "person") "stylized three-dimensional animated-film character, dimensional sculpted forms, detailed but natural human face, soft realistic materials and lighting; not pixel art or flat illustration" else base.materialAndTechnique,
         behavior = base.behavior.copy(motivation = "Express a ${style.name} personality: ${style.tone}", worldview = style.tone))
 }
@@ -735,8 +778,8 @@ private fun protectedInvariants(character: MobileCharacterContract): List<String
     "Exactly one same character: ${character.body.subject}.",
     "Body topology never changes: ${character.body.visibleParts}.",
     "Identity cues remain unchanged: ${character.visualSignature.primarySilhouetteCue}; ${character.visualSignature.secondaryReadableDetail}.",
-    "Palette, face, material, markings, scale, orientation and on-canvas position remain locked to the source image.",
-    "At least twenty percent of perfectly empty matte remains visible on the left, right, top and bottom in every frame; the complete silhouette and anything integrated into it stay inside the central sixty percent of the image.",
+    "Preserve the source image's palette, facial identity, materials, markings and scale; keep the character near the centre while it moves.",
+    "At least twelve percent of empty matte remains visible on each side in every frame; the complete silhouette and anything integrated into it stay inside the central seventy-six percent of the image.",
     "Every pixel outside the silhouette remains the same perfectly uniform matte with no additional visible element.",
 )
 
@@ -793,16 +836,17 @@ internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationC
         ${if (hasReference) "Derive body profile, subject, silhouette and recognizable details from the supplied reference image." else "Body profile: ${character.body.visibleParts}. The front is defined by ${character.body.front}. Type-specific direction: $categoryDirection Primary silhouette cue: ${character.visualSignature.primarySilhouetteCue}. Secondary readable detail: ${character.visualSignature.secondaryReadableDetail}."}
         Neutral body language: ${character.visualSignature.bodyLanguage}.
         Palette: ${if (hasReference) "use the supplied reference palette; personality colors are optional only if compatible" else character.palette}. Material and technique: ${character.materialAndTechnique}.
+        CHAT GLITCH PALETTE METADATA: warm ${character.glitchPalette.warmHex}; cool ${character.glitchPalette.coolHex}. These are derived from this character's visual palette and are renderer accents only; keep the character's original identity and colors unchanged.
         Face system: ${if (hasReference) "preserve the reference face and features" else character.faceSystem}. Animation plasticity: ${character.plasticity}.
         Treat these decisions as one coherent identity, not a list of optional ingredients.
 
         $relightableImageContract
 
         CANONICAL ANCHOR
-        Render exactly one complete original character in a calm neutral-positive home pose, centered in a direct
-        front three-quarter view. This is an identity anchor, not a scene or an action. Show every documented body part
-        exactly once, naturally attached, fully visible and structurally coherent. Do not tuck, crop, hide or detach any
-        documented limb, costume section or integrated silhouette feature. The full silhouette occupies 52-64 percent of the portrait canvas
+        Render exactly one complete original character in a calm neutral-positive home pose, centered in a
+        front three-quarter view. This is an identity anchor, not a scene or an action. Keep documented body parts
+        naturally attached and structurally coherent; natural overlap is allowed. Do not crop or detach
+        limbs, costume sections or integrated silhouette features. The full silhouette occupies 52-64 percent of the portrait canvas
         height with at least 12 percent empty margin on every side. Emotion and identity must read at phone-widget size
         through silhouette, face and body language rather than tiny decoration. Use controlled detail and production-
         quality mobile-game finish. Avoid generic permanent open-mouth cuteness. ${if (hasReference) "Preserve the reference's recognisable identity." else "Avoid resemblance to any franchise."}
@@ -874,7 +918,7 @@ internal fun buildCharacterAnimationPrompt(
         Animate the mascot as one complete indivisible body with believable weight, arcs, anticipation, overlapping
         action, follow-through and natural easing. Never animate it as separate cutout pieces. Keep a locked portrait
         camera, fixed framing and fixed scale. At every moment the complete silhouette, every limb and anything the
-        mascot carries must remain inside the central sixty percent of the image. Preserve at least twenty percent
+        mascot carries must remain inside the central seventy-six percent of the image. Preserve at least twelve percent
         of untouched empty matte on the left, right, top and bottom throughout the entire motion. Every pixel outside the character is the perfectly uniform matte $matteHex
         in every frame, reserved only for local GPU removal; do not use that key color on the character. Keep the empty
         matte completely flat, without any other visible geometry, gradient, texture, halo, scenery or lighting change.

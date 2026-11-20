@@ -14,8 +14,8 @@ import java.io.File
 
 data class OverlayVideo(val file: File, val keyColor: Int, val tuning: GreenMatteTuning = GreenMatteTuning())
 
-data class OverlayArtwork(val frames: List<Bitmap>, val bounds: Rect, val intervalMs: Long,
-    val video: OverlayVideo? = null, val reactions: List<OverlayVideo> = emptyList(), var canvasBounds: Rect? = null) {
+data class OverlayArtwork(var frames: List<Bitmap>, var bounds: Rect, var intervalMs: Long,
+    var video: OverlayVideo? = null, var reactions: List<OverlayVideo> = emptyList(), var canvasBounds: Rect? = null) {
     fun recycle() = frames.forEach { if (!it.isRecycled) it.recycle() }
 }
 
@@ -28,23 +28,20 @@ internal fun overlayReactionFiles(store: HeroLocalStore, heroId: String, idle: F
         .mapNotNull { store.actionVideoFile(heroId, it) }.filter { it != idle }.distinct()
 
 /** Reads saved media on IO. Only a poster is decoded; motion uses the hardware video player. */
-fun loadOverlayArtwork(context: Context, heroId: String): OverlayArtwork {
+fun loadOverlayArtwork(context: Context, heroId: String, fast: Boolean = false): OverlayArtwork {
     require(heroId.matches(Regex("[A-Za-z0-9_-]{1,100}")))
     val store = HeroLocalStore(context)
     val base = requireNotNull(store.baseFile(heroId)) { "Изображение героя ещё не сохранено" }
     overlayVideoFile(store, heroId)?.let { video ->
         val savedKey = store.videoMatteColor(heroId)
         val neutralUrl = store.neutralVideoFrameFile(heroId)?.toURI()?.toString()
-        loadOverlayVideo(video, savedKey, neutralUrl)?.let { art ->
-            val reactions = overlayReactionFiles(store, heroId, video).map { file ->
-                val url = file.toURI().toString()
-                OverlayVideo(file, savedKey ?: detectBackgroundColor(url), detectAdaptiveGreenMatte(url, neutralUrl))
-            }
-            return art.copy(reactions = reactions)
+        loadOverlayVideo(video, savedKey, neutralUrl, fast)?.let { art ->
+            if (fast) return art
+            return art.copy(reactions = loadOverlayReactions(context, heroId, requireNotNull(art.video)))
         }
     }
     val cached = store.cachedWidgetAnimation(heroId, "idle")
-    val selected = if (cached.files.size >= 2) {
+    val selected = if (!fast && cached.files.size >= 2) {
         // ≤48 × 320² × 4 bytes; preserve the duration when sampling a longer cache.
         val count = minOf(48, cached.files.size)
         List(count) { cached.files[it * cached.files.size / count] }
@@ -71,14 +68,39 @@ fun loadOverlayArtwork(context: Context, heroId: String): OverlayArtwork {
     }
 }
 
-private fun loadOverlayVideo(file: File, savedKey: Int?, neutralUrl: String?): OverlayArtwork? = runCatching {
-    val key = savedKey ?: detectBackgroundColor(file.toURI().toString())
+internal fun loadOverlayReactions(context: Context, heroId: String, idle: OverlayVideo): List<OverlayVideo> {
+    val store = HeroLocalStore(context)
+    val savedKey = store.videoMatteColor(heroId)
+    val neutralUrl = store.neutralVideoFrameFile(heroId)?.toURI()?.toString()
+    return overlayReactionFiles(store, heroId, idle.file).map { file ->
+        val url = file.toURI().toString()
+        OverlayVideo(file, savedKey ?: detectBackgroundColor(url), detectAdaptiveGreenMatte(url, neutralUrl))
+    }
+}
+
+internal fun refineOverlayIdle(context: Context, heroId: String, idle: OverlayVideo): OverlayVideo {
+    val neutral = HeroLocalStore(context).neutralVideoFrameFile(heroId)?.toURI()?.toString()
+    return idle.copy(tuning = detectAdaptiveGreenMatte(idle.file.toURI().toString(), neutral))
+}
+
+/** Reuse the first decoded frame to estimate the key; no second video decode. */
+private fun frameBackgroundColor(bitmap: Bitmap): Int {
+    val samples = mutableListOf<Int>()
+    for (x in listOf(.025f, .075f, .925f, .975f)) for (y in listOf(.04f, .18f, .36f, .64f, .82f, .96f))
+        samples += bitmap.getPixel((bitmap.width * x).toInt().coerceIn(0, bitmap.width - 1),
+            (bitmap.height * y).toInt().coerceIn(0, bitmap.height - 1))
+    fun median(channel: (Int) -> Int) = samples.map(channel).sorted()[samples.size / 2]
+    return android.graphics.Color.rgb(median(android.graphics.Color::red), median(android.graphics.Color::green), median(android.graphics.Color::blue))
+}
+
+private fun loadOverlayVideo(file: File, savedKey: Int?, neutralUrl: String?, fast: Boolean): OverlayArtwork? = runCatching {
     val retriever = MediaMetadataRetriever()
     val source = try {
         retriever.setDataSource(file.path)
         requireNotNull(retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC))
     } finally { retriever.release() }
     val scaled = scaleOverlayBitmap(source)
+    val key = savedKey ?: frameBackgroundColor(scaled)
     val poster = try { keyBitmap(scaled, key) } finally { scaled.recycle() }
     try {
         val bounds = alphaBounds(poster)
@@ -87,7 +109,7 @@ private fun loadOverlayVideo(file: File, savedKey: Int?, neutralUrl: String?): O
         // complete source canvas so other frames and reactions cannot be cropped here.
         bounds.inset(-(bounds.width() * .12f).toInt(), -(bounds.height() * .06f).toInt())
         require(bounds.intersect(0, 0, poster.width, poster.height))
-        val tuning = detectAdaptiveGreenMatte(file.toURI().toString(), neutralUrl)
+        val tuning = if (fast) GreenMatteTuning() else detectAdaptiveGreenMatte(file.toURI().toString(), neutralUrl)
         OverlayArtwork(listOf(poster), bounds, 100, OverlayVideo(file, key, tuning))
     } catch (error: Exception) { poster.recycle(); throw error }
 }.getOrNull()

@@ -1,0 +1,26 @@
+import {FastH3OmniModel} from '@reactor-models/fast-h3-omni';
+import {hasVisibleDetail} from './frame-visibility.js';
+const video=document.querySelector('#video'),frame=document.querySelector('#frame'),ctx=frame.getContext('2d');
+const sample=document.createElement('canvas');sample.width=96;sample.height=54;const sx=sample.getContext('2d',{willReadFrequently:true});
+let model=null,reference=null,epoch=0,queue=Promise.resolve(),visible=false,pendingFrame=false,desiredAction='',clipOutstanding=false;
+const tell=(type,value='')=>window.MascotBridge?.event(type,String(value));
+function resize(){frame.style.width=innerWidth+'px';frame.style.height=innerHeight+'px'}resize();addEventListener('resize',resize);
+function prompt(action){return `Animate the one existing character in <Picture 1>. Keep exactly one character. Preserve the exact identity, gender presentation, face, body, colors, clothing, proportions, framing, position and background. Static camera, no zoom. Gentle breathing, blinking and subtle facial expression. ${String(action||'').slice(0,300)}. No dialogue or music.`}
+async function close(){++epoch;const old=model;model=null;reference=null;visible=false;pendingFrame=false;clipOutstanding=false;video.pause();video.srcObject=null;frame.style.opacity='0';ctx.clearRect(0,0,frame.width,frame.height);if(old)await old.disconnect()}
+async function makeReference(data){const img=new Image();img.src=data;await img.decode();const c=document.createElement('canvas');c.width=1024;c.height=576;const g=c.getContext('2d');g.fillStyle='#EAEBEC';g.fillRect(0,0,1024,576);const scale=Math.min(1024/img.width,460/img.height);g.drawImage(img,(1024-img.width*scale)/2,(576-img.height*scale)/2,img.width*scale,img.height*scale);return new Promise((ok,fail)=>c.toBlob(b=>b?ok(b):fail(Error('Не удалось подготовить изображение.')),'image/png'))}
+async function submit(current,id){if(model!==current||id!==epoch||!reference||clipOutstanding)return;clipOutstanding=true;try{const reply=await current.enqueue({prompt:prompt(desiredAction),seconds:8,reference_image:reference,first_frame_image:reference});if(!reply)throw Error('Omni не принял запрос анимации.')}catch(e){clipOutstanding=false;throw e}}
+async function start(data,action){const id=++epoch;desiredAction=action;tell('status','Подключаем Omni…');const token=JSON.parse(window.MascotBridge.reactorToken());if(token.error)throw Error(token.error);const image=await makeReference(data);if(id!==epoch)return;const current=new FastH3OmniModel();model=current;let ready=false;
+ current.on('statusChanged',s=>{if(model!==current||id!==epoch)return;if(s==='ready')ready=true;else if(s==='disconnected'&&ready){tell('error','Соединение Omni прервалось.');void close()}});
+ current.onCommandError(e=>{if(model===current){tell('error',e.data?.reason||e.reason||'Omni отклонил запрос.');void close()}});
+ current.onClipFailed(()=>{if(model===current){tell('error','Omni не смог создать анимацию.');void close()}});
+ current.onClipGenerated(()=>{if(model===current)clipOutstanding=false});
+ current.onClipStarted(()=>{if(model===current&&id===epoch){pendingFrame=true;void submit(current,id).catch(e=>{tell('error',e.message);void close()})}});
+ current.onMainVideo((track,stream)=>{if(model!==current||id!==epoch)return;video.srcObject=stream||new MediaStream([track]);function draw(){if(model!==current||id!==epoch)return;try{if(video.videoWidth&&video.videoHeight&&(visible||(sx.drawImage(video,0,0,96,54),hasVisibleDetail(sx.getImageData(0,0,96,54).data)))){if(frame.width!==video.videoWidth||frame.height!==video.videoHeight){frame.width=video.videoWidth;frame.height=video.videoHeight}ctx.drawImage(video,0,0,frame.width,frame.height);frame.style.opacity='1';if(!visible){visible=true;tell(pendingFrame?'restart-frame':'frame');pendingFrame=false;tell('status','')}else if(pendingFrame){pendingFrame=false;tell('restart-frame')}}}catch{}video.requestVideoFrameCallback(draw)}video.requestVideoFrameCallback(draw);video.play().catch(()=>tell('error','Не удалось воспроизвести поток Omni.'))});
+ await current.connect(token.jwt);if(id!==epoch){await current.disconnect();return}reference=await current.uploadFile(image);if(id!==epoch)return;
+ if(!await current.setCanvas({aspect:'16:9'}))throw Error('Omni не принял формат кадра.');if(!await current.setAutoplay({enabled:true}))throw Error('Omni не включил воспроизведение.');if(!await current.setFlushOnClipEnd({enabled:false}))throw Error('Omni не настроил переходы.');await submit(current,id);
+}
+function enqueue(fn){queue=queue.catch(()=>{}).then(fn).catch(async e=>{tell('error',e.message||'Ошибка Omni');await close()});return queue}
+window.reactMascot=(data,action)=>enqueue(async()=>{desiredAction=action;if(!model)await start(data,action)});
+window.restartMascot=(data,action)=>enqueue(async()=>{desiredAction=action;if(!model){pendingFrame=true;await start(data,action)}else{pendingFrame=true}});
+window.replyMascot=(data,action)=>enqueue(async()=>{desiredAction=action;if(!model)await start(data,action)});
+window.stopMascot=()=>enqueue(close);window.closeMascot=()=>{++epoch;return enqueue(close)};addEventListener('pagehide',()=>{++epoch;void close()});tell('ready');tell('status','');

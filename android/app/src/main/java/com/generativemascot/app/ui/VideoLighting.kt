@@ -16,6 +16,9 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.generativemascot.app.physics.TiltLighting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -71,6 +74,30 @@ internal data class VideoLightingManifest(
 
 internal data class LoadedVideoLighting(val manifest: VideoLightingManifest, val pages: List<Bitmap>)
 internal data class VideoLightingBinding(val pack: LoadedVideoLighting, val input: TiltLighting)
+
+/** Wait for a background preparation job without hashing the clip on every poll. */
+internal suspend fun awaitVideoLighting(context: Context, rawUrl: String): LoadedVideoLighting? {
+    loadVideoLighting(context, rawUrl)?.let { return it }
+    val marker = withContext(Dispatchers.IO) {
+        runCatching {
+            val uri = URI(rawUrl.substringBefore('?'))
+            val file = when (uri.scheme) { "file" -> File(uri); null -> File(uri.path); else -> return@runCatching null }
+            if (!file.isFile) return@runCatching null
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { stream ->
+                val bytes = ByteArray(65536)
+                while (true) { val count = stream.read(bytes); if (count < 0) break; digest.update(bytes, 0, count) }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            File(context.filesDir, "lighting/video/$hash/manifest.json")
+        }.getOrNull()
+    } ?: return null
+    while (currentCoroutineContext().isActive) {
+        delay(3_000)
+        if (marker.isFile) return loadVideoLighting(context, rawUrl)
+    }
+    return null
+}
 
 /** Bounded correspondence between Media3's stream clock and original clip PTS.
  * Recording happens before enqueue; looking up happens on the GL thread. */

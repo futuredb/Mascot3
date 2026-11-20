@@ -77,17 +77,17 @@ private fun loadSample(context: Context): Sample {
 @Composable
 private fun DemoFlow(sample: Sample, startStage: String? = null) {
     var confirmDelete by remember { mutableStateOf(false) }
-    var stage by rememberSaveable { mutableStateOf(when (startStage) { "home", "picker", "greeting_error" -> "home"; "waiting" -> "waiting"; else -> "knock" }) }
+    var stage by rememberSaveable { mutableStateOf(when (startStage) { "home", "picker", "greeting_error", "animations", "chat_preview" -> "home"; "waiting" -> "waiting"; else -> "knock" }) }
     var waitingInBackground by rememberSaveable { mutableStateOf(false) }
     var greetingPending by rememberSaveable { mutableStateOf(false) }
     var demoGreetingInterrupted by rememberSaveable { mutableStateOf(startStage == "greeting_error") }
-    var gallery by rememberSaveable { mutableStateOf(false) }
+    var gallery by rememberSaveable { mutableStateOf(startStage == "animations") }
     var openCapabilities by rememberSaveable { mutableStateOf(false) }
     var openBehavior by rememberSaveable { mutableStateOf(false) }
     var heroName by rememberSaveable { mutableStateOf("Уна") }
     var activeDemoId by rememberSaveable { mutableStateOf("flow-demo-v2-$SAMPLE_ID") }
     var editableName by rememberSaveable { mutableStateOf("Уна") }
-    var readyCsv by rememberSaveable { mutableStateOf("") }
+    var readyCsv by rememberSaveable { mutableStateOf(when (startStage) { "animations" -> "idle,joyful,greeting,dancing"; "chat_preview" -> "greeting"; else -> "" }) }
     var batchCsv by rememberSaveable { mutableStateOf("") }
     var batchBusy by rememberSaveable { mutableStateOf(false) }
     var batchSerial by rememberSaveable { mutableIntStateOf(0) }
@@ -213,7 +213,7 @@ private fun DemoFlow(sample: Sample, startStage: String? = null) {
                 MascotChatScreen(
                     mascotId = "flow-demo-v2-$SAMPLE_ID", heroName = heroName, previewUrl = sample.base,
                     animationVideoUrl = null, animationFrames = emptyList(), animationFps = 12,
-                    animationVideoUrls = emptyMap(), neutralFrameUrl = sample.neutral, active = chatActive,
+                    animationVideoUrls = videos, neutralFrameUrl = sample.neutral, active = chatActive,
                     openCapabilities = openCapabilities, onCapabilitiesOpened = { openCapabilities = false },
                     openBehavior = openBehavior, onBehaviorOpened = { openBehavior = false },
                     onBack = { stage = "home" },

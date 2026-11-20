@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,14 +17,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.generativemascot.app.ui.FigmaInk
+import com.generativemascot.app.ui.SbSansDisplayMedium
+import com.generativemascot.app.ui.SbSansTextMedium
 
 @Composable
-internal fun OverlayAppRulesSection(resumed: Boolean, onPermissions: (() -> Unit)? = null) {
+internal fun OverlayAppRulesSection(resumed: Boolean, onPermissions: (() -> Unit)? = null,
+    showTitle: Boolean = true) {
     val context = LocalContext.current
     var rules by remember { mutableStateOf(OverlayAppRules.read(context)) }
     var granted by remember { mutableStateOf(OverlayAppRules.hasUsageAccess(context)) }
@@ -39,17 +44,20 @@ internal fun OverlayAppRulesSection(resumed: Boolean, onPermissions: (() -> Unit
         prefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
-    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(30.dp), color = Color.Transparent,
+        modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE0E1E5), RoundedCornerShape(30.dp))) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Где показывать героя", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            if (showTitle) Text("Где показывать героя", fontFamily = SbSansDisplayMedium,
+                fontSize = 18.sp, color = FigmaInk)
             OverlayAppMode.entries.forEach { mode ->
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .selectable(selected = rules.mode == mode, role = Role.RadioButton, onClick = {
                         rules = rules.copy(mode = mode); rules.save(context)
                     }), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = rules.mode == mode, onClick = null)
-                    Text(mode.title, Modifier.padding(start = 10.dp))
+                    RadioButton(selected = rules.mode == mode, onClick = null,
+                        colors = RadioButtonDefaults.colors(selectedColor = FigmaInk,
+                            unselectedColor = FigmaInk.copy(alpha = .48f)))
+                    Text(mode.title, Modifier.padding(start = 10.dp), fontFamily = SbSansTextMedium, color = FigmaInk)
                 }
             }
             if (rules.mode != OverlayAppMode.EVERYWHERE) {

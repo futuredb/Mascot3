@@ -2,28 +2,35 @@ package com.generativemascot.app.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.sp
 import com.generativemascot.app.R
 
-/** The Figma launch artwork is shown while the app restores its saved state. */
+/** Calm launch screen while the app restores its saved state. */
 @Composable
 internal fun MascotLaunchScreen() {
-    MascotSystemBars(Color(0xFFD6D6D6), Color(0xFFF7F7F7))
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFFF2F2F2))) {
-        Image(painterResource(R.drawable.selection_background), null,
-            Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        val cloudWidth = maxWidth * (298.729f / 393f)
-        Image(painterResource(R.drawable.selection_cloud), null,
-            Modifier.offset(x = maxWidth * (42f / 393f), y = maxHeight * (289f / 852f))
-                .size(width = cloudWidth, height = cloudWidth * (273f / 298.729f)),
-            contentScale = ContentScale.FillBounds)
+    val background = Color(0xFFE8EBEA)
+    MascotSystemBars(background, background)
+    BoxWithConstraints(Modifier.fillMaxSize().background(background)) {
+        val artHeight = maxHeight * .28f
+        val artWidth = artHeight * (1020f / 900f)
+        Image(
+            painterResource(R.drawable.type_person_figma), contentDescription = null,
+            modifier = Modifier.align(Alignment.TopCenter).offset(x = artWidth * -.056f, y = maxHeight * .62f)
+                .size(width = artWidth, height = artHeight),
+            contentScale = ContentScale.Fit,
+        )
+        Text(
+            "Скоро увидимся", color = Color(0xFFB2B4B4), fontSize = 12.sp,
+            fontFamily = SbSansTextRegular,
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = maxHeight * .90f),
+        )
     }
 }

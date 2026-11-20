@@ -38,7 +38,6 @@ internal fun PersonalityGenerationScene(
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xfff2f2f2))) {
         val sx = maxWidth / 393f
         val sy = maxHeight / 852f
-        Image(painterResource(R.drawable.selection_background), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         if (!ready) {
             Text("ТАМ\nКТО-ТО\nЕСТЬ", fontFamily = FontExtended, fontSize = 34.sp, lineHeight = 40.sp,
                 textAlign = TextAlign.Center, color = Color.Black,

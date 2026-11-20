@@ -15,6 +15,8 @@ button:focus-visible{outline:3px solid #a696dd;outline-offset:3px}.run{backgroun
 #react:disabled{cursor:default}#react:focus-visible{outline:2px solid #6255d9}
 .phone img,.phone canvas{width:100%;display:block}.phone.landscape{width:100%;aspect-ratio:844/390;border-radius:24px}
 [hidden]{display:none!important}
+#handle{position:absolute;width:40px;height:40px;padding:8px;border:0;border-radius:32px;background:linear-gradient(180deg,#fff 50%,#d9d9e1 100%);box-shadow:0 5px 2px #00000005,0 12px 3px #00000008,0 22px 5px #0000000a,0 40px 9px #0000000a;touch-action:none;z-index:2}
+#handle img{width:24px;height:24px;pointer-events:none}#handle .badge{position:absolute;right:0;top:0;width:10px;height:10px;border-radius:50%;background:#18d000;border:1px solid white}#handle-tip{position:absolute;z-index:3;background:#222;color:#fff;border-radius:14px;padding:5px 12px;font-size:13px;white-space:nowrap;transform:translate(-50%,-100%);display:flex;gap:4px;align-items:center;border:0;cursor:pointer}#handle-tip img{width:16px;height:16px}#handle-tip:after{content:"";position:absolute;top:100%;left:calc(50% - 4px);border:4px solid transparent;border-top-color:#222}#widget-result{position:absolute;bottom:9%;left:50%;transform:translateX(-50%);background:#ffffffdb;border-radius:18px;padding:10px 16px;font-size:13px;white-space:nowrap}
 select{font:inherit;border:1px solid #e3dfeb;border-radius:10px;padding:9px;background:white;color:#554b67;max-width:100%}
 .rule-controls{display:grid;gap:10px;margin:18px 0}.rule-controls label{font-size:13px;display:grid;gap:4px}
 .phone:not(.rules-hidden) #app-hidden{display:none}
@@ -23,10 +25,11 @@ details img{max-width:320px;width:100%;border-radius:16px}
 @media(max-width:800px){main{grid-template-columns:1fr;gap:28px;padding:28px 22px}h1{font-size:38px}.phone{margin:auto;max-width:350px}}
 </style>
 <main><section><div class="eyebrow">MASCOTS</div><h1>Герой рядом</h1>
-<p>Нажмите на маскота — он ответит одной из своих анимаций, а потом вернётся к спокойному движению. Попробуйте прямо здесь.</p>
+<p>Перемещайте персонажа за карточку или за кнопку с полосками.</p>
 <div class="tags" aria-label="Сцены"><button data-scene="akim" aria-pressed="true">Аким</button><button data-scene="mars" aria-pressed="false">Марс</button><button data-scene="una" aria-pressed="false">Уна слева</button><button data-scene="una-right" aria-pressed="false">Уна справа</button><button data-scene="right" aria-pressed="false">Справа</button><button data-scene="landscape" aria-pressed="false">Поворот</button></div>
+<div class="tags" aria-label="Сообщение"><button id="message-toggle" aria-pressed="true">Сообщение есть</button></div>
 <div class="tags" aria-label="Размер героя"><button data-size="70" aria-pressed="false">70%</button><button data-size="100" aria-pressed="true">100%</button><button data-size="150" aria-pressed="false">150%</button></div>
-<p>Меняйте размер двумя пальцами. «−» скрывает диалог, оставляя героя и колокольчик.</p>
+<p>Сверните карточку кнопкой «−»: появится кнопка перетаскивания. Нажмите её, чтобы снова открыть карточку, или удерживайте, чтобы показать кнопку «Гоу домой».</p>
 <details><summary>Дополнительные проверки</summary>
 <div class="rule-controls">
 <label>Где показывать героя<select id="app-mode"><option value="EVERYWHERE">Везде</option><option value="HIDE_SELECTED">Скрывать в выбранных</option><option value="ONLY_SELECTED">Только в выбранных</option></select></label>
@@ -48,7 +51,7 @@ details img{max-width:320px;width:100%;border-radius:16px}
 <button class="run" id="check">Проверить MVP и собрать APK</button><p class="status" id="status" role="status">Готов к проверке</p>
 <button id="motion">Пауза анимации</button><p class="status" id="motion-status">Загружаем сохранённый ролик…</p>
 <p class="note">В превью — существующие ролики с удалённым фоном и карточка Android. На телефоне видео воспроизводится аппаратно; при блокировке проигрыватель освобождается. Проверки сервиса и сборка запускаются здесь. Плавность поверх приложений One UI проверяется отдельно на телефоне.</p>
-</section><div class="phone" id="phone"><img id="render" alt="Превью плавающего героя и подсказки" hidden><canvas id="animated" aria-label="Анимированный герой поверх демонстрационного экрана" hidden></canvas><button class="hit" id="react" aria-label="Погладить героя" title="Нажмите — герой отреагирует" hidden></button><button class="hit" id="collapse" aria-label="Свернуть диалог" hidden></button><button class="hit" id="expand" aria-label="Развернуть диалог" hidden></button><span id="empty">Превью появится после проверки</span></div></main>
+</section><div class="phone" id="phone"><img id="render" alt="Превью плавающего героя и подсказки" hidden><canvas id="animated" aria-label="Анимированный герой поверх демонстрационного экрана" hidden></canvas><button class="hit" id="react" aria-label="Погладить героя" title="Нажмите — герой отреагирует" hidden></button><button class="hit" id="card-drag" aria-label="Перетащить карточку" hidden></button><button class="hit" id="collapse" aria-label="Свернуть диалог" hidden></button><button class="hit" id="expand" aria-label="Развернуть диалог" hidden></button><button id="handle" aria-label="Переместить персонажа; удерживайте, чтобы показать кнопку возврата" hidden><img src="/overlay-handle.svg" alt=""><span class="badge" id="badge"></span></button><button id="handle-tip" hidden><img src="/overlay-home.svg" alt="">Гоу домой</button><span id="widget-result" hidden>Персонаж вернулся в виджет</span><span id="empty">Превью появится после проверки</span></div></main>
 <script>
 let selected='akim';const render=document.querySelector('#render'),phone=document.querySelector('#phone'),statusText=document.querySelector('#status');
 const appHidden=document.createElement('img');appHidden.id='app-hidden';appHidden.alt='Герой скрыт по правилу приложения';phone.append(appHidden);
@@ -67,21 +70,27 @@ const video=document.createElement('video');video.muted=true;video.loop=true;vid
 const frame=document.createElement('canvas'),fc=frame.getContext('2d',{willReadFrequently:true});
 let backdrop=null,layout=null,bounds=null,key=null,generation=0,frames=0,playing=true,callback;
 let activeAction='idle',reactionBag=[],availableReactions=[],lastReaction=null,loadingClip=false;
-let sizePercent=100,collapsed=false,layoutRequest=0;
+let sizePercent=100,collapsed=false,layoutRequest=0, offsetX=0,offsetY=0,returned=false,hasMessage=true;
+const handle=document.querySelector('#handle'),tip=document.querySelector('#handle-tip'),widgetResult=document.querySelector('#widget-result');
+document.querySelector('#message-toggle').onclick=e=>{hasMessage=!hasMessage;e.currentTarget.textContent=hasMessage?'Сообщение есть':'Сообщения нет';e.currentTarget.setAttribute('aria-pressed',String(hasMessage));if(!hasMessage)collapsed=true;placeButtons();paint()};
+function placeHandle(){document.querySelector('#badge').hidden=!hasMessage;if(!layout)return; const f=layout.frame; const x=(f.x+f.width*.76+offsetX)/animated.width*100, y=(f.y+f.height*.73+offsetY)/animated.height*100; handle.style.left=`calc(${x}% - 20px)`;handle.style.top=`calc(${y}% - 20px)`;tip.style.left=x+'%';tip.style.top=`calc(${y}% - 30px)`;handle.hidden=returned || !collapsed;widgetResult.hidden=!returned;}
+let pointerStart,holdTimer,moved=false,held=false;handle.onpointerdown=e=>{e.preventDefault();handle.setPointerCapture(e.pointerId);pointerStart={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};moved=false;held=false;holdTimer=setTimeout(()=>{held=true;tip.hidden=false},600)};handle.onpointermove=e=>{if(!pointerStart)return;const dx=e.clientX-pointerStart.x,dy=e.clientY-pointerStart.y;if(Math.hypot(dx,dy)>5){moved=true;clearTimeout(holdTimer);offsetX=pointerStart.ox+dx*animated.width/animated.clientWidth;offsetY=pointerStart.oy+dy*animated.height/animated.clientHeight;tip.hidden=true;placeButtons();paint()}};handle.onpointerup=()=>{clearTimeout(holdTimer);pointerStart=null;if(!moved&&!held&&hasMessage){collapsed=false;tip.hidden=true;placeButtons();paint()}};handle.onpointercancel=()=>{clearTimeout(holdTimer);pointerStart=null};
 const actionNames={idle:'Спокойное движение',joyful:'Радость',greeting:'Приветствие',curious:'Любопытство',tender:'Нежность',dancing:'Танец'};
 const reactButton=document.querySelector('#react');
-const collapseButton=document.querySelector('#collapse'),expandButton=document.querySelector('#expand');
+const collapseButton=document.querySelector('#collapse'),expandButton=document.querySelector('#expand'),cardDrag=document.querySelector('#card-drag');
+tip.onclick=()=>{returned=true;tip.hidden=true;placeButtons();paint()};
+let cardStart;cardDrag.onpointerdown=e=>{e.preventDefault();cardDrag.setPointerCapture(e.pointerId);cardStart={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY}};cardDrag.onpointermove=e=>{if(!cardStart)return;offsetX=cardStart.ox+(e.clientX-cardStart.x)*animated.width/animated.clientWidth;offsetY=cardStart.oy+(e.clientY-cardStart.y)*animated.height/animated.clientHeight;placeButtons();paint()};cardDrag.onpointerup=cardDrag.onpointercancel=()=>{cardStart=null};
 function sceneName(){return selected+'-'+sizePercent}
 function heroName(){return selected==='una-right'?'una':['right','landscape'].includes(selected)?'akim':selected}
 function positionHit(button,rect){
  Object.assign(button.style,{left:rect.x/animated.width*100+'%',top:rect.y/animated.height*100+'%',width:rect.width/animated.width*100+'%',height:rect.height/animated.height*100+'%'});
 }
 function placeButtons(){
- positionHit(reactButton,layout);positionHit(collapseButton,layout.collapse);positionHit(expandButton,layout.compact);
- reactButton.hidden=false;collapseButton.hidden=collapsed;expandButton.hidden=!collapsed;
+ positionHit(reactButton,layout);positionHit(cardDrag,{x:layout.collapse.x-200+offsetX,y:layout.collapse.y+20+offsetY,width:230,height:132});positionHit(collapseButton,{...layout.collapse,x:layout.collapse.x+offsetX,y:layout.collapse.y+offsetY});positionHit(expandButton,{...layout.compact,x:layout.compact.x+offsetX,y:layout.compact.y+offsetY});
+ reactButton.hidden=true;cardDrag.hidden=collapsed || returned;collapseButton.hidden=collapsed || returned;expandButton.hidden=true;placeHandle();
 }
 function collapsedImage(){placeButtons();paint();}
-collapseButton.onclick=()=>{collapsed=true;collapsedImage()};
+collapseButton.onclick=()=>{collapsed=true;tip.hidden=true;collapsedImage()};
 expandButton.onclick=()=>{collapsed=false;placeButtons();paint()};
 function smooth(a,b,x){const t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t)}
 function matte(){
@@ -102,14 +111,15 @@ function matte(){
  if(!bounds){const dx=Math.floor((r-l+1)*.12),dy=Math.floor((b-t+1)*.06);bounds={l:Math.max(0,l-dx),t:Math.max(0,t-dy),r:Math.min(frame.width,r+1+dx),b:Math.min(frame.height,b+1+dy)};}
  fc.putImageData(pixels,0,0);
 }
-let cardForeground=null,bellImage=null;
+let cardForeground=null,cardLayout=null,bellImage=null;
 function paint(){
  if(!backdrop||!layout||video.readyState<2)return;
  matte();ctx.clearRect(0,0,animated.width,animated.height);ctx.drawImage(backdrop,0,0);
  const slot=layout.frame,fit=Math.min(slot.width/frame.width,slot.height/frame.height);
- ctx.drawImage(frame,slot.x+(slot.width-frame.width*fit)/2,slot.y+(slot.height-frame.height*fit)/2,frame.width*fit,frame.height*fit);
- if(!collapsed&&cardForeground)ctx.drawImage(cardForeground,0,0);
- if(collapsed&&bellImage){const b=layout.compact;ctx.drawImage(bellImage,b.x,b.y,b.width,b.height,b.x,b.y,b.width,b.height);}
+ if(!returned){ctx.globalAlpha=.8;ctx.drawImage(frame,slot.x+offsetX+(slot.width-frame.width*fit)/2,slot.y+offsetY+(slot.height-frame.height*fit)/2,frame.width*fit,frame.height*fit);ctx.globalAlpha=1;
+  if(!collapsed&&cardForeground){ctx.save();const c=cardLayout.collapse;ctx.translate(offsetX+layout.collapse.x-c.x,offsetY+layout.collapse.y-c.y);ctx.drawImage(cardForeground,0,0);ctx.restore();}
+  
+ }
  animated.hidden=false;render.hidden=true;document.querySelector('#empty').hidden=true;
  frames++;motionStatus.textContent=(playing?actionNames[activeAction]:'Пауза')+' · '+video.currentTime.toFixed(1)+' с · '+frames+' кадров';
 }
@@ -143,6 +153,7 @@ reactButton.onclick=()=>{
 };
 async function show(){
 applyAppRule();
+ offsetX=0;offsetY=0;returned=false;tip.hidden=true;
  document.querySelector('#settings-example').src='/settings-'+heroName()+'-'+sizePercent+'.png?t='+Date.now();
  const token=++generation;video.pause();if(callback)video.cancelVideoFrameCallback(callback);
  backdrop=null;layout=null;bounds=null;key=null;frames=0;animated.hidden=true;reactButton.hidden=true;
@@ -150,8 +161,8 @@ applyAppRule();
  collapseButton.hidden=true;expandButton.hidden=true;
  render.src='/'+sceneName()+'.png?t='+Date.now();phone.classList.toggle('landscape',selected==='landscape');
  const bg=new Image();bg.src='/'+sceneName()+'-empty.png?t='+Date.now();
- const fg=new Image();fg.src='/'+sceneName()+'-card.png?t='+Date.now();
- await fg.decode();cardForeground=fg;
+ const fg=new Image();fg.src='/'+selected+'-100-card.png?t='+Date.now();
+ await fg.decode();cardForeground=fg;cardLayout=await fetch('/'+selected+'-100-layout.json').then(r=>r.json());
  const bell=new Image();bell.src='/'+sceneName()+'-bell.png?t='+Date.now();await bell.decode();bellImage=bell;
  try{const [_,geometry,clips]=await Promise.all([bg.decode(),fetch('/'+sceneName()+'-layout.json').then(r=>{if(!r.ok)throw Error();return r.json()}),
   fetch('/clips/'+heroName()).then(r=>r.json())]);
@@ -166,8 +177,8 @@ document.querySelectorAll('[data-size]').forEach(b=>b.onclick=async()=>{
  sizePercent=Number(b.dataset.size);document.querySelectorAll('[data-size]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
  document.querySelector('#settings-example').src='/settings-'+heroName()+'-'+sizePercent+'.png?t='+Date.now();
  const request=++layoutRequest,token=generation,bg=new Image();bg.src='/'+sceneName()+'-empty.png';
- const fg=new Image();fg.src='/'+sceneName()+'-card.png';
- await fg.decode();cardForeground=fg;
+ const fg=new Image();fg.src='/'+selected+'-100-card.png';
+ await fg.decode();cardForeground=fg;cardLayout=await fetch('/'+selected+'-100-layout.json').then(r=>r.json());
  const bell=new Image();bell.src='/'+sceneName()+'-bell.png?t='+Date.now();await bell.decode();bellImage=bell;
  try{const [_,geometry]=await Promise.all([bg.decode(),fetch('/'+sceneName()+'-layout.json').then(r=>{if(!r.ok)throw Error();return r.json()})]);
   if(request!==layoutRequest||token!==generation)return;

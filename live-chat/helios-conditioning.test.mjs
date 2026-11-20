@@ -1,20 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {conditionMascot, mascotInstruction} from './src/helios-conditioning.js';
+import {conditionMascot, updateMascotPrompt} from './src/helios-conditioning.js';
 
-test('each reaction resubmits the same reference with its new context and appearance', async () => {
-  const calls=[];
-  const model={setConditioning:async input=>{calls.push(input);return {type:'conditions_ready'}}};
-  const reference={id:'akim-reference'};
-  await conditionMascot(model,reference,'waves','hello','A purple bald figure in a coat');
-  await conditionMascot(model,reference,'ponders','books','A purple bald figure in a coat');
-  assert.equal(calls.length,2);
-  assert.equal(calls[0].image,reference);
-  assert.equal(calls[1].image,reference);
-  assert.match(calls[1].prompt,/purple bald figure/);
-  assert.match(calls[1].prompt,/books/);
-  assert.match(calls[1].prompt,/Do not add human features/);
-  assert.doesNotMatch(mascotInstruction('waves'),/skin tone, hairstyle, helmet/);
+test('starts with a reference and updates the reaction without replacing the image', async () => {
+  const conditioning = [];
+  const updates = [];
+  const model = {
+    async setConditioning(input) {
+      conditioning.push(input);
+      return {has_image: true, has_prompt: true};
+    },
+    async setPrompt(input) {
+      updates.push(input);
+      return true;
+    },
+  };
+  const reference = {id: 'akim-reference'};
+  const appearance = 'A purple bald figure in a coat';
+  await conditionMascot(model, reference, 'waves', '', appearance);
+  await updateMascotPrompt(model, 'ponders', 'books', appearance);
+  assert.equal(conditioning.length, 1);
+  assert.equal(conditioning[0].image, reference);
+  assert.match(conditioning[0].prompt, /waves/);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(Object.keys(updates[0]), ['prompt']);
+  assert.match(updates[0].prompt, /purple bald figure/);
+  assert.match(updates[0].prompt, /ponders/);
 });
 
 test('a missing or rejected reference fails rather than silently falling back', async () => {

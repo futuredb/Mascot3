@@ -99,6 +99,26 @@ class LightingPreparationTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun damagedActiveImagePackIsReplacedWithoutLosingTheSource() = runBlocking<Unit> {
+        val id = "lighting-test-${UUID.randomUUID()}"; val root = File(context.filesDir, "hero/$id").apply { mkdirs() }
+        val source = File(root, "base.png"); File(assets, "bundled-heroes/$hero/base.png").copyTo(source)
+        val revision = File(assets, "bundled-heroes/$hero/physics/active").readText().trim()
+        val folder = File(assets, "bundled-heroes/$hero/physics/$revision")
+        val files = folder.listFiles()!!.filter { it.extension == "png" || it.name == "manifest.json" }.associate { it.name to it.readBytes() }
+        val job = job("image", source, files)
+        val store = LightingPreparation(context)
+        try {
+            store.install(api(files), id, source, job)
+            val active = requireNotNull(PhysicsStore(context).load(id))
+            File(active.directory, active.pack.assets.values.first().file).writeBytes(byteArrayOf(1))
+            assertTrue(runCatching { PhysicsStore(context).load(id) }.isFailure)
+            store.install(api(files), id, source, job)
+            assertEquals(job.sourceSha256, requireNotNull(PhysicsStore(context).load(id)).pack.sourceSha256)
+            assertEquals(job.sourceSha256, LightingPreparation.hashFile(source))
+            assertTrue(File(root, "physics").listFiles().orEmpty().any { it.name.startsWith("corrupt-") })
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun assetLinksCannotEscapeTheConfiguredServerOrJob() {
         val id = "a".repeat(64); val expected = "/v1/lighting/jobs/$id/assets/manifest.json"
         val file = LightingFile("manifest.json", "b".repeat(64), 123, expected)
@@ -119,7 +139,7 @@ class LightingPreparationTest {
         }
     }
 
-    @Test fun recoveryIncludesEverySavedActionAndSkipsUnoptedLegacyHeroesAndPartialFiles() {
+    @Test fun recoveryIncludesLegacyAndNewSavedActionsAndSkipsPartialFiles() {
         val id = "lighting-test-${UUID.randomUUID()}"; val root = File(context.filesDir, "hero/$id").apply { mkdirs() }
         try {
             File(root, "base.png").writeBytes(byteArrayOf(1))
@@ -129,8 +149,11 @@ class LightingPreparationTest {
             File(videos, "rejected/idle.mp4").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1)) }
             val store = LightingPreparation(context)
             assertTrue(store.sourcesFor(id).isEmpty())
+            assertEquals(HeroLocalStore.VIDEO_ACTIONS.size + 1, store.recoverySourcesFor(id).size)
+            assertEquals(HeroLocalStore.VIDEO_ACTIONS.toSet(), store.recoverySourcesFor(id).filter { it.extension == "mp4" }.map { it.nameWithoutExtension }.toSet())
             store.trackHero(id)
             assertEquals(HeroLocalStore.VIDEO_ACTIONS.size + 1, store.sourcesFor(id).size)
+            assertEquals(store.sourcesFor(id).toSet(), store.recoverySourcesFor(id).toSet())
             assertEquals(HeroLocalStore.VIDEO_ACTIONS.toSet(), store.sourcesFor(id).filter { it.extension == "mp4" }.map { it.nameWithoutExtension }.toSet())
         } finally { root.deleteRecursively() }
     }

@@ -119,7 +119,9 @@ class AppViewModel(
     private val session: SessionStore,
     private val heroStore: HeroLocalStore,
     private val openRouterSettings: OpenRouterSettingsStore,
-    private val openRouterVerifier: OpenRouterKeyVerifier = OpenRouterKeyVerifier(),
+    private val openRouterVerifier: OpenRouterKeyVerifier = OpenRouterKeyVerifier {
+        com.generativemascot.app.data.FalSettingsStore(session.appContext).apiKey() != null
+    },
 ) : ViewModel() {
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state
@@ -419,12 +421,24 @@ class AppViewModel(
     /** Confirming a type and character explicitly starts one new creation. */
     fun startHeroCreation(choice: com.generativemascot.app.data.CharacterCreationChoice? = null): Boolean {
         if (_state.value.creating || _state.value.busy || _state.value.greetingPending || _state.value.backgroundCreation) return false
-        if (choice != null && !directMode()) return false
+        if (choice != null && !directMode()) {
+            if (!openRouterSettings.enableBundledRouteForCharacterCreation()) return false
+            _state.update { it.copy(generationRoute = GenerationRoute.OPENROUTER_DIRECT, openRouterKeyPresent = true) }
+        }
         creationChoice = choice
         creationPrevious = _state.value.mascot
         _state.update { it.copy(route = "create", mascot = null, context = null, error = null, name = "", newCreationFlow = choice != null) }
         if (choice != null) summonHero()
         return true
+    }
+
+    fun heroCreationFailureMessage(): String = when {
+        _state.value.creating || _state.value.backgroundCreation -> "Сейчас уже создаётся персонаж. Дождись завершения этой задачи."
+        _state.value.greetingPending -> "Сначала заверши создание предыдущего персонажа."
+        _state.value.busy -> "Приложение ещё выполняет предыдущую задачу. Попробуй чуть позже."
+        !openRouterSettings.hasApiKey() -> "В этой сборке не найден ключ OpenRouter. Проверь настройки генерации."
+        !directMode() -> "Для создания персонажа включи OpenRouter в настройках генерации."
+        else -> "Не удалось начать создание персонажа. Попробуй ещё раз."
     }
 
     /** Return to an existing accepted hero without cancelling or re-enqueueing the paid worker. */
@@ -798,7 +812,7 @@ class AppViewModel(
                     "Исходное видео сохранено. Повторный платный запрос не отправлялся."
             } else {
                 "Не удалось восстановить состояние задания. Герой сохранён. " +
-                    "Повторный платный запрос не отправлялся; проверьте результат в OpenRouter."
+                    "Повторный платный запрос не отправлялся; проверьте результат в сервисе генерации."
             }
         }
 
@@ -1092,7 +1106,7 @@ class AppViewModel(
                 busy = false,
                 packBusy = true,
                 packMessage = "Создаём ${actions.size} анимаций; готовое сохраняется после каждого ролика",
-                generationLabel = "Seedance Mini создаёт ${actions.size} анимаций…",
+                generationLabel = "Создаём ${actions.size} анимаций…",
                 error = null,
                 mascot = mascot.copy(
                     status = "READY",

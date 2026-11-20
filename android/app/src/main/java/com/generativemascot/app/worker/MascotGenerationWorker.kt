@@ -5,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.WorkerParameters
 import com.generativemascot.app.data.HeroLocalStore
+import com.generativemascot.app.data.FalSettingsStore
 import com.generativemascot.app.data.OnDeviceMascotGenerator
 import com.generativemascot.app.data.OpenRouterSettingsStore
 import com.generativemascot.app.data.SessionStore
@@ -31,7 +32,7 @@ class MascotGenerationWorker(
         val store = HeroLocalStore(applicationContext)
         val providerKey = OpenRouterSettingsStore(applicationContext).apiKey()
             ?: return Result.failure(errorData("Сначала сохраните свой ключ OpenRouter в настройках генерации"))
-        val generator = OnDeviceMascotGenerator(store, providerKey)
+        val generator = OnDeviceMascotGenerator(store, providerKey, FalSettingsStore(applicationContext).apiKey())
 
         return runCatching {
             if (!animationsOnly && store.baseFile(mascotId) == null) {

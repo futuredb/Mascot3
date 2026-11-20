@@ -30,7 +30,7 @@ class AcceptanceGreetingWorker(context: Context, params: WorkerParameters) : Cor
                 check(!request.completed) { "Приветствие уже создавалось; автоматический повтор отключён" }
                 if (request.route == GenerationRoute.OPENROUTER_DIRECT) {
                     val key = app.openRouterSettings.apiKey() ?: error("Сохраните ключ OpenRouter в настройках")
-                    OnDeviceMascotGenerator(app.heroStore, key).generatePerformanceVideo(id, request.token, listOf("greeting"))
+                    OnDeviceMascotGenerator(app.heroStore, key, app.falSettings.apiKey()).generatePerformanceVideo(id, request.token, listOf("greeting"))
                 } else {
                     // An old server returns 404 here, not an unrelated default animation.
                     app.api.generateGreeting(id, request.token)

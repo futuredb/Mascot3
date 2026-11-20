@@ -19,4 +19,29 @@ class OpenRouterSettingsStoreTest {
     fun rejectsWhitespaceInsideAKey() {
         normalizeOpenRouterApiKey("sk-or-v1-1234567890 abcdefghijklmnop")
     }
+
+    @Test
+    fun reactorKeyIsTrimmedButNeverOtherwiseChanged() {
+        val key = "rk_1234567890abcdefghijklmnopqrstuvwxyz"
+        assertEquals(key, normalizeReactorApiKey("  $key\n"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsAReactorKeyFromAnotherProvider() {
+        normalizeReactorApiKey("sk-or-v1-1234567890abcdefghijklmnop")
+    }
+
+    @Test fun falKeyPreservesColonAndTrimsEdges() {
+        assertEquals("test-id:test-secret", normalizeFalApiKey("  test-id:test-secret\n"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun falKeyRejectsWhitespaceInside() {
+        normalizeFalApiKey("test-id:bad key")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun falKeyRejectsEmptyInput() {
+        normalizeFalApiKey("  ")
+    }
 }

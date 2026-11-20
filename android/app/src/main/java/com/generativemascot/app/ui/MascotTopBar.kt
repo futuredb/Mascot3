@@ -57,3 +57,17 @@ internal fun MascotChatBackButton(onBack: () -> Unit, modifier: Modifier = Modif
         MascotTopAction(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", onBack)
     }
 }
+
+/** Shared header for secondary settings screens from the Figma settings flow. */
+@Composable
+internal fun MascotSettingsHeader(title: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth()) {
+        IconButton(onClick = onBack, modifier = Modifier.padding(start = 20.dp, top = 20.dp).size(40.dp)) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад",
+                tint = Color.Black, modifier = Modifier.size(24.dp))
+        }
+        Text(title, modifier = Modifier.padding(start = 28.dp, top = 10.dp, bottom = 12.dp),
+            fontFamily = SbSansDisplayMedium, fontSize = 26.sp, letterSpacing = (-0.65).sp,
+            lineHeight = 31.2.sp, color = Color.Black)
+    }
+}

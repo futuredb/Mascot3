@@ -14,10 +14,12 @@ internal class OverlayPinchGesture(
     private var second = -1
     private var previousSpan = 0f
     private var active = false
+    private var scaling = false
 
     fun cancel() {
         val wasActive = active
         active = false
+        scaling = false
         first = -1; second = -1
         if (wasActive) onEnd()
     }
@@ -54,6 +56,8 @@ internal class OverlayPinchGesture(
                 val y = (event.getY(a) + event.getY(b)) / 2 + event.rawY - event.y
                 // The second finger arms the gesture immediately. Do not throw
                 // away the first inward movement, especially at maximum size.
+                if (!scaling && kotlin.math.abs(span - previousSpan) < slop) return
+                scaling = true
                 if (active && previousSpan > 0f && span != previousSpan) {
                     onScale(span / previousSpan, x, y)
                 }

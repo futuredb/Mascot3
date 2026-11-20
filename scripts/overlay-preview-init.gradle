@@ -1,0 +1,6 @@
+// Keep preview builds separate from other Gradle work in this checkout.
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        project.layout.buildDirectory.set(project.rootProject.file('build/codex-overlay-app'))
+    }
+}

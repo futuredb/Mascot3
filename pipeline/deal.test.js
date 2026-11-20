@@ -94,7 +94,7 @@ test("canonical rendering uses minimal identity and shared style transfer", () =
   assert.match(prompt, /Mandatory body proportions: compressed compact torso/);
   assert.match(STYLE_TRANSFER_CONTRACT, /Do not infer conventional real-world species colours/);
   assert.doesNotMatch(prompt, /character_brief/i);
-  assert.match(TECHNICAL_FRAME_SYSTEM_PROMPT, /compressed dwarf-like proportions/);
+  assert.match(TECHNICAL_FRAME_SYSTEM_PROMPT, /compressed proportions/);
   assert.match(buildTurntablePrompt({ renderIdentity, anchorProp }), /may be naturally occluded/);
   assert.match(TURNTABLE_SYSTEM_PROMPT, /top-left.*top-right.*bottom-left.*bottom-right/);
   assert.throws(() => validateRenderIdentity({ ...renderIdentity, proportion_cue: "" }, anchorProp), /proportion_cue/);

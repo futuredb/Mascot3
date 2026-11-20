@@ -12,6 +12,7 @@ internal class BundledHeroImporter(
     private val openAsset: (String) -> InputStream,
     private val destinationRoot: File,
     private val isDeleted: (String) -> Boolean = { false },
+    private val onImported: (String, File) -> Unit = { _, _ -> },
 ) {
     fun importAll() {
         val assetRoot = "bundled-heroes"
@@ -20,7 +21,19 @@ internal class BundledHeroImporter(
             if (isDeleted(heroId)) return@forEach
             val source = "$assetRoot/$heroId"
             check("base.png" in childrenOf(source)) { "Bundled hero has no base image: $heroId" }
-            copyTree(source, File(destinationRoot, heroId))
+            val destination = File(destinationRoot, heroId)
+            copyTree(source, destination)
+            // A bundled retirement applies only to the exact previously shipped
+            // clip; keep a recoverable copy and never touch a new generation.
+            val retiredHash = File(destination, "retire-idle.sha256").takeIf(File::isFile)?.readText()?.trim()
+            val idle = File(destination, "videos/idle.mp4")
+            if (retiredHash != null && retiredHash.matches(Regex("[a-f0-9]{64}")) && idle.isFile &&
+                java.security.MessageDigest.getInstance("SHA-256").digest(idle.readBytes()).joinToString("") { "%02x".format(it) } == retiredHash) {
+                val archived = File(destination, "retired-videos/idle-$retiredHash-${java.util.UUID.randomUUID()}.mp4")
+                check(archived.parentFile?.let { it.isDirectory || it.mkdirs() } == true)
+                check(!archived.exists() && idle.renameTo(archived)) { "Не удалось убрать старую анимацию" }
+            }
+            onImported(heroId, destination)
         }
     }
 

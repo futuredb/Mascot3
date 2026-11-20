@@ -1,6 +1,7 @@
 import { H3Live } from './h3-live.js';
 import { LiveSession } from './live-session.js';
 import { prepareReference } from './reference.js';
+import { conditionMascot, updateMascotPrompt, mascotInstruction } from './helios-conditioning.js';
 const defer = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -28,6 +29,32 @@ document.getElementById('run').onclick = async () => {
     catch (error) { results.push({ name, passed: false, error: error.message }); }
     const result = results.at(-1); const li = document.createElement('li'); li.textContent = `${result.passed ? '✓' : '✕'} ${name}${result.error ? ': ' + result.error : ''}`; li.style.color = result.passed ? '#42705a' : '#a14c50'; list.append(li);
   }
+  await check('Helios: каждая реакция сохраняет исходный образ', async () => {
+    const image = { id: 'reference' }, calls = [];
+    const model = { setConditioning: async value => { calls.push(value); return { has_image: true, has_prompt: true }; } };
+    await conditionMascot(model, image, 'blinks', 'не выводить текст беседы', 'a small cat', 'не добавлять ответ');
+    await conditionMascot(model, image, 'nods', 'другой текст');
+    assert(calls.length === 2 && calls.every(x => x.image === image), 'Reference was lost');
+    assert(!calls[0].prompt.includes('не выводить текст беседы') && !calls[0].prompt.includes('не добавлять ответ'), 'Conversation leaked into video instructions');
+    const prompt = mascotInstruction('slices a lemon');
+    assert(prompt.includes('slices a lemon') && prompt.includes('separate props'), 'Action or props missing');
+    assert(prompt.includes('#EAEBEC') && prompt.includes('Fixed camera') && prompt.includes('full character in frame'), 'Background or framing missing');
+  });
+  await check('Helios: неподтверждённый референс отклоняется', async () => {
+    let failed = false;
+    try { await conditionMascot({ setConditioning: async () => ({ has_image: false, has_prompt: true }) }, {}, 'blink'); } catch { failed = true; }
+    assert(failed, 'Missing reference acknowledgement accepted');
+  });
+  await check('Helios: реакция обновляет промпт без повторной установки изображения', async () => {
+    const prompts = [];
+    const model = { setPrompt: async value => { prompts.push(value); return { type: 'prompt_accepted' }; },
+      setConditioning: async () => { throw new Error('Image was reset'); } };
+    await updateMascotPrompt(model, 'blinks', '', 'a small cat');
+    assert(prompts.length === 1 && prompts[0].prompt.includes('a small cat') && !('image' in prompts[0]), 'Incorrect prompt update');
+    let failed = false;
+    try { await updateMascotPrompt({ setPrompt: async () => undefined }, 'blink'); } catch { failed = true; }
+    assert(failed, 'Missing prompt acknowledgement accepted');
+  });
   await check('Отмена во время подключения не запускает видео после позднего ответа', async () => {
     const gate = defer(); const { live, log } = fixture({ connectWithCredentials: () => gate.promise });
     const job = start(live); await tick(); live.stop(); gate.resolve(new MediaStream()); await job; await tick();

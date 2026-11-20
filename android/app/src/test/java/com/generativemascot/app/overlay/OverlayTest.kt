@@ -59,6 +59,28 @@ import kotlin.math.roundToInt
 @Config(sdk = [35], application = Application::class, qualifiers = "w390dp-h844dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class OverlayTest {
+    @Test fun menuFigmaIconsFillTheirDensityScaledBounds() {
+        for (asset in listOf("overlay-go-home-figma.svg", "figma-home/hero-grid.svg")) {
+            val bitmap = overlayMenuIcon(context, asset, 48).bitmap
+            val bounds = alphaBounds(bitmap)
+            assertTrue("$asset icon is too narrow: $bounds", bounds.width() >= 24)
+            assertTrue("$asset icon is too short: $bounds", bounds.height() >= 24)
+        }
+    }
+    @Test fun placementUsesVisibleBodyAtEveryScreenEdge() {
+        val area = OverlayArea(8, 32, 382, 800)
+        val placement = OverlayPlacement(area, OverlayDimensions(300, 600), RectF(100f, 250f, 200f, 450f), 10)
+        for (x in listOf(0f, 1f)) for (y in listOf(0f, 1f)) {
+            val point = placement.restore(x, y)
+            assertEquals(if (x == 0f) 18f else 372f, point.x + if (x == 0f) 100f else 200f, 0.01f)
+            assertEquals(if (y == 0f) 42f else 790f, point.y + if (y == 0f) 250f else 450f, 0.01f)
+            val fractions = placement.fractions(point)
+            assertEquals(point, placement.restore(fractions.first, fractions.second))
+        }
+        val window = OverlayPlacement.window(area, OverlayDimensions(100, 100))
+        assertEquals(OverlayPoint(8, 32), window.clamp(-1000, -1000))
+        assertEquals(OverlayPoint(282, 700), window.clamp(1000, 1000))
+    }
     private val context get() = RuntimeEnvironment.getApplication()
     private val heroId = "9f226b89-df35-4d3a-9b36-96c28ea1bb62"
 
@@ -80,6 +102,21 @@ class OverlayTest {
         assertEquals(OverlayStatus(running = true), MascotOverlayService.status.value)
     }
 
+    @Test fun cachedVideoBoundsMustMatchTheCurrentClipAndCanvas() {
+        val folder = File(context.cacheDir, "bounds-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val file = File(folder, "idle.mp4").apply { writeText("video") }
+            val clip = OverlayVideo(file, Color.GREEN)
+            val cache = File(folder, "idle.mp4.overlay-bounds-v1")
+            assertNull(cachedVideoEnvelope(clip, 320, 320))
+            cache.writeText("${file.length()}:${file.lastModified()}:${clip.keyColor}:320:320\n10,20,200,300")
+            assertEquals(Rect(10, 20, 200, 300), cachedVideoEnvelope(clip, 320, 320))
+            assertNull(cachedVideoEnvelope(clip, 321, 320))
+            cache.writeText("invalid")
+            assertNull(cachedVideoEnvelope(clip, 320, 320))
+        } finally { folder.deleteRecursively() }
+    }
+
     @Test fun nativeHeroWindowExcludesTransparentVideoMarginsWithoutChangingCanvas() {
         val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
         val art = OverlayArtwork(listOf(bitmap), android.graphics.Rect(130, 80, 190, 270), 100,
@@ -99,7 +136,7 @@ class OverlayTest {
         assertEquals(p.y, actual.y + hero.top)
         assertTrue(host.crop.contains(350, 225, 650, 825))
         val compact = OverlayCompactView(context, art) {}
-        assertEquals(2, compact.childCount) // bell and unread dot, no chat icon
+        assertTrue(compact.childCount >= 1) // drag handle and optional badge
         bitmap.recycle()
     }
 
@@ -544,7 +581,7 @@ class OverlayTest {
             assertNotSame(oldHero, view("hero"))
             assertFalse(view("hero").isAttachedToWindow); assertFalse(view("compact").isAttachedToWindow)
             assertNotNull(shadowOf(service).lastForegroundNotification)
-            assertEquals(1.25f, OverlaySize.read(context))
+            assertEquals(1.2f, OverlaySize.read(context))
             power.setIsInteractive(true)
             context.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT))
             looper.idleFor(Duration.ofMillis(32))
@@ -713,7 +750,8 @@ class OverlayTest {
             touch(MotionEvent.ACTION_UP, 600f, -800f)
             assertTrue(card.isAttachedToWindow)
             assertEquals(0, taps)
-            assertTrue(params.x >= 0 && params.y >= 0)
+            val draggedBody = OverlayFraming.visibleBounds(field("artwork") as OverlayArtwork, params.width, params.height)
+            assertTrue(params.x + draggedBody.left >= 0 && params.y + draggedBody.top >= 0)
             touch(MotionEvent.ACTION_DOWN, 20f, 30f)
             touch(MotionEvent.ACTION_UP, 20f, 30f)
             assertEquals(1, taps); assertTrue(card.isAttachedToWindow)
@@ -761,10 +799,73 @@ class OverlayTest {
         folder.deleteRecursively()
     }
 
+    @Test fun videoCanvasMarginsDoNotStopHeroGrowingBeforeTheCard() {
+        val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
+        val art = OverlayArtwork(listOf(bitmap), Rect(130, 90, 190, 250), 100,
+            OverlayVideo(File("idle.mp4"), Color.GREEN))
+        try {
+            val area = OverlayArea(0, 0, 390, 800)
+            val small = OverlaySize.dimensions(.7f, 1f, area, art)
+            val large = OverlaySize.dimensions(1.2f, 1f, area, art)
+            val smallBody = OverlayFraming.visibleBounds(art, small.width, small.height)
+            val largeBody = OverlayFraming.visibleBounds(art, large.width, large.height)
+            val ratio = OverlaySize.effectiveScale(1.2f, 1f, area, art) /
+                OverlaySize.effectiveScale(.7f, 1f, area, art)
+            assertEquals(ratio, largeBody.height() / smallBody.height(), .02f)
+            assertTrue(largeBody.height() > smallBody.height() * 1.65f)
+            assertTrue(large.width > largeBody.width()) // transparent pixels may leave the display
+            val placement = OverlayPlacement.hero(area, large, art, 0)
+            val point = placement.clamp(0, 9999)
+            assertTrue(point.y + largeBody.bottom <= area.bottom + 1)
+        } finally { art.recycle() }
+    }
+
+    @Test fun stoppingOverlayDisablesRestoration() {
+        val folder = savedHero()
+        ShadowSettings.setCanDrawOverlays(true)
+        shadowOf(context.getSystemService(PowerManager::class.java)).setIsInteractive(true)
+        val controller = Robolectric.buildService(MascotOverlayService::class.java).create()
+        try {
+            val service = controller.get()
+            service.onStartCommand(Intent().putExtra(MascotOverlayService.EXTRA_HERO, heroId), 0, 1)
+            awaitOverlay()
+            val card = service.javaClass.getDeclaredField("bubble").apply { isAccessible = true }.get(service) as View
+            assertNotNull(OverlaySession.hero(context))
+            assertNull(card.findViewWithTag<View>("hide-overlay"))
+            service.onStartCommand(Intent().setAction(MascotOverlayService.ACTION_STOP), 0, 2)
+            assertNull(OverlaySession.hero(context))
+            assertFalse(card.isAttachedToWindow)
+        } finally { controller.destroy(); folder.deleteRecursively() }
+    }
+
+    @Test fun firstOverlayWindowDoesNotWaitForDepthLoading() {
+        val folder = savedHero()
+        ShadowSettings.setCanDrawOverlays(true)
+        shadowOf(context.getSystemService(PowerManager::class.java)).setIsInteractive(true)
+        val controller = Robolectric.buildService(MascotOverlayService::class.java).create()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        try {
+            val service = controller.get()
+            service.loadPhysics = { entered.complete(Unit); gate.await(); null }
+            service.onStartCommand(Intent().putExtra(MascotOverlayService.EXTRA_HERO, heroId), 0, 1)
+            awaitOverlay()
+            val deadline = System.nanoTime() + 3_000_000_000
+            while (!entered.isCompleted && System.nanoTime() < deadline) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+                Thread.sleep(20)
+            }
+            assertTrue("Depth loading must actually have started", entered.isCompleted)
+            val hero = service.javaClass.getDeclaredField("hero").apply { isAccessible = true }.get(service) as View
+            assertTrue("First frame must appear while the depth pack is still loading", hero.isAttachedToWindow)
+            assertFalse(gate.isCompleted)
+        } finally { gate.complete(Unit); controller.destroy(); folder.deleteRecursively() }
+    }
+
     @Test fun sizesKeepProportionsStayOnScreenAndKeepFeetAnchored() {
         val area = OverlayArea(8, 36, 382, 812)
         assertEquals(OverlayDimensions(94, 147), OverlaySize.dimensions(.7f, 1f, area))
-        assertEquals(OverlayDimensions(201, 315), OverlaySize.dimensions(1.5f, 1f, area))
+        assertEquals(OverlayDimensions(161, 252), OverlaySize.dimensions(1.5f, 1f, area))
         assertEquals(1f, OverlaySize.normalize(Float.NaN))
         listOf(area, OverlayArea(36, 8, 812, 382), OverlayArea(0, 0, 120, 150)).forEach { available ->
             listOf(-1f, .7f, 1f, 1.5f, 20f, Float.POSITIVE_INFINITY).forEach { scale ->
@@ -799,11 +900,11 @@ class OverlayTest {
             val hero = field("hero") as View
             val card = field("bubble") as View
             val art = field("artwork") as OverlayArtwork
-            OverlaySize.save(context, 1.5f)
+            OverlaySize.save(context, 1.2f)
             shadowOf(Looper.getMainLooper()).idle()
             assertSame(hero, field("hero")); assertSame(art, field("artwork"))
-            assertEquals(201, (hero.layoutParams as WindowManager.LayoutParams).width)
-            assertEquals(315, (hero.layoutParams as WindowManager.LayoutParams).height)
+            assertEquals(161, (hero.layoutParams as WindowManager.LayoutParams).width)
+            assertEquals(252, (hero.layoutParams as WindowManager.LayoutParams).height)
             card.findViewWithTag<View>("collapse").performClick()
             shadowOf(Looper.getMainLooper()).idle()
             val compact = field("compact") as View
@@ -828,7 +929,8 @@ class OverlayTest {
             assertTrue(hero.isAttachedToWindow); assertTrue(card.isAttachedToWindow)
             val p = hero.layoutParams as WindowManager.LayoutParams
             assertEquals(94, p.width); assertEquals(147, p.height)
-            assertTrue(p.x >= 0 && p.x + p.width <= 390 && p.y + p.height <= 844)
+            val restoredBody = OverlayFraming.visibleBounds(field("artwork") as OverlayArtwork, p.width, p.height)
+            assertTrue(p.x + restoredBody.left >= 0 && p.x + restoredBody.right <= 390 && p.y + restoredBody.bottom <= 844)
             card.findViewWithTag<View>("collapse").performClick()
             shadowOf(Looper.getMainLooper()).idle()
             context.sendBroadcast(Intent(Intent.ACTION_SCREEN_OFF))
@@ -944,7 +1046,7 @@ class OverlayTest {
             touch(MotionEvent.ACTION_UP, 4 to (centerX + 100 to centerY))
             assertEquals(afterPinch, field("position")); assertEquals(0, taps)
             val saved = OverlaySize.read(context)
-            assertTrue(saved in 1.01f..1.49f)
+            assertTrue(saved in 1.01f..1.20f)
             assertTrue(kotlin.math.abs(saved - OverlaySize.normalize(saved)) > .001f) // No 5% stepping.
             assertEquals(enlarged, params().width)
             // A fresh one-finger tap still triggers exactly one reaction.
@@ -960,7 +1062,7 @@ class OverlayTest {
             pairTouch(MotionEvent.ACTION_MOVE, 60f)
             pairTouch(upSecond, 60f)
             touch(MotionEvent.ACTION_UP, 4 to (centerX to centerY - 30))
-            assertTrue((card.layoutParams as WindowManager.LayoutParams).width < cardWidthBefore)
+            assertEquals(cardWidthBefore, (card.layoutParams as WindowManager.LayoutParams).width)
             touchTarget = hero
             assertEquals(.7f, OverlaySize.read(context))
             assertEquals(initialWidth * .7f, params().width.toFloat(), 1f)
@@ -973,19 +1075,19 @@ class OverlayTest {
             pairTouch(MotionEvent.ACTION_MOVE, 800f)
             context.sendBroadcast(Intent(Intent.ACTION_SCREEN_OFF))
             shadowOf(Looper.getMainLooper()).idle()
-            assertEquals(1.5f, OverlaySize.read(context))
+            assertEquals(1.2f, OverlaySize.read(context))
             assertFalse(hero.isAttachedToWindow)
             context.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT))
             shadowOf(Looper.getMainLooper()).idle()
             assertTrue(hero.isAttachedToWindow)
-            assertEquals(initialWidth * 1.5f, params().width.toFloat(), 1f)
+            assertEquals(initialWidth * 1.2f, params().width.toFloat(), 1f)
             val restored = field("position")
             touch(MotionEvent.ACTION_UP, 4 to (centerX to centerY))
             assertEquals(1, taps); assertEquals(restored, field("position"))
             val p = params()
             val visible = OverlayFraming.visibleBounds(field("artwork") as OverlayArtwork, p.width, p.height)
             assertTrue(p.x + visible.left >= 8 && p.x + visible.right <= 382)
-            assertTrue(p.y >= 0 && p.y + p.height <= 844)
+            assertTrue(p.y + visible.top >= 0 && p.y + visible.bottom <= 844)
 
             // Collapse/expand keeps the chosen size.
             card.findViewWithTag<View>("collapse").performClick()
@@ -1000,41 +1102,47 @@ class OverlayTest {
             shadowOf(Looper.getMainLooper()).idle()
             assertEquals(retainedPosition, field("position"))
             assertTrue(card.isAttachedToWindow)
-            assertEquals(initialWidth * 1.5f, params().width.toFloat(), 1f)
-            // Route through the real service's single overlay input window, not
-            // directly into either visual view. A second finger is outside both.
-            listOf(false, true).forEach { startOnCard ->
-                OverlaySize.save(context, 1.5f)
-                shadowOf(Looper.getMainLooper()).idle()
-                listOf(hero, card).forEach { view ->
-                    val vp = view.layoutParams as WindowManager.LayoutParams
-                    view.measure(View.MeasureSpec.makeMeasureSpec(vp.width, View.MeasureSpec.EXACTLY),
-                        View.MeasureSpec.makeMeasureSpec(vp.height, View.MeasureSpec.EXACTLY))
-                    view.layout(0, 0, vp.width, vp.height)
-                }
-                val activePlayer = player()
-                val input = field("gestureWindow") as OverlayGestureWindow
-                assertEquals(.5f, (input.layoutParams as WindowManager.LayoutParams).alpha, 0f)
-                val hp = params()
-                val cp = card.layoutParams as WindowManager.LayoutParams
-                val body = (hero as OverlayHeroView).hintBounds(hp.width, hp.height)
-                val x = if (startOnCard) cp.x + cp.width * .45f else hp.x + body.centerX()
-                val y = if (startOnCard) cp.y + cp.height * .65f else hp.y + body.top + 10f
-                assertTrue(input.touchRegion().contains(x.toInt(), y.toInt()))
-                assertFalse(input.touchRegion().contains(0, 0))
-                input.layout(0, 0, 390, 844)
-                touchTarget = input
-                touch(MotionEvent.ACTION_DOWN, 4 to (x to y))
-                assertTrue(input.touchRegion().contains(0, 0))
-                touch(downSecond, 4 to (x to y), 9 to (x + 500f to y))
-                touch(MotionEvent.ACTION_MOVE, 4 to (x to y), 9 to (x + 250f to y))
-                touch(upSecond, 4 to (x to y), 9 to (x + 250f to y))
-                touch(MotionEvent.ACTION_UP, 4 to (x to y))
-                assertFalse(input.touchRegion().contains(0, 0))
-                assertEquals(.75f, OverlaySize.read(context), .001f)
-                assertSame(activePlayer, player())
-                assertTrue(hero.isAttachedToWindow && card.isAttachedToWindow)
+            assertEquals(initialWidth * 1.2f, params().width.toFloat(), 1f)
+            // The card owns drag and pinch; the visible body is not an input target.
+            OverlaySize.save(context, 1.2f)
+            shadowOf(Looper.getMainLooper()).idle()
+            listOf(hero, card).forEach { view ->
+                val vp = view.layoutParams as WindowManager.LayoutParams
+                view.measure(View.MeasureSpec.makeMeasureSpec(vp.width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(vp.height, View.MeasureSpec.EXACTLY))
+                view.layout(0, 0, vp.width, vp.height)
             }
+            val activePlayer = player()
+            assertNull(field("gestureWindow"))
+            val hp = params()
+            val cp = card.layoutParams as WindowManager.LayoutParams
+            val body = (hero as OverlayHeroView).hintBounds(hp.width, hp.height)
+            val hostParams = (field("heroWindow") as View).layoutParams as WindowManager.LayoutParams
+            assertTrue(hostParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0)
+            assertTrue("Keep the hero as opaque as Android permits", hostParams.alpha >= .75f && hostParams.alpha <= .8f)
+            val heroX = (hp.x + body.centerX()).toInt()
+            val heroY = (hp.y + body.top + 10f).toInt()
+            assertFalse("The card must not capture the hero's head", (card as OverlayHintView).touchRegion().apply { translate(cp.x, cp.y) }.contains(heroX, heroY))
+            val x = cp.x + cp.width * .45f
+            val y = cp.y + cp.height * .65f
+            assertTrue((card as OverlayHintView).touchRegion().contains((x - cp.x).toInt(), (y - cp.y).toInt()))
+            touchTarget = card
+            touch(MotionEvent.ACTION_DOWN, 4 to (x to y))
+            touch(downSecond, 4 to (x to y), 9 to (x + 500f to y))
+            touch(MotionEvent.ACTION_MOVE, 4 to (x to y), 9 to (x + 250f to y))
+            touch(upSecond, 4 to (x to y), 9 to (x + 250f to y))
+            touch(MotionEvent.ACTION_UP, 4 to (x to y))
+            assertEquals(.7f, OverlaySize.read(context), .001f)
+            assertSame(activePlayer, player())
+            val currentCard = card.layoutParams as WindowManager.LayoutParams
+            val cx = currentCard.x + currentCard.width * .4f
+            val cy = currentCard.y + currentCard.height * .35f
+            val beforeDrag = field("position")
+            touch(MotionEvent.ACTION_DOWN, 4 to (cx to cy))
+            touch(MotionEvent.ACTION_MOVE, 4 to (cx + 30f to cy + 30f))
+            touch(MotionEvent.ACTION_UP, 4 to (cx + 30f to cy + 30f))
+            assertNotEquals("Dragging the card moves the hero", beforeDrag, field("position"))
+            assertTrue(hero.isAttachedToWindow && card.isAttachedToWindow)
         } finally { controller.destroy(); frame.recycle(); folder.deleteRecursively() }
     }
 
@@ -1075,7 +1183,7 @@ class OverlayTest {
         }
         try {
             start()
-            assertEquals("This canvas leaves no travel under the old full-window clamp", 374, params().width)
+            assertTrue("Transparent video canvas can exceed the display", params().width > 374)
             assertEquals("Migrate without a jump", 8, params().x)
             assertTrue(prefs.getBoolean("body_position", false))
             assertTrue(params().flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS != 0)
@@ -1127,7 +1235,7 @@ class OverlayTest {
         val art = OverlayArtwork(listOf(bitmap), Rect(40, 20, 160, 280), 100)
         try {
             listOf(20f to 20f, 150f to 150f, 120f to 300f, 300f to 340f).forEach { (x,y) ->
-                val preview = OverlayPreviewView(context, art).apply { heroScale = 1.5f; animationEnabled = false }
+                val preview = OverlayPreviewView(context, art).apply { heroScale = 1.2f; animationEnabled = false }
                 preview.measure(View.MeasureSpec.makeMeasureSpec(338, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(500, View.MeasureSpec.EXACTLY))
                 preview.layout(0, 0, 338, 500)
@@ -1141,9 +1249,9 @@ class OverlayTest {
                 // The second finger can be well outside the preview's own bounds.
                 event(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 400f, 2)
                 event(MotionEvent.ACTION_MOVE, 300f, 2)
-                assertEquals(1.125f, preview.heroScale, .001f)
+                assertEquals(.9f, preview.heroScale, .001f)
                 event(MotionEvent.ACTION_UP, 0f, 1)
-                assertEquals(1.125f, OverlaySize.read(context), .001f)
+                assertEquals(.9f, OverlaySize.read(context), .001f)
                 assertEquals(View.VISIBLE, preview.getChildAt(0).visibility)
             }
         } finally { art.recycle() }
@@ -1191,6 +1299,23 @@ class OverlayTest {
         assertEquals(stopped, factors.size)
     }
 
+    @Test fun pinchIgnoresSmallAccidentalChangesBeforeScaling() {
+        val factors = mutableListOf<Float>()
+        val gesture = OverlayPinchGesture(8f, { _, _ -> true }, { factor, _, _ -> factors += factor }, {})
+        fun touch(action: Int, x: Float, y: Float) {
+            val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0 }, MotionEvent.PointerProperties().apply { id = 1 })
+            val coords = arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = 0f }, MotionEvent.PointerCoords().apply { this.x = y; this.y = 0f })
+            MotionEvent.obtain(0, 20, action, 2, properties, coords, 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0).also {
+                gesture.onTouchEvent(it); it.recycle()
+            }
+        }
+        touch(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 0f, 100f)
+        touch(MotionEvent.ACTION_MOVE, 1f, 98f)
+        assertTrue(factors.isEmpty())
+        touch(MotionEvent.ACTION_MOVE, 5f, 85f)
+        assertEquals(.8f, factors.single(), .001f)
+    }
+
     @Test fun savedVideoTakesPriorityWithoutAWidgetCacheAndBadVideoFallsBack() {
         val folder = savedHero()
         val videos = File(folder, "videos").apply { mkdirs() }
@@ -1203,6 +1328,12 @@ class OverlayTest {
             val source = Bitmap.createBitmap(200, 300, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GREEN) }
             Canvas(source).drawRect(50f, 30f, 150f, 280f, Paint().apply { color = Color.RED })
             ShadowMediaMetadataRetriever.addFrame(idle.path, 0, source)
+            val quick = loadOverlayArtwork(context, heroId, fast = true)
+            try {
+                assertEquals(idle, quick.video?.file)
+                assertTrue("Reactions are inspected after the first frame", quick.reactions.isEmpty())
+                assertEquals(0, Color.alpha(quick.frames.first().getPixel(0, 0)))
+            } finally { quick.recycle() }
             val art = loadOverlayArtwork(context, heroId)
             try {
                 assertEquals(idle, art.video?.file)
@@ -1317,9 +1448,37 @@ class OverlayTest {
             assertEquals(1f, video.alpha)
             listener.onPlaybackStateChanged(Player.STATE_ENDED)
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
-            assertEquals(0f, video.alpha)
+            assertEquals(1f, video.alpha)
+            assertEquals(android.net.Uri.fromFile(idle.file), player.currentMediaItem!!.localConfiguration!!.uri)
             assertSame(player, field("player"))
         } finally { controller.pause().stop().destroy(); art.recycle() }
+    }
+
+    @Test fun depthMeshIsAlignedToVideoSubject() {
+        val assets = File("src/main/assets").let { if (it.isDirectory) it else File("app/src/main/assets") }
+        val root = File(assets, "bundled-heroes/716cdb43-703b-4d7e-8a79-27f03d92b99c/physics")
+        val packDir = File(root, File(root, "active").readText().trim())
+        val pack = Json { ignoreUnknownKeys = true }.decodeFromString<PhysicsPack>(File(packDir, "manifest.json").readText())
+        val bounds = com.generativemascot.app.physics.SubjectBounds(pack.width, pack.height,
+            pack.width / 4, pack.height / 5, pack.width * 3 / 4, pack.height * 4 / 5)
+        val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
+        val art = OverlayArtwork(listOf(bitmap), Rect(110, 65, 210, 260), 100,
+            OverlayVideo(File("idle.mp4"), Color.GREEN))
+        try {
+            val hero = OverlayHeroView(context, art, InstalledPhysics(pack, packDir, bounds = bounds), PhoneMotion(context))
+            hero.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY))
+            hero.layout(0, 0, 400, 400)
+            val view = hero.javaClass.getDeclaredField("physicsView").apply { isAccessible = true }.get(hero) as PhysicsView
+            val fitted = minOf(view.width.toFloat() / pack.width, view.height.toFloat() / pack.height)
+            val sourceCenterX = view.width / 2f + ((bounds.left + bounds.right) / 2f - pack.width / 2f) * fitted
+            val sourceBottom = view.height / 2f + (bounds.bottom - pack.height / 2f) * fitted
+            val displayedX = view.left + view.width / 2f + (sourceCenterX - view.width / 2f) * view.scaleX + view.translationX
+            val displayedBottom = view.top + view.height / 2f + (sourceBottom - view.height / 2f) * view.scaleY + view.translationY
+            val target = OverlayFraming.visibleBounds(art, 400, 400)
+            assertEquals(target.centerX(), displayedX, 1f)
+            assertEquals(target.bottom, displayedBottom, 1f)
+        } finally { art.recycle() }
     }
 
     @Test fun depthPackCanArriveAfterOverlayWasOpened() {
@@ -1345,6 +1504,15 @@ class OverlayTest {
             assertSame(physical, field("physicsView"))
             physical.onReady()
             assertEquals(1f, physical.alpha)
+            physical.onFailure("temporary failure")
+            assertTrue(hero.needsPhysicsRetry)
+            hero.installPhysics(installed, sensors)
+            val recovered = field("physicsView") as PhysicsView
+            assertNotSame("A failed surface must be recreated", physical, recovered)
+            physical.onReady() // A stale GL callback must not re-enable an old surface.
+            assertFalse(hero.needsPhysicsRetry)
+            recovered.onReady()
+            assertEquals(1f, recovered.alpha)
             assertSame(player, field("player"))
         } finally { controller.pause().stop().destroy(); art.recycle() }
     }
@@ -1373,11 +1541,37 @@ class OverlayTest {
         } finally { art.recycle() }
     }
 
+    @Test fun overlayChatTargetsTheRightHeroAndWaitsForSafeNavigation() {
+        val hero = com.generativemascot.app.data.MascotDto(id = heroId, name = "Герой", status = "READY", promptVersion = "test")
+        val waiting = com.generativemascot.app.ui.AppUiState(mascot = hero)
+        assertEquals(com.generativemascot.app.OverlayChatNavigation.WAIT, com.generativemascot.app.overlayChatNavigation(waiting, heroId))
+        val ready = waiting.copy(ready = true)
+        assertEquals(com.generativemascot.app.OverlayChatNavigation.OPEN, com.generativemascot.app.overlayChatNavigation(ready, heroId))
+        assertEquals(com.generativemascot.app.OverlayChatNavigation.SELECT, com.generativemascot.app.overlayChatNavigation(ready, "other"))
+        assertEquals(com.generativemascot.app.OverlayChatNavigation.WAIT,
+            com.generativemascot.app.overlayChatNavigation(ready.copy(creating = true), "other"))
+        assertEquals(com.generativemascot.app.OverlayChatNavigation.WAIT,
+            com.generativemascot.app.overlayChatNavigation(ready.copy(backgroundCreation = true), "other"))
+    }
+
+    @Test fun onlyCollapseIsPresentAndTouchable() {
+        val card = OverlayHintView(context, {}, {})
+        card.measure(View.MeasureSpec.makeMeasureSpec(248, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.AT_MOST))
+        card.layout(0, 0, card.measuredWidth, card.measuredHeight)
+        val close = card.findViewWithTag<View>("hide-overlay")
+        val collapse = card.findViewWithTag<View>("collapse")
+        assertNull(close)
+        assertTrue(card.touchRegion().contains(collapse.left + collapse.width / 2, collapse.top + collapse.height / 2))
+    }
+
     @Test fun cardActionsRemainIndependentAndLargeTextIsNotClipped() {
         var next = 0; var closed = 0; var collapsed = 0
         val enlarged = context.createConfigurationContext(android.content.res.Configuration(context.resources.configuration)
             .apply { fontScale = 1.5f })
-        val card = OverlayHintView(enlarged, { next++ }, { closed++ }, { collapsed++ })
+        val card = OverlayHintView(enlarged, { next++ }, { closed++ }, { collapsed++ }, {
+            enlarged.startActivity(com.generativemascot.app.MainActivity.overlayChatIntent(enlarged, heroId))
+        })
         fun labels(view: View): List<TextView> = if (view is TextView) listOf(view)
             else if (view is ViewGroup) (0 until view.childCount).flatMap { labels(view.getChildAt(it)) } else emptyList()
         labels(card).first { it.text == "Да" }.performClick()
@@ -1386,8 +1580,9 @@ class OverlayTest {
         card.findViewWithTag<View>("collapse").performClick()
         assertEquals(1, collapsed)
         card.findViewWithTag<View>("hint-chat").performClick()
-        assertEquals(com.generativemascot.app.MainActivity::class.java.name,
-            shadowOf(context).nextStartedActivity.component?.className)
+        val chatIntent = shadowOf(context).nextStartedActivity
+        assertEquals(com.generativemascot.app.MainActivity::class.java.name, chatIntent.component?.className)
+        assertEquals(heroId, chatIntent.getStringExtra(com.generativemascot.app.MainActivity.EXTRA_OVERLAY_CHAT_HERO))
         card.setHint(overlayDemoHints[1])
         card.measure(View.MeasureSpec.makeMeasureSpec(248, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.AT_MOST))
@@ -1533,7 +1728,7 @@ class OverlayTest {
             }
             val art = loadOverlayArtwork(context, id)
             try {
-                listOf(70, 100, 150).forEach { percent ->
+                listOf(70, 100, 120).forEach { percent ->
                     render(output, "$name-$percent", art, 390, 844, false, percent / 100f)
                     if (name == "una") render(output, "una-right-$percent", art, 390, 844, true, percent / 100f)
                     renderSettingsPreview(output, "settings-$name-$percent", art, percent / 100f)
@@ -1556,7 +1751,7 @@ class OverlayTest {
             OverlayVideo(File(context.filesDir, "off-centre.mp4"), Color.GREEN))
         try {
             listOf(280, 338, 390).forEach { width ->
-                listOf(.7f, 1f, 1.5f).forEach { scale ->
+                listOf(.7f, 1f, 1.2f).forEach { scale ->
                     val preview = OverlayPreviewView(context, art).apply {
                         animationEnabled = false; heroScale = scale
                     }

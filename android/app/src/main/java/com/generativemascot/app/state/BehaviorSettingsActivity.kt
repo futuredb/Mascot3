@@ -1,7 +1,7 @@
 package com.generativemascot.app.state
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.generativemascot.app.ui.FadeSettingsActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
@@ -17,7 +17,7 @@ import com.generativemascot.app.ui.MascotTheme
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 
-class BehaviorSettingsActivity : ComponentActivity() {
+class BehaviorSettingsActivity : FadeSettingsActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val behavior = (application as MascotApp).behavior
@@ -107,7 +107,7 @@ private fun FlagRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit
 }
 
 /** Required Health Connect rationale entry point; no data requests from this screen. */
-class HealthPrivacyActivity : ComponentActivity() {
+class HealthPrivacyActivity : FadeSettingsActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { MascotTheme {

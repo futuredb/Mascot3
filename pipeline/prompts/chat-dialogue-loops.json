@@ -1,0 +1,20 @@
+{
+  "duration_seconds": 6,
+  "framing": "Fixed camera and matte. Head and hands inside central circle (42% radius). Same neutral first and last frame.",
+  "clips": [
+    {
+      "id": "listening",
+      "label": "Слушает",
+      "event": "The user is actively typing.",
+      "loop": true,
+      "motion": "Listen with closed mouth, gentle breath, a blink and one small nod. Hands close to body. Return to the starting pose."
+    },
+    {
+      "id": "speaking",
+      "label": "Говорит",
+      "event": "The assistant reply is appearing in the chat.",
+      "loop": true,
+      "motion": "Small natural speech mouth shapes and quiet pauses. One subtle nod, hands close to torso. End in the starting closed-mouth pose."
+    }
+  ]
+}

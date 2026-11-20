@@ -31,10 +31,35 @@ import java.util.concurrent.TimeUnit
     val files: List<LightingFile> = emptyList(), val error: String? = null,
 )
 
-/** Only opted-in/newly saved media are scheduled; upgrading never starts generation. */
+/** Recovery schedules depth from saved images; it never creates new paid media. */
 internal class LightingPreparation(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val root = File(context.filesDir, "lighting")
+    private val recoveryPrefs = context.getSharedPreferences("lighting_recovery", Context.MODE_PRIVATE)
+    internal fun isExcluded(id: String): Boolean = id in recoveryPrefs.getStringSet("excluded_existing", emptySet()).orEmpty()
+
+    /** Pause only previously existing unwanted heroes; newly created IDs stay eligible. */
+    internal suspend fun limitExistingTo(allowed: Set<String>) = withContext(Dispatchers.IO) {
+        val folders = File(context.filesDir, "hero").listFiles().orEmpty().filter(File::isDirectory)
+        require(allowed.all { id -> folders.any { it.name == id && File(it, "base.png").isFile } }) {
+            "Не найдены все три выбранных персонажа; настройки не изменены"
+        }
+        val excluded = folders.map { it.name }.filter { it.matches(Regex("[A-Za-z0-9-]{1,80}")) && it !in allowed }.toSet()
+        check(recoveryPrefs.edit().putStringSet("excluded_existing", excluded).commit())
+        val work = WorkManager.getInstance(context)
+        for (id in excluded) for (source in recoverySourcesFor(id)) {
+            if (!source.isFile) continue
+            val hash = hashFile(source)
+            val kind = if (source.extension == "png") "image" else "video"
+            for (prefix in listOf("lighting", "lighting-v2")) {
+                work.cancelUniqueWork("$prefix-$id-$kind-$hash").result.get()
+            }
+        }
+    }
+    internal suspend fun clearExistingLimit() = withContext(Dispatchers.IO) {
+        check(recoveryPrefs.edit().remove("excluded_existing").commit())
+        resume()
+    }
     fun trackHero(id: String) {
         require(id.matches(Regex("[A-Za-z0-9-]{1,80}")))
         File(context.filesDir, "hero/$id/lighting.enabled").apply { parentFile?.mkdirs(); createNewFile() }
@@ -49,10 +74,38 @@ internal class LightingPreparation(private val context: Context) {
             File(hero, "videos").listFiles().orEmpty().filter { it.extension == "mp4" && !it.name.contains("pending") }
         return sources.filter(File::isFile)
     }
-    suspend fun resume() = withContext(Dispatchers.IO) {
-        File(context.filesDir, "hero").listFiles().orEmpty().filter(File::isDirectory).forEach { enqueueHero(it.name) }
+    internal fun recoverySourcesFor(id: String): List<File> {
+        if (!id.matches(Regex("[A-Za-z0-9-]{1,80}"))) return emptyList()
+        // Recover older heroes as well: their active animation needs its own
+        // pose-aligned normals, not just the static base image's depth pack.
+        val hero = File(context.filesDir, "hero/$id")
+        return (listOf(File(hero, "base.png"), File(hero, "performance.mp4")) +
+            File(hero, "videos").listFiles().orEmpty().filter {
+                it.extension == "mp4" && !it.name.contains("pending")
+            }).filter(File::isFile)
     }
-    suspend fun enqueue(id: String, source: File) = withContext(Dispatchers.IO) {
+    suspend fun resume() = withContext(Dispatchers.IO) {
+        val migration = context.getSharedPreferences("lighting_recovery", Context.MODE_PRIVATE)
+        val needsMigration = !migration.getBoolean("queue_v2", false)
+        var allScheduled = true
+        File(context.filesDir, "hero").listFiles().orEmpty().filter(File::isDirectory).forEach { folder ->
+            if (isExcluded(folder.name)) return@forEach
+            recoverySourcesFor(folder.name).forEach { source ->
+                try { enqueue(folder.name, source, recovery = true, migratedQueue = needsMigration) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (error: Exception) {
+                    allScheduled = false
+                    android.util.Log.w("MascotDepth", "Could not schedule saved depth source", error)
+                }
+            }
+        }
+        // Record only after all unique enqueue operations have reached the DB.
+        // If the process dies halfway through, KEEP deduplicates the next pass.
+        if (needsMigration && allScheduled) migration.edit().putBoolean("queue_v2", true).commit()
+    }
+    suspend fun enqueue(id: String, source: File, recovery: Boolean = false,
+        migratedQueue: Boolean = false) = withContext(Dispatchers.IO) {
+        if (isExcluded(id)) return@withContext
         if (!source.isFile) return@withContext
         val kind = if (source.extension == "png") "image" else "video"
         val hash = hashFile(source)
@@ -60,18 +113,27 @@ internal class LightingPreparation(private val context: Context) {
                 runCatching { context.assets.open("video-lighting/$hash/manifest.json").close() }.isSuccess)) return@withContext
         if (kind == "image") {
             val physics = PhysicsStore(context)
-            val active = physics.revision(id)
-            val manifest = active?.let { File(context.filesDir, "hero/$id/physics/$it/manifest.json") }
-            if (manifest?.isFile == true && runCatching {
-                    json.decodeFromString<com.generativemascot.app.physics.PhysicsPack>(manifest.readText()).sourceSha256 == hash
-                }.getOrDefault(false)) return@withContext
+            // A matching manifest alone is not enough: missing or damaged layer
+            // files must be downloaded again instead of silently disabling depth.
+            val valid = try { physics.load(id)?.pack?.sourceSha256 == hash }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+            if (valid) return@withContext
         }
-        WorkManager.getInstance(context).enqueueUniqueWork("lighting-$id-$kind-$hash", ExistingWorkPolicy.KEEP,
-            OneTimeWorkRequestBuilder<LightingPreparationWorker>()
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .setInputData(workDataOf("hero" to id, "kind" to kind, "sha256" to hash,
-                    "source" to source.relativeTo(context.filesDir).path)).build())
+        val request = OneTimeWorkRequestBuilder<LightingPreparationWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            // Avoid exponential growth in retries when older clips contend.
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+            .setInputData(workDataOf("hero" to id, "kind" to kind, "sha256" to hash,
+                "source" to source.relativeTo(context.filesDir).path))
+        // Fresh saves start immediately; legacy recovery yields to them.
+        if (recovery) request.setInitialDelay(2, TimeUnit.MINUTES)
+        // A parallel v2 name bypasses legacy hours-long backoffs without
+        // cancelling work that might have begun between a check and replace.
+        // Both workers still share the single preparation slot and server job.
+        val prefix = if (migratedQueue) "lighting-v2" else "lighting"
+        WorkManager.getInstance(context).enqueueUniqueWork("$prefix-$id-$kind-$hash", ExistingWorkPolicy.KEEP,
+            request.build()).result.get()
     }
     fun status(id: String, hash: String, value: String) {
         context.getSharedPreferences("lighting-$id", Context.MODE_PRIVATE).edit().putString(hash, value).apply()

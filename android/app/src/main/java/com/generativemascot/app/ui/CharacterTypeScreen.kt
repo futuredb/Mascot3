@@ -36,6 +36,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import android.net.Uri
+import android.view.LayoutInflater
+import android.view.TextureView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import androidx.core.content.res.ResourcesCompat
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
@@ -56,16 +63,16 @@ import kotlin.math.roundToInt
 import com.generativemascot.app.R
 import kotlin.math.abs
 
-private data class CharacterType(val title: String, val image: Int, val width: Float, val top: Float, val height: Float)
+private data class CharacterType(val title: String, val image: Int, val video: Int, val width: Float, val top: Float, val height: Float)
 private val characterTypes = listOf(
-    CharacterType("Человек", R.drawable.type_person_new, 264f, 221f, 371f),
-    CharacterType("Существо", R.drawable.type_creature_new, 231f, 292f, 295f),
-    CharacterType("Животное", R.drawable.type_animal_new, 380f, 206f, 410f),
+    CharacterType("Человек", R.drawable.type_person_figma, R.raw.character_person_figma, 463f, 195f, 408f),
+    CharacterType("Существо", R.drawable.type_creature_figma, R.raw.character_creature_figma, 463f, 195f, 408f),
+    CharacterType("Животное", R.drawable.type_animal_figma, R.raw.character_animal_figma, 463f, 195f, 408f),
 )
 
 @Composable
 internal fun CharacterTypeScreen(onClose: () -> Unit, onFinish: (com.generativemascot.app.data.CharacterCreationChoice) -> Boolean,
-    creationInProgress: Boolean = false) {
+    creationInProgress: Boolean = false, onCreationFailure: () -> String = { "Не удалось начать создание персонажа. Попробуй ещё раз." }) {
     var selectedStep by remember { mutableIntStateOf(0) }
     val selected = ((selectedStep % characterTypes.size) + characterTypes.size) % characterTypes.size
     val ring = remember { Animatable(0f) }
@@ -113,13 +120,13 @@ internal fun CharacterTypeScreen(onClose: () -> Unit, onFinish: (com.generativem
         val sx = maxWidth / 393f
         val sy = maxHeight / 852f
         val dragDistancePx = with(LocalDensity.current) { (maxWidth * .55f).toPx() }
-        Image(painterResource(R.drawable.selection_background), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         AnimatedVisibility(visible = showPersonality, enter = fadeIn(tween(350)), exit = fadeOut(tween(150))) {
             CharacterPersonalityScreen(
                 type = listOf("person", "creature", "animal")[selected],
                 preview = characterTypes[selected].image,
                 previewAspect = characterTypes[selected].width / characterTypes[selected].height,
                 onFinish = { choice -> if (referenceLoading) false else onFinish(choice.copy(referencePath = referencePath)) },
+                onFailure = { if (referenceLoading) "Подожди, изображение ещё загружается." else onCreationFailure() },
                 onBack = { showPersonality = false },
                 onClose = onClose,
                 canNavigateBack = !creationInProgress,
@@ -218,18 +225,17 @@ internal fun CharacterTypeScreen(onClose: () -> Unit, onFinish: (com.generativem
             val top = type.top + (147f - type.top) * personalityProgress
             val horizontal = relative * 340f * (1f - personalityProgress)
             val alpha = (1f - .6f * distance) * (1f - personalityProgress * distance)
-            if (index == 1 && personalityProgress < 1f) {
-                Image(painterResource(R.drawable.type_creature_glow), null,
-                    Modifier.offset(x = sx * ((393f - width) / 2f + horizontal), y = sy * (top - 30f))
-                        .size(sx * width, sy * (height + 50f)).graphicsLayer { this.alpha = alpha * (1f - personalityProgress) }
-                        .blur(10.dp), contentScale = ContentScale.FillBounds)
+            if (index == selected) {
+                key(type.video) {
+                    FigmaCharacterVideo(
+                        video = type.video, enabled = rememberAppResumed(),
+                        modifier = Modifier.offset(x = sx * ((393f - width) / 2f + horizontal), y = sy * top)
+                            .size(sx * width, sy * height)
+                            .graphicsLayer { this.alpha = alpha; rotationZ = relative * 12f * (1f - personalityProgress) }
+                            .blur(8.dp * distance * (1f - personalityProgress)),
+                    )
+                }
             }
-            Image(painterResource(type.image), if (distance < .01f) type.title else null,
-                Modifier.offset(x = sx * ((393f - width) / 2f + horizontal), y = sy * top)
-                    .size(sx * width, sy * height)
-                    .graphicsLayer { this.alpha = alpha; rotationZ = relative * 12f * (1f - personalityProgress) }
-                    .blur(8.dp * distance * (1f - personalityProgress)),
-                contentScale = ContentScale.FillBounds)
         }
         if (!creationInProgress && !showPersonality) {
             Row(Modifier.offset(x = sx * 26, y = sy * 75),
@@ -247,4 +253,37 @@ internal fun CharacterTypeScreen(onClose: () -> Unit, onFinish: (com.generativem
             referenceError?.let { Text(it, modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 52.dp), color = Color(0xff9e3030), fontSize = 12.sp) }
         }
     }
+}
+
+
+/** A single muted decoder follows the selected character and the app lifecycle. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun FigmaCharacterVideo(video: Int, enabled: Boolean, modifier: Modifier = Modifier) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            val player = createMascotVideoPlayer(context).apply {
+                volume = 0f
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true).build()
+                repeatMode = Player.REPEAT_MODE_ONE
+            }
+            (LayoutInflater.from(context).inflate(R.layout.mascot_video_player, null, false) as PlayerView).apply {
+                this.player = player
+                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                (videoSurfaceView as? TextureView)?.isOpaque = false
+                applyBackgroundKey(this, android.graphics.Color.rgb(231, 235, 233), forceVideoEffect = true)
+                player.setMediaItem(MediaItem.fromUri(Uri.parse("android.resource://${context.packageName}/$video")))
+                player.prepare()
+                player.playWhenReady = enabled
+            }
+        },
+        update = { view -> view.player?.playWhenReady = enabled },
+        onRelease = { view ->
+            val player = view.player as? androidx.media3.exoplayer.ExoPlayer
+            view.player = null
+            if (player != null) releaseMascotVideoPlayer(player)
+        },
+    )
 }

@@ -1,8 +1,7 @@
 package com.generativemascot.app
 
 import android.content.Intent
-import android.content.ComponentName
-import android.appwidget.AppWidgetManager
+import androidx.lifecycle.lifecycleScope
 import android.widget.Toast
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -21,6 +20,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,6 +37,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.generativemascot.app.data.HeroLocalStore
 import com.generativemascot.app.data.GenerationRoute
+import com.generativemascot.app.data.MascotDto
 import com.generativemascot.app.ui.AppViewModel
 import com.generativemascot.app.ui.AnimationLibraryScreen
 import com.generativemascot.app.ui.PersonalityGenerationScene
@@ -54,14 +56,19 @@ import com.generativemascot.app.ui.MascotTransition
 import com.generativemascot.app.ui.FigmaCanvas
 import com.generativemascot.app.ui.heroFlowContentKey
 import com.generativemascot.app.ui.showsHeroHome
+import java.io.IOException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels {
         val app = application as MascotApp
         AppViewModel.factory(app.api, app.session, app.heroStore, app.openRouterSettings)
     }
+
+    private var pendingOverlayChat by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,28 +78,60 @@ class MainActivity : ComponentActivity() {
             MascotTheme {
                 var showPermissions by rememberSaveable { mutableStateOf(OverlayPermissionIntro.needed(this)) }
                 val liveState by vm.state.collectAsState()
+                val cachedHero by produceState<MascotDto?>(null, liveState.ready) {
+                    if (!liveState.ready) {
+                        val app = application as MascotApp
+                        value = try {
+                            withContext(Dispatchers.IO) {
+                                val id = app.session.acceptedMascotId() ?: return@withContext null
+                                val portrait = app.heroStore.baseFile(id) ?: return@withContext null
+                                MascotDto(id = id, name = app.heroStore.mascotName(id), status = "READY",
+                                    previewUrl = portrait.toURI().toString())
+                            }
+                        } catch (_: IOException) {
+                            null
+                        }
+                    }
+                }
                 var showLaunch by rememberSaveable { mutableStateOf(savedInstanceState == null) }
                 LaunchedEffect(Unit) {
                     if (showLaunch) { delay(750); showLaunch = false }
                 }
-                if (showLaunch || !liveState.ready) {
-                    MascotLaunchScreen()
-                } else {
-                if (showPermissions) OverlayPermissionsDialog(this, onDismiss = {
-                    OverlayPermissionIntro.seen(this)
-                    showPermissions = false
-                })
+                var showChat by rememberSaveable { mutableStateOf(false) }
+                var openChatCapabilities by rememberSaveable { mutableStateOf(false) }
+                var openChatBehavior by rememberSaveable { mutableStateOf(false) }
                 var deleteHeroId by rememberSaveable { mutableStateOf<String?>(null) }
+                val launchVisible = showLaunch || !liveState.ready
+                val chatAvailable = !launchVisible && heroFlowContentKey(liveState) == "home"
+                val chatHero = if (!liveState.ready) {
+                    cachedHero?.takeIf { pendingOverlayChat == null || pendingOverlayChat == it.id }
+                } else liveState.mascot?.takeIf { liveState.showsHeroHome }
+                Box(Modifier.fillMaxSize()) {
+                if (!launchVisible) {
+                if (showPermissions) OverlayPermissionsDialog(this@MainActivity, onDismiss = {
+                    OverlayPermissionIntro.seen(this@MainActivity)
+                    showPermissions = false
+                }, compact = true)
                 LaunchedEffect(liveState.mascot?.id) {
                     if (deleteHeroId != null && deleteHeroId != liveState.mascot?.id) deleteHeroId = null
                 }
                 fun requestDeleteHero(id: String?) {
                     if (id != null) { vm.clearDeleteHeroError(); deleteHeroId = id }
                 }
-                var showChat by rememberSaveable { mutableStateOf(false) }
-                var openChatCapabilities by rememberSaveable { mutableStateOf(false) }
-                var openChatBehavior by rememberSaveable { mutableStateOf(false) }
                 var showCharacterType by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(pendingOverlayChat, liveState) {
+                    val id = pendingOverlayChat ?: return@LaunchedEffect
+                    when (overlayChatNavigation(liveState, id)) {
+                        OverlayChatNavigation.WAIT -> Unit
+                        OverlayChatNavigation.SELECT -> vm.selectLibraryHero(id)
+                        OverlayChatNavigation.OPEN -> {
+                            if (liveState.route !in setOf("knock", "onboarding", "create", "progress", "meet", "hero")) vm.backToHero()
+                            showCharacterType = false
+                            showChat = true
+                            pendingOverlayChat = null
+                        }
+                    }
+                }
                 val transitionScope = rememberCoroutineScope()
                 BackHandler(showChat) { showChat = false }
                 BackHandler(liveState.route == "animations") {
@@ -214,16 +253,19 @@ class MainActivity : ComponentActivity() {
                             onRefresh = vm::refreshQuietly,
                             onRefreshHeroes = vm::refreshHeroLibrary,
                             onGenerationSettings = vm::openSettings,
+                            onApiKeys = {
+                                startActivity(Intent(this@MainActivity, com.generativemascot.app.settings.ApiKeysActivity::class.java))
+                            },
+                            onExportHeroes = {
+                                startActivity(Intent(this@MainActivity, com.generativemascot.app.settings.HeroExportActivity::class.java))
+                            },
                             onOverlaySettings = {
                                 startActivity(Intent(this@MainActivity, com.generativemascot.app.overlay.OverlaySettingsActivity::class.java)
                                     .putExtra(com.generativemascot.app.overlay.MascotOverlayService.EXTRA_HERO, mascot?.id))
                             },
                             onPinWidget = {
-                                val manager = AppWidgetManager.getInstance(this@MainActivity)
-                                val provider = ComponentName(this@MainActivity, com.generativemascot.app.widget.MascotWidgetReceiver::class.java)
-                                if (!manager.isRequestPinAppWidgetSupported ||
-                                    !manager.requestPinAppWidget(provider, null, null)) {
-                                    Toast.makeText(this@MainActivity, "Добавьте виджет через меню главного экрана телефона", Toast.LENGTH_LONG).show()
+                                lifecycleScope.launch {
+                                    com.generativemascot.app.widget.requestPinMascotWidget(this@MainActivity, mascot?.id)
                                 }
                             },
                             acceptEnabled = !state.busy && mascot?.status == "AWAITING_ACCEPTANCE",
@@ -249,25 +291,7 @@ class MainActivity : ComponentActivity() {
                                     // its crossfade has completed; never reveal home in between.
                                     if (started) transitionScope.launch { delay(250); showCharacterType = false }
                                 }
-                            }, creationInProgress = liveState.creating)
-                        }
-                        if (mascot != null) ChatOverlayTransition(visible = showChat) { chatActive ->
-                        MascotChatScreen(
-                            mascotId = mascot.id,
-                            heroName = mascot.name ?: "Маскот",
-                            previewUrl = state.context?.stillUrl ?: mascot.previewUrl,
-                            animationVideoUrl = state.context?.animationUrl,
-                            animationFrames = state.context?.animationFrames.orEmpty(),
-                            animationFps = state.context?.animationFps ?: HeroLocalStore.FULL_FRAME_FPS,
-                            animationVideoUrls = HeroLocalStore.current?.actionVideoUrls(mascot.id).orEmpty(),
-                            neutralFrameUrl = HeroLocalStore.current?.neutralVideoFrameFile(mascot.id)?.toURI()?.toString(),
-                            active = chatActive,
-                            openCapabilities = openChatCapabilities,
-                            onCapabilitiesOpened = { openChatCapabilities = false },
-                            openBehavior = openChatBehavior,
-                            onBehaviorOpened = { openChatBehavior = false },
-                            onBack = { showChat = false },
-                        )
+                            }, creationInProgress = liveState.creating, onCreationFailure = vm::heroCreationFailureMessage)
                         }
                         }
                         }
@@ -312,12 +336,39 @@ class MainActivity : ComponentActivity() {
                         onUseTeamServer = vm::useTeamServer,
                         onUseOpenRouter = vm::saveAndUseOpenRouterKey,
                         onBack = vm::backToHero,
-                        onBehaviorSettings = { startActivity(Intent(this, com.generativemascot.app.state.BehaviorSettingsActivity::class.java)) },
+                        onBehaviorSettings = { startActivity(Intent(this@MainActivity, com.generativemascot.app.state.BehaviorSettingsActivity::class.java)) },
                     )
                 }
                 }
+                }
+                // Keep one chat and WebView per selected hero across the splash and home transitions.
+                if (chatHero != null) key(chatHero.id) {
+                    val heroContext = liveState.context.takeIf { liveState.mascot?.id == chatHero.id }
+                    ChatOverlayTransition(visible = chatAvailable && showChat) { chatVisible ->
+                        MascotChatScreen(
+                            mascotId = chatHero.id,
+                            heroName = chatHero.name ?: "Маскот",
+                            previewUrl = heroContext?.stillUrl ?: chatHero.previewUrl,
+                            animationVideoUrl = heroContext?.animationUrl,
+                            animationFrames = heroContext?.animationFrames.orEmpty(),
+                            animationFps = heroContext?.animationFps ?: HeroLocalStore.FULL_FRAME_FPS,
+                            animationVideoUrls = HeroLocalStore.current?.actionVideoUrls(chatHero.id).orEmpty(),
+                            neutralFrameUrl = HeroLocalStore.current?.neutralVideoFrameFile(chatHero.id)?.toURI()?.toString(),
+                            active = chatAvailable,
+                            portraitVisible = chatAvailable && chatVisible,
+                            openCapabilities = openChatCapabilities,
+                            onCapabilitiesOpened = { openChatCapabilities = false },
+                            openBehavior = openChatBehavior,
+                            onBehaviorOpened = { openChatBehavior = false },
+                            onBack = { showChat = false },
+                        )
+                    }
+                }
+                if (launchVisible) Box(Modifier.fillMaxSize().zIndex(2f)) {
+                    MascotLaunchScreen()
+                }
                 val deletingId = deleteHeroId
-                if (deletingId != null && liveState.mascot?.id == deletingId) {
+                if (!launchVisible && deletingId != null && liveState.mascot?.id == deletingId) {
                     val locked = liveState.creating || liveState.packBusy || liveState.greetingPending || liveState.backgroundCreation
                     MascotConfirmationSheet(
                         title = "Удалить персонажа?",
@@ -354,8 +405,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleWidgetIntent(intent: Intent?) {
+        val chatHero = intent?.getStringExtra(EXTRA_OVERLAY_CHAT_HERO)
+        if (chatHero != null && chatHero == com.generativemascot.app.overlay.OverlaySession.hero(this)) {
+            pendingOverlayChat = chatHero
+        }
+        intent?.removeExtra(EXTRA_OVERLAY_CHAT_HERO)
         if (intent?.getBooleanExtra("widget_interact", false) == true) {
             vm.onOpenedFromWidget()
         }
     }
+    companion object {
+        internal const val EXTRA_OVERLAY_CHAT_HERO = "overlay_chat_hero"
+        internal fun overlayChatIntent(context: android.content.Context, heroId: String) =
+            Intent(context, MainActivity::class.java).putExtra(EXTRA_OVERLAY_CHAT_HERO, heroId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    }
+
+}
+
+internal enum class OverlayChatNavigation { WAIT, SELECT, OPEN }
+
+internal fun overlayChatNavigation(state: com.generativemascot.app.ui.AppUiState, heroId: String): OverlayChatNavigation {
+    if (!state.ready || state.deletingHeroId != null) return OverlayChatNavigation.WAIT
+    if (state.mascot?.id != heroId) {
+        return if (state.creating || state.packBusy || state.greetingPending || state.backgroundCreation)
+            OverlayChatNavigation.WAIT else OverlayChatNavigation.SELECT
+    }
+    return if (state.showsHeroHome) OverlayChatNavigation.OPEN else OverlayChatNavigation.WAIT
 }

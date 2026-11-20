@@ -1,13 +1,12 @@
-// Crossfade the displayed end frame into the beginning. The recording itself is untouched.
-export function createReplayTransition(canvas, context, duration=300) {
-  const previous=document.createElement('canvas');let start=null,lastMediaTime=null;
-  function capture(){if(!canvas.width||!canvas.height)return false;previous.width=canvas.width;previous.height=canvas.height;previous.getContext('2d').drawImage(canvas,0,0);return true}
-  const initial=capture();
+import {createPortraitTransition, CHAT_GLITCH_DURATION} from './chat-glitch.js';
+
+// Transition into playback and across loop seams; recordings remain untouched.
+export function createReplayTransition(canvas, context, duration=CHAT_GLITCH_DURATION, palette) {
+  const transition=createPortraitTransition(canvas,context,{duration,palette});
+  let lastMediaTime=null;
   return { render(source,now,mediaTime,draw){
-    if(lastMediaTime!==null&&Number.isFinite(mediaTime)&&mediaTime+0.15<lastMediaTime){if(capture())start=now}
-    if(lastMediaTime===null&&initial)start=now;
+    if(lastMediaTime===null||(Number.isFinite(mediaTime)&&mediaTime+0.15<lastMediaTime))transition.begin();
     lastMediaTime=mediaTime;
-    draw(source);
-    if(start!==null){const mix=Math.max(0,1-(now-start)/duration);if(mix>0){context.save();context.globalAlpha=mix;context.drawImage(previous,0,0,canvas.width,canvas.height);context.restore()}else start=null}
+    transition.render(source,now,draw);
   }};
 }

@@ -13,7 +13,7 @@ const { corpusHash, claimName, drawBag } = require("./lib/registry.js");
 const { composeLore, resolveGpt56, extractJson, extractText } = require("./lib/composer.js");
 const { buildReferenceManifest, copySelectedReferences } = require("./lib/refs.js");
 const { addSafeChromaFrame } = require("./lib/framing.js");
-const { TECHNICAL_FRAME_SYSTEM_PROMPT, validateRenderIdentity, buildCanonicalRenderPrompt } = require("./lib/canonical.js");
+const { TECHNICAL_FRAME_SYSTEM_PROMPT, validateRenderIdentity, validateAnchorPlan, buildCanonicalRenderPrompt } = require("./lib/canonical.js");
 
 const { runProductionAnimation } = require("./lib/production_animation.js");
 
@@ -88,7 +88,7 @@ function propModeRule(mode) {
     held: "Hold the prop in exactly one hand or paw; no other prop may be free-standing.",
     hovering_nearby: "Keep the prop visibly separated from every body part; it must not be held, worn, attached, or touch the body.",
     worn_or_attached: "Fix the prop at one explicit body attachment point; it must not be held or float.",
-    orbiting: "Keep the prop on a clearly separated orbit path around the body; it must not touch, be held, or be attached.",
+    orbiting: "Keep the prop visibly separated from the body; it must not touch, be held, or be attached. Do not draw an orbit path.",
     resting_against_body: "The prop may touch the body at the stated resting point, but must not be held.",
   };
   if (!rules[mode]) throw new Error(`unknown anchor prop mode: ${mode}`);
@@ -98,16 +98,16 @@ function propViewRule(anchorProp, view) {
   const modeRule = propModeRule(anchorProp.mode);
   if (view === "front") return `Show it ${anchorProp.placement}. ${modeRule}`;
   if (view === "side") return `Preserve its physical attachment or position from the front in true profile: ${anchorProp.placement}. It may be partly occluded, but do not relocate it. ${modeRule}`;
-  return `Preserve its physical attachment or position from the front. It may be naturally hidden behind the body from this ${view} view; do not move it to another body part or force it into view. ${modeRule}`;
+  return `Preserve its physical attachment or position. It may be naturally hidden behind the body from this ${view} view; do not move it to another body part or force it into view. When visible: ${modeRule}`;
 }
 function anatomyViewRule(visualIdentity, view) {
   if (view !== "back") return "";
-  const subject = String(visualIdentity.render_identity?.subject || "").toLowerCase();
-  if (!subject.includes("unicorn")) return "Rear anatomy must preserve one complete compact torso and naturally occluded limbs; do not add markings.";
-  return "REAR ANATOMY BLUEPRINT: preserve one compact rounded equine torso and four short legs, which may be partly occluded. The mane begins behind the ears and must not replace or conceal the torso. The horn and chest prop are naturally hidden from the rear; do not move them into view. Do not add markings, symbols, or decorations to the tail.";
+  return "Preserve the same body topology and characteristic details in the rear view; limbs and front features may be naturally occluded. Do not invent markings or body parts.";
 }
-function anchorPropMode(primary) {
-  const living = ["held", "hovering_nearby", "worn_or_attached", "orbiting", "resting_against_body"];
+function anchorPropMode(primary, lore) {
+  const parts = [...(lore.body_profile?.visible_parts || []), ...(lore.body_profile?.movement_contact || [])].join(" ");
+  const living = ["hovering_nearby", "worn_or_attached", "orbiting", "resting_against_body"];
+  if (/(?:hand|paw|рук|лап)/i.test(parts)) living.push("held");
   return choose(living, primary.seed, "canonical.anchor_prop_mode");
 }
 function propIds(primary) {
@@ -170,8 +170,8 @@ async function characterDesign({ env, primary, lore, characterDir, requested, re
     fs.readFile(path.join(ROOT, "prompts", "character_designer.md"), "utf8"),
     fs.readFile(path.join(ROOT, "world.md"), "utf8"),
   ]);
-  const pilotView = requestedView ? `\n\nPILOT REQUIREMENT: use view_mode "${requestedView}" if it is physically compatible with the body.` : "";
-  const presentation = anchorPropMode(primary);
+  const pilotView = requestedView ? `\n\nPILOT REQUIREMENT: use view_mode "${requestedView}".` : "";
+  const presentation = anchorPropMode(primary, lore);
   const contents = [{ type: "text", text: `${prompt}\n\nФИЗИЧЕСКИЙ КОНТРАКТ МЕЖСЛОЯ:\n${world}\n\nANCHOR_PROP_MODE: ${presentation}\nAVAILABLE_PROP_IDS: ${JSON.stringify(propIds(primary))}\n\nPRIMARY:\n${JSON.stringify(primary)}\n\nLORE:\n${JSON.stringify(lore)}${pilotView}` }];
   const result = await bridge.chatCompletions({ payload: { model: model.id, temperature: 0.8, max_tokens: 3500, messages: [{ role: "user", content: contents }] }, timeoutMs: 240000 });
   const raw = extractText(result);
@@ -181,12 +181,13 @@ async function characterDesign({ env, primary, lore, characterDir, requested, re
   }
   if (!["front", "top"].includes(parsed.view_mode)) throw new Error("character design has invalid view_mode");
   if (!propIds(primary).includes(parsed.anchor_prop.prop_id) || parsed.anchor_prop.mode !== presentation || !parsed.anchor_prop.placement) throw new Error("character design has invalid anchor_prop");
+  if (primary.selected.requested_object && parsed.anchor_prop.prop_id !== primary.selected.requested_object.id) throw new Error("character design omitted requested anchor prop");
   validateRenderIdentity(parsed.render_identity, parsed.anchor_prop, primary?.input?.name);
   if (requestedView && parsed.view_mode !== requestedView) throw new Error(`character design ignored requested view_mode ${requestedView}`);
   parsed.chroma_key = "#00FF00";
   parsed.subject_kind = primary.selected.subject_kind;
-  if (!Array.isArray(parsed.canonical_anchor_plan) || parsed.canonical_anchor_plan.length !== 3 || !["front", "side", "back"].every((view, index) => parsed.canonical_anchor_plan[index]?.view === view)) {
-    throw new Error("canonical_anchor_plan must be front, side, back");
+  if (!validateAnchorPlan(parsed.view_mode, parsed.canonical_anchor_plan)) {
+    throw new Error("canonical_anchor_plan must start with view_mode, followed by side, back");
   }
   await fs.writeFile(path.join(characterDir, "character_design_raw.md"), `${raw}\n`);
   return { visualIdentity: parsed, model: model.id };
@@ -196,7 +197,7 @@ async function inspectCanonicalMaster({ env, requested, file, characterBrief, an
     const reviewer = createTextBridge({ env, directOpenRouter });
     const model = await resolveGpt56(reviewer, requested);
     const content = [
-      { type: "text", text: `Inspect this ${expectedView} canonical character anchor against the attached style-reference pack. Return JSON only: {"one_character":true,"correct_view":true,"full_silhouette":true,"solid_chroma_background":true,"anatomy_matches_contract":true,"reads_as_widget_character":true,"miniature_proportions":true,"style_matches_reference_pack":true,"prop_presentation_matches":true,"no_extra_props":true,"no_floor_or_shadow":true,"visible_brief_features":["..."],"notes":"..."}. Count only visible facts. correct_view is false if the intended ${expectedView} view is not depicted. anatomy_matches_contract is false only for an extra, duplicated, or physically impossible body part. Do not mark normal occlusion as missing anatomy: in side, back, and top views, limbs and a physically placed prop may be hidden by the body. Set prop_presentation_matches false, rather than anatomy false, when a visible prop is relocated. Set style_matches_reference_pack false when rendering medium, contour treatment, materials, lighting, texture, or colour behaviour differs from the shared style of the references. miniature_proportions must be false when the torso or limbs retain ordinary elongated full-size species proportions. It requires a visibly compressed torso, visibly shortened limbs where the subject has limbs, and an enlarged identity-bearing mass appropriate to the subject; it does not require a fixed head-to-body ratio. Expectation: ${JSON.stringify({ characterBrief, anchorProp, subjectKind })}` },
+      { type: "text", text: `Inspect this ${expectedView} canonical character anchor against the attached style-reference pack. Return JSON only: {"one_character":true,"correct_view":true,"full_silhouette":true,"solid_chroma_background":true,"anatomy_matches_contract":true,"reads_as_widget_character":true,"miniature_proportions":true,"style_matches_reference_pack":true,"prop_presentation_matches":true,"no_extra_props":true,"no_floor_or_shadow":true,"visible_brief_features":["..."],"notes":"..."}. Count only visible facts. correct_view is false if the intended ${expectedView} view is not depicted. anatomy_matches_contract is false only for an extra, duplicated, or physically impossible body part. Do not mark normal occlusion as missing anatomy: in side, back, and top views, limbs and a physically placed prop may be hidden by the body. Set prop_presentation_matches false, rather than anatomy false, when a visible prop is relocated. Judge the shared rendering medium, contour treatment, materials, texture and colour behaviour against the references; neutral soft diffuse lighting intentionally overrides dramatic reference lighting. miniature_proportions must be false when the torso or limbs retain ordinary elongated full-size species proportions. It requires a visibly compressed torso, visibly shortened limbs where the subject has limbs, and an enlarged identity-bearing mass appropriate to the subject; it does not require a fixed head-to-body ratio. Expectation: ${JSON.stringify({ characterBrief, anchorProp, subjectKind })}` },
       { type: "image_url", image_url: { url: dataUrl(file) } },
     ];
     for (const reference of references) content.push({ type: "image_url", image_url: { url: dataUrl(reference.source) } });
@@ -216,7 +217,7 @@ async function inspectCanonicalMaster({ env, requested, file, characterBrief, an
     return { status: "unavailable", error: error.message };
   }
 }
-async function renderCanonicalAnchors({ env, visualIdentity, lore, refs, characterDir, requested, referenceMaster = true, anchorLimit, existingCanonical, identitySheet, directOpenRouter, skipAiReview = false, maxAttempts = 3 }) {
+async function renderCanonicalAnchors({ env, visualIdentity, primary, lore, refs, characterDir, requested, referenceMaster = true, anchorLimit, existingCanonical, identitySheet, directOpenRouter, skipAiReview = false, maxAttempts = 3 }) {
   const canonicalDir = path.join(characterDir, "canonical");
   await fs.mkdir(canonicalDir, { recursive: true });
   const reviewDir = path.join(canonicalDir, "reviews");
@@ -231,13 +232,21 @@ async function renderCanonicalAnchors({ env, visualIdentity, lore, refs, charact
   let master_validation = existingCanonical?.master_validation || { status: "not_run" };
   const framing_validations = [...(existingCanonical?.framing_validations || [])];
   const anchor_validations = [...(existingCanonical?.anchor_validations || [])];
+  if (!validateAnchorPlan(visualIdentity.view_mode, visualIdentity.canonical_anchor_plan)) {
+    throw new Error("saved canonical anchor plan does not match view_mode; rerun character design");
+  }
   const requestedAnchors = visualIdentity.canonical_anchor_plan.slice(0, anchorLimit || undefined);
   for (let index = outputs.length; index < requestedAnchors.length; index += 1) {
     const anchor = requestedAnchors[index];
     const requestedView = String(anchor.view).replace(/_/g, " ");
+    if (visualIdentity.anchor_prop.prop_id === "requested_object" && !primary.selected.requested_object?.label) {
+      throw new Error("requested object is missing its literal label");
+    }
     const prompt = buildCanonicalRenderPrompt({
       renderIdentity: visualIdentity.render_identity,
       anchorProp: visualIdentity.anchor_prop,
+      characterBrief: visualIdentity.character_brief,
+      propLabel: visualIdentity.anchor_prop.prop_id === "requested_object" ? primary.selected.requested_object?.label : undefined,
       viewRule: viewRule(anchor.view),
       propViewRule: propViewRule(visualIdentity.anchor_prop, anchor.view),
       anatomyViewRule: anatomyViewRule(visualIdentity, anchor.view),
@@ -456,7 +465,7 @@ async function main() {
   const canonical = existingCanonical && !options.extendCanonical
     ? existingCanonical
     : await renderCanonicalAnchors({
-      env, visualIdentity, lore: composed.lore, refs, characterDir,
+      env, visualIdentity, primary, lore: composed.lore, refs, characterDir,
       requested: options["art-model"] || options["text-model"] || env.PET_V2_TEXT_MODEL,
       referenceMaster: true, anchorLimit: options["anchor-limit"] ? Number(options["anchor-limit"]) : undefined,
       existingCanonical: options.extendCanonical ? existingCanonical : null,

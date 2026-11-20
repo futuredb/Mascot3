@@ -69,14 +69,18 @@ internal class OverlayBitmapView(context: Context, private val artwork: OverlayA
 
 /** The card owns the full pointer stream, including gestures starting on buttons. */
 class OverlayHintView(context: Context, onNext: () -> Unit, onHide: () -> Unit,
-    onCollapse: () -> Unit = {}) : FrameLayout(context) {
-    private val card = OverlayHintContent(context, onNext, onHide, onCollapse)
+    onCollapse: () -> Unit = {}, onChat: () -> Unit = {}) : FrameLayout(context) {
+    private val card = OverlayHintContent(context, onNext, onHide, onCollapse, onChat)
     internal var gestureTouch: View.OnTouchListener? = null
     private var pinching = false
+    private var dragging = false
+    private var downX = 0f
+    private var downY = 0f
+    private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
     private var baseWidth = 1
     private var baseHeight = 1
     internal var compositionScale = 1f
-        set(value) { val next = OverlaySize.constrain(value); if (field != next) { field = next; requestLayout() } }
+        set(value) { val next = value.coerceAtLeast(.01f); if (field != next) { field = next; requestLayout() } }
     val tailInset get() = context.overlayDp(32)
     val tailHeight get() = (context.overlayDp(20) * compositionScale).toInt()
     init { isMotionEventSplittingEnabled = false; clipChildren = false; clipToPadding = false; addView(card) }
@@ -106,25 +110,31 @@ class OverlayHintView(context: Context, onNext: () -> Unit, onHide: () -> Unit,
         return android.graphics.Region().apply { setPath(path, android.graphics.Region(0, 0, width, height)) }
     }
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) pinching = false
-        val begins = !pinching && event.pointerCount > 1
-        if (begins) {
-            pinching = true
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            pinching = false; dragging = false; downX = event.rawX; downY = event.rawY
+        }
+        val beginsPinch = !pinching && event.pointerCount > 1
+        val beginsDrag = !pinching && !dragging && event.actionMasked == android.view.MotionEvent.ACTION_MOVE &&
+            kotlin.math.hypot(event.rawX - downX, event.rawY - downY) > touchSlop
+        if (beginsPinch || beginsDrag) {
+            if (beginsPinch) pinching = true else dragging = true
             android.view.MotionEvent.obtain(event).also { cancel ->
                 cancel.action = android.view.MotionEvent.ACTION_CANCEL
                 super.dispatchTouchEvent(cancel); cancel.recycle()
             }
         }
         gestureTouch?.onTouch(this, event)
-        val handled = if (pinching) true else super.dispatchTouchEvent(event)
-        if (event.actionMasked == android.view.MotionEvent.ACTION_UP || event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) pinching = false
+        val handled = if (pinching || dragging) true else super.dispatchTouchEvent(event)
+        if (event.actionMasked == android.view.MotionEvent.ACTION_UP || event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+            pinching = false; dragging = false
+        }
         return handled || gestureTouch != null
     }
 }
 
 /** Figma 7:11, adapted to a 248 dp touch window. Assets are bundled exports. */
 private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: () -> Unit,
-    onCollapse: () -> Unit = {}) : FrameLayout(context) {
+    onCollapse: () -> Unit = {}, onChat: () -> Unit = {}) : FrameLayout(context) {
     val tailInset get() = dp(32)
     val tailHeight get() = dp(20)
     private var heroTargetX: Float? = null
@@ -136,7 +146,7 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         setWillNotDraw(false)
         clipToPadding = false
         setPadding(0, dp(20), dp(17), dp(16))
-        content.setPadding(dp(12), dp(12), dp(12), dp(12))
+        content.setPadding(dp(12), dp(28), dp(12), dp(12))
         content.background = overlayCardBackground(context, 20)
         content.elevation = dp(5).toFloat()
         addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -159,11 +169,8 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         actions.addView(android.widget.ImageView(context).apply {
             setImageResource(com.generativemascot.app.R.drawable.overlay_chat)
             setPadding(dp(3), dp(3), dp(3), dp(3))
-            tag = "hint-chat"; contentDescription = "Открыть приложение"; isClickable = true; isFocusable = true
-            setOnClickListener {
-                context.startActivity(android.content.Intent(context, com.generativemascot.app.MainActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP))
-            }
+            tag = "hint-chat"; contentDescription = "Открыть чат"; isClickable = true; isFocusable = true
+            setOnClickListener { onChat() }
         }, LinearLayout.LayoutParams(dp(38), dp(40)))
         content.addView(actions, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, dp(40)).apply { topMargin = dp(12) })
         addView(android.widget.ImageView(context).apply {
@@ -203,21 +210,31 @@ internal fun overlayCardBackground(context: Context, radius: Int) = GradientDraw
     GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Color.WHITE, Color.WHITE, Color.rgb(217,217,225))
 ).apply { cornerRadius = context.overlayDp(radius).toFloat() }
 
-/** Compact notification button. */
+/** Collapsed overlay control. */
 internal class OverlayCompactView(context: Context, artwork: OverlayArtwork, onExpand: () -> Unit) : FrameLayout(context) {
+    private val badge = android.widget.ImageView(context).apply {
+        setImageResource(com.generativemascot.app.R.drawable.overlay_status)
+        elevation = context.overlayDp(6).toFloat()
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+    fun setHasMessage(value: Boolean) { badge.visibility = if (value) VISIBLE else GONE }
     init {
-        background = overlayCardBackground(context, 40)
-        contentDescription = "Развернуть героя и подсказку"
+        clipChildren = false
+        contentDescription = "Переместить персонажа; удерживайте для возврата домой"
         isClickable = true; isFocusable = true
-        fun icon(resource: Int, width: Int, height: Int, x: Int, y: Int) {
-            addView(android.widget.ImageView(context).apply {
-                setImageResource(resource); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LayoutParams(context.overlayDp(width), context.overlayDp(height)).apply {
-                leftMargin = context.overlayDp(x); topMargin = context.overlayDp(y)
-            })
-        }
-        icon(com.generativemascot.app.R.drawable.overlay_bell, 24, 24, 12, 12)
-        icon(com.generativemascot.app.R.drawable.overlay_status, 10, 10, 27, 11)
+        addView(android.widget.ImageView(context).apply {
+            setImageResource(com.generativemascot.app.R.drawable.overlay_handle)
+            setPadding(context.overlayDp(8), context.overlayDp(8), context.overlayDp(8), context.overlayDp(8))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.WHITE, Color.WHITE, Color.rgb(217, 217, 225))).apply {
+                cornerRadius = context.overlayDp(32).toFloat()
+            }
+            elevation = context.overlayDp(5).toFloat()
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LayoutParams(context.overlayDp(40), context.overlayDp(40), Gravity.CENTER))
+        addView(badge, LayoutParams(context.overlayDp(10), context.overlayDp(10)).apply {
+            leftMargin = context.overlayDp(31); topMargin = context.overlayDp(3)
+        })
         setOnClickListener { onExpand() }
     }
     override fun onInterceptTouchEvent(event: android.view.MotionEvent) = true

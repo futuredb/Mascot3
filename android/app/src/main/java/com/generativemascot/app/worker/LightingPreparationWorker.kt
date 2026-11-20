@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
@@ -24,10 +25,18 @@ class LightingPreparationWorker(context: Context, params: WorkerParameters) : Co
         if (!id.matches(Regex("[A-Za-z0-9-]{1,80}")) || kind !in setOf("image", "video") || !hash.matches(Regex("[a-f0-9]{64}"))) return@withContext Result.failure()
         val app = applicationContext as MascotApp
         val store = LightingPreparation(app)
+        // Older orphaned tasks may refer to files that no longer exist, and
+        // therefore could not be found by unique-name queue cleanup.
+        if (store.isExcluded(id)) return@withContext Result.success()
         if (BuildConfig.MASCOT3_CLIENT_TOKEN.isBlank()) {
             store.status(id, hash, "waiting_for_server_configuration")
             return@withContext Result.retry()
         }
+        // WorkManager may start many recovered clips at once. Do not block its
+        // workers in memory or upload several large videos concurrently: an
+        // occupied slot retries later and Android can run newly saved work.
+        if (!preparationSlot.tryLock()) return@withContext Result.retry()
+        val startedAt = android.os.SystemClock.elapsedRealtime()
         try {
             val source = File(app.filesDir, relative).canonicalFile
             require(source.path.startsWith(File(app.filesDir, "hero/$id").canonicalPath + File.separator))
@@ -40,7 +49,11 @@ class LightingPreparationWorker(context: Context, params: WorkerParameters) : Co
             repeat(12) {
                 require(job.kind == kind && job.sourceSha256 == hash)
                 store.status(id, hash, job.status)
-                if (job.status == "ready") { store.install(app.api, id, source, job); return@withContext Result.success() }
+                if (job.status == "ready") {
+                    store.install(app.api, id, source, job)
+                    android.util.Log.i("MascotDepth", "$kind ready in ${android.os.SystemClock.elapsedRealtime() - startedAt}ms")
+                    return@withContext Result.success()
+                }
                 if (job.status == "failed") return@withContext Result.failure()
                 delay(5_000)
                 job = app.api.lightingJob(job.id)
@@ -49,8 +62,15 @@ class LightingPreparationWorker(context: Context, params: WorkerParameters) : Co
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
             val retry = error is java.io.IOException || error is retrofit2.HttpException && error.code() in setOf(404, 408, 429, 500, 502, 503, 504)
+            android.util.Log.w("MascotDepth", "$kind ${if (retry) "retry" else "failed"}: ${error.javaClass.simpleName}")
             store.status(id, hash, if (retry) "waiting_for_server" else "failed")
             if (retry) Result.retry() else Result.failure()
+        } finally {
+            preparationSlot.unlock()
         }
+    }
+
+    private companion object {
+        val preparationSlot = Mutex()
     }
 }

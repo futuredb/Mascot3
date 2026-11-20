@@ -406,14 +406,43 @@ private class MascotWidgetFramesFactory(
     override fun hasStableIds(): Boolean = true
 }
 
-fun requestPinMascotWidget(context: Context) {
+/** Prepare a local, bounded bitmap for the launcher's pin confirmation. */
+suspend fun requestPinMascotWidget(context: Context, selectedHeroId: String? = null) {
     val manager = AppWidgetManager.getInstance(context)
     val provider = ComponentName(context, MascotWidgetReceiver::class.java)
     if (!manager.isRequestPinAppWidgetSupported) {
-        Toast.makeText(context, "Лаунчер не умеет ставить виджет из приложения", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Добавьте виджет через меню главного экрана телефона", Toast.LENGTH_LONG).show()
         return
     }
-    manager.requestPinAppWidget(provider, null, null)
+    val app = context.applicationContext as MascotApp
+    val preview = withContext(Dispatchers.IO) {
+        runCatching {
+            val id = selectedHeroId ?: app.session.acceptedMascotId() ?: app.session.mascotId()
+            id?.let { hero ->
+                val record = app.behavior.store.current
+                val action = if (record.heroId == hero)
+                    com.generativemascot.app.state.renderedAction(record, app.heroStore.actionVideoUrls(hero).keys)
+                else "idle"
+                val candidates = listOfNotNull(
+                    runCatching { app.heroStore.cachedWidgetAnimation(hero, action).files.firstOrNull() }.getOrNull(),
+                    app.heroStore.stateFile(hero, action),
+                    app.heroStore.neutralVideoFrameFile(hero),
+                    app.heroStore.baseFile(hero),
+                )
+                candidates.firstNotNullOfOrNull { file -> runCatching { widgetFrame(file, WIDGET_FRAME_MAX_PX) }.getOrNull() }
+            }?.let { bitmap ->
+                RemoteViews(context.packageName, R.layout.mascot_widget_static).apply {
+                    setImageViewBitmap(R.id.widget_static_image, bitmap)
+                }
+            }
+        }.onFailure { Log.w(TAG, "Cannot prepare widget pin preview", it) }.getOrNull()
+    }
+    val extras = preview?.let { Bundle().apply { putParcelable(AppWidgetManager.EXTRA_APPWIDGET_PREVIEW, it) } }
+    val requested = runCatching { manager.requestPinAppWidget(provider, extras, null) }
+        .onFailure { Log.w(TAG, "Cannot request widget pin", it) }.getOrDefault(false)
+    if (!requested) {
+        Toast.makeText(context, "Добавьте виджет через меню главного экрана телефона", Toast.LENGTH_LONG).show()
+    }
 }
 
 private const val ACTION_ROTATE_WIDGET_MOOD = "app.mascot3.action.ROTATE_WIDGET_MOOD"

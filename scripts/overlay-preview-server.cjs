@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
-const output = path.join(root, 'output/overlay-0.1.82');
+const output = path.join(root, 'output/overlay-current');
 const heroes = {akim:'9f226b89-df35-4d3a-9b36-96c28ea1bb62',mars:'a83e9d30-1270-40e6-902c-b44774e84c17',una:'716cdb43-703b-4d7e-8a79-27f03d92b99c'};
 fs.mkdirSync(output, { recursive: true });
 let state = { status: 'idle' };
@@ -18,25 +18,40 @@ async function check() {
       path.join(output,`${name}-source.png`)], {stdio:'ignore'});
     child.on('error',reject); child.on('exit',code=>code===0?resolve():reject(new Error('Video fixture extraction failed')));
   })));
+  async function localProcess(command, args, cwd) {
+    return new Promise(resolve => {
+      const log = fs.openSync(path.join(output, 'helios-check.log'), 'a');
+      const child = spawn(command, args, { cwd, stdio: ['ignore', log, log] });
+      child.on('error', () => { fs.closeSync(log); resolve(-1); });
+      child.on('exit', code => { fs.closeSync(log); resolve(code); });
+    });
+  }
+  const chatDir = path.join(root, 'live-chat');
+  if (await localProcess('npm', ['run', 'build'], chatDir) !== 0 ||
+      await localProcess('node', ['--test', 'helios-merged.test.mjs', 'helios-conditioning.test.mjs', 'test/clip-archive.test.mjs'], chatDir) !== 0) {
+    state = { status: 'failed', message: 'Не прошла локальная проверка чата Helios' };
+    return;
+  }
   const env = { ...process.env,
     ...JSON.parse(fs.readFileSync(path.join(root, 'output/phone-interactions/build-environment.json'))),
     JAVA_HOME: '/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home',
     MASCOT3_OVERLAY_OUTPUT: output };
   const log = fs.openSync(path.join(output, 'build.log'), 'w');
+  const testOnly = process.env.MASCOT3_OVERLAY_TEST_ONLY === '1';
   const code = await new Promise(resolve => {
-    const child = spawn('./gradlew', [':app:testUpdateCompatibleUnitTest', '--tests', '*overlay.OverlayTest', '--tests', '*widget.WidgetOverlayTest',
-      ':app:assembleUpdateCompatible', ':app:lintUpdateCompatible', '-Pkotlin.compiler.execution.strategy=in-process',
+    const child = spawn('./gradlew', [':app:testUpdateCompatibleUnitTest', '--tests', '*overlay.OverlayTest', '--tests', '*widget.WidgetOverlayTest', '--tests', '*ui.ChatHistoryStoreTest', '--tests', '*ui.ChatActivityPolicyTest', '--tests', '*ui.ChatCalendarTest', '--tests', '*ui.ChatConnectionIntentTest', '--tests', '*data.BundledGenerationRouteTest', '--tests', '*data.FalVideoProviderTest', '--tests', '*data.OpenRouterSettingsStoreTest', '--tests', '*data.LightingPreparationTest', '--tests', '*widget.WidgetDepthRendererTest', '--tests', '*physics.PhysicsSolverTest', '--tests', '*physics.LocalDepthPackTest', '--tests', '*physics.ReliefSurfaceTest', '--tests', '*ui.DepthActivationTest', '--tests', '*ui.HeliosAutoStartTest',
+      ...(testOnly ? [] : [':app:assembleUpdateCompatible', ':app:lintUpdateCompatible']), '-I', path.join(root, 'scripts/overlay-preview-init.gradle'), '-Pkotlin.compiler.execution.strategy=in-process',
       '--max-workers=2', '--console=plain'], { cwd: path.join(root, 'android'), env, stdio: ['ignore', log, log] });
     child.on('error', () => resolve(-1)); child.on('exit', resolve);
   });
   fs.closeSync(log);
-  const suites = ['overlay.OverlayTest', 'widget.WidgetOverlayTest'].map(name => {
-    const xml = path.join(root, 'android/app/build/test-results/testUpdateCompatibleUnitTest/TEST-com.generativemascot.app.'+name+'.xml');
+  const suites = ['overlay.OverlayTest', 'widget.WidgetOverlayTest', 'ui.ChatHistoryStoreTest', 'ui.ChatActivityPolicyTest', 'ui.ChatCalendarTest', 'ui.ChatConnectionIntentTest', 'data.BundledGenerationRouteTest', 'data.FalVideoProviderTest', 'data.OpenRouterSettingsStoreTest', 'data.LightingPreparationTest', 'widget.WidgetDepthRendererTest', 'physics.PhysicsSolverTest', 'physics.LocalDepthPackTest', 'physics.ReliefSurfaceTest', 'ui.DepthActivationTest', 'ui.HeliosAutoStartTest'].map(name => {
+    const xml = path.join(root, 'android/build/codex-overlay-app/test-results/testUpdateCompatibleUnitTest/TEST-com.generativemascot.app.'+name+'.xml');
     return fs.existsSync(xml) ? fs.readFileSync(xml, 'utf8').match(/<testsuite[^>]+>/)?.[0] : '';
   });
   const counts = Object.fromEntries(['tests', 'failures', 'errors'].map(k => [k, suites.reduce((n,suite)=>n+Number(suite?.match(new RegExp(k + '="(\\d+)"'))?.[1] || 0),0)]));
   state = { status: code === 0 ? 'passed' : 'failed', code, ...counts,
-    message: code === 0 ? 'Android: проверки пройдены · APK собран · Lint пройден' : 'Есть ошибка проверки или сборки' };
+    message: code === 0 ? (testOnly ? 'Android и Helios: проверки пройдены' : 'Android и Helios: проверки пройдены · APK собран · Lint пройден') : 'Есть ошибка проверки или сборки' };
   fs.writeFileSync(path.join(output, 'validation.json'), JSON.stringify(state, null, 2));
 }
 http.createServer((req, res) => {
@@ -54,6 +69,7 @@ http.createServer((req, res) => {
     return res.end(fs.readFileSync(path.join(root, 'public/overlay-preview.html')));
   }
   const name = url.pathname.slice(1);
+  if (name === 'overlay-handle.svg' || name === 'overlay-home.svg') { res.writeHead(200, {'Content-Type':'image/svg+xml'}); return fs.createReadStream(path.join(root, 'design', name)).pipe(res); }
   if (/^widget-overlay-(on|off|restored)\.png$/.test(name) && fs.existsSync(path.join(output, name))) {
     res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
     return fs.createReadStream(path.join(output, name)).pipe(res);

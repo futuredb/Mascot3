@@ -1,6 +1,5 @@
 package com.generativemascot.app.ui
 
-import android.util.Base64
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -14,6 +13,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -43,9 +47,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
@@ -72,6 +74,8 @@ import com.generativemascot.app.data.resolveMediaUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -86,11 +90,28 @@ import java.util.concurrent.TimeUnit
 fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, animationVideoUrl: String?,
     animationFrames: List<String>, animationFps: Int,
     animationVideoUrls: Map<String, String>, neutralFrameUrl: String?, active: Boolean = true,
+    portraitVisible: Boolean = active,
     openCapabilities: Boolean = false, onCapabilitiesOpened: () -> Unit = {},
     openBehavior: Boolean = false, onBehaviorOpened: () -> Unit = {}, onBack: () -> Unit) {
     val context = LocalContext.current
     val historyStore = remember { ChatHistoryStore(context) }
-    val messages = remember(mascotId) { mutableStateListOf<ChatMessage>().apply { addAll(historyStore.read(mascotId)) } }
+    val profanityStore = remember { ChatProfanityStore(context) }
+    val interactionPreferences = remember { context.getSharedPreferences("mascot_chat_interaction", Context.MODE_PRIVATE) }
+    val portraitPreferences = remember { context.getSharedPreferences("mascot_chat_portrait", Context.MODE_PRIVATE) }
+    val streamPreferences = remember { context.getSharedPreferences("mascot_stream", Context.MODE_PRIVATE) }
+    var streamEnabled by remember { mutableStateOf(streamPreferences.getBoolean("enabled", true)) }
+    var largeChatPortrait by remember(mascotId) { mutableStateOf(portraitPreferences.getBoolean(mascotId, false)) }
+    val messages = remember(mascotId) { mutableStateListOf<ChatMessage>().apply {
+        addAll(initialChatMessages(historyStore.read(mascotId), interactionPreferences.contains(mascotId), heroName))
+    } }
+    var profanityEnabled by remember(mascotId) {
+        mutableStateOf(profanityStore.read(mascotId) ?: messages
+            .filter { it.user && !it.capabilities && !it.interactionSetup }
+            .fold(false) { mode, message -> requestedChatProfanity(message.text) ?: mode })
+    }
+    LaunchedEffect(mascotId, active) {
+        if (active && messages.any { it.interactionSetup } && historyStore.read(mascotId).isEmpty()) historyStore.write(mascotId, messages)
+    }
     LaunchedEffect(active, openCapabilities, mascotId) {
         if (active && openCapabilities) {
             if (messages.lastOrNull()?.capabilities != true) {
@@ -100,13 +121,20 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             onCapabilitiesOpened()
         }
     }
-    val service = remember(mascotId, heroName) { DirectMascotChat(heroName, com.generativemascot.app.data.HeroLocalStore.current?.characterChoice(mascotId)?.let { choice ->
+    val openRouterApiKey = (context.applicationContext as com.generativemascot.app.MascotApp)
+        .openRouterSettings.apiKey().orEmpty()
+    val service = remember(mascotId, heroName, openRouterApiKey) { DirectMascotChat(heroName, com.generativemascot.app.data.HeroLocalStore.current?.characterChoice(mascotId)?.let { choice ->
         com.generativemascot.app.data.characterPersonalityById(choice.style)?.tone
-    }, messages.toList(), com.generativemascot.app.data.HeroLocalStore.current?.baseFile(mascotId)) }
+    }, messages.toList(), com.generativemascot.app.data.HeroLocalStore.current?.baseFile(mascotId),
+        apiKey = openRouterApiKey, initialProfanityMode = profanityEnabled,
+        onProfanityModeChanged = { enabled -> profanityEnabled = enabled; profanityStore.write(mascotId, enabled) },
+        moodPreferences = context.getSharedPreferences("mascot_chat_mood", Context.MODE_PRIVATE),
+        moodKey = mascotId) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val interactionPreferences = remember { context.getSharedPreferences("mascot_chat_interaction", Context.MODE_PRIVATE) }
     var interactionId by remember(mascotId) { mutableStateOf(interactionPreferences.getString(mascotId, "request_guidance") ?: "request_guidance") }
+    var onboardingChoice by remember(mascotId) { mutableIntStateOf(1) }
+    val choosingInteraction = messages.any { it.interactionSetup }
     var showInteractionSettings by remember { mutableStateOf(false) }
     var showInteractionScreen by remember(mascotId) { mutableStateOf(false) }
     LaunchedEffect(active, openBehavior, mascotId) {
@@ -119,17 +147,90 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     val calendarPreferences = remember { context.getSharedPreferences("mascot_calendar", Context.MODE_PRIVATE) }
     var calendarEnabled by remember { mutableStateOf(calendarPreferences.getBoolean("enabled", false) &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) }
+    LaunchedEffect(active, mascotId, interactionId, calendarEnabled) {
+        if (active) com.generativemascot.app.worker.configureCalendarReminders(context, calendarEnabled, interactionId)
+    }
+    var pendingCalendarEvent by remember(mascotId) { mutableStateOf<CalendarEventRequest?>(null) }
+    var calendarChoices by remember(mascotId) { mutableStateOf<List<WritableGoogleCalendar>>(emptyList()) }
+    val writeCalendarEvent: (CalendarEventRequest, Long) -> Unit = { event, selectedCalendarId ->
+        scope.launch {
+            val result = try { createGoogleCalendarEvent(context, event, selectedCalendarId) }
+                catch (_: Exception) { "Не удалось создать событие. Проверь разрешения и подключение Google Calendar." }
+            messages.add(ChatMessage(false, result))
+            historyStore.write(mascotId, messages)
+        }
+    }
+    val chooseCalendar: (CalendarEventRequest) -> Unit = { event ->
+        scope.launch {
+            val calendars = try { writableGoogleCalendars(context) } catch (_: Exception) { emptyList() }
+            val saved = calendarPreferences.getLong("write_calendar_id", -1)
+            val selected = calendars.singleOrNull { it.id == saved } ?: calendars.singleOrNull()
+            when {
+                selected != null -> writeCalendarEvent(event, selected.id)
+                calendars.isNotEmpty() -> { pendingCalendarEvent = event; calendarChoices = calendars }
+                else -> {
+                    messages.add(ChatMessage(false, "Не нашёл доступный для записи Google-календарь. Проверь подключение и синхронизацию."))
+                    historyStore.write(mascotId, messages)
+                }
+            }
+        }
+    }
+    val calendarWritePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val event = pendingCalendarEvent
+        pendingCalendarEvent = null
+        if (granted && event != null && calendarEnabled && interactionId == "proactive_solutions") chooseCalendar(event)
+        else if (event != null) {
+            messages.add(ChatMessage(false, "Для создания события нужен доступ к записи в календарь. Событие не создано."))
+            historyStore.write(mascotId, messages)
+        }
+    }
+    if (calendarChoices.isNotEmpty()) AlertDialog(
+        onDismissRequest = { calendarChoices = emptyList(); pendingCalendarEvent = null },
+        title = { Text("Выбери календарь", fontFamily = SbSansDisplayMedium) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                calendarChoices.forEach { calendar ->
+                    Column(Modifier.fillMaxWidth().clickable {
+                        val event = pendingCalendarEvent
+                        pendingCalendarEvent = null; calendarChoices = emptyList()
+                        if (event != null && calendarEnabled && interactionId == "proactive_solutions") {
+                            calendarPreferences.edit().putLong("write_calendar_id", calendar.id).apply()
+                            writeCalendarEvent(event, calendar.id)
+                        }
+                    }.padding(vertical = 10.dp)) {
+                        Text(calendar.name, fontFamily = SbSansDisplayMedium)
+                        if (calendar.account.isNotBlank()) Text(calendar.account, fontFamily = SbSansTextRegular, fontSize = 13.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { calendarChoices = emptyList(); pendingCalendarEvent = null }) { Text("Отмена") } },
+    )
     var showCalendarConsent by remember { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val enableReminders: (String) -> Unit = { mode ->
+        if (calendarEnabled && mode in setOf("proactive_solutions", "proactive_guidance") && android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     val calendarPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         calendarEnabled = granted
         calendarPreferences.edit().putBoolean("enabled", granted).apply()
+        if (granted) enableReminders(interactionId)
         if (!granted) Toast.makeText(context, "Доступ к календарю не предоставлен", Toast.LENGTH_SHORT).show()
     }
-    if (showCalendarConsent) AlertDialog(onDismissRequest = { showCalendarConsent = false },
-        title = { Text("Подключить Google Calendar?", fontFamily = SbSansDisplayMedium) },
-        text = { Text("Приложение сможет читать Google-календари, синхронизированные на телефоне. При вопросах о календаре до 30 ближайших событий за 14 дней будут передаваться в OpenRouter для ответа. Другие календари не используются.") },
-        confirmButton = { TextButton(onClick = { showCalendarConsent = false; calendarPermission.launch(Manifest.permission.READ_CALENDAR) }) { Text("Продолжить") } },
-        dismissButton = { TextButton(onClick = { showCalendarConsent = false }) { Text("Отмена") } })
+    if (showCalendarConsent) MascotConfirmationSheet(
+        title = "Подключить Google Calendar?",
+        message = "Персонаж сможет учитывать ближайшие события. В режиме «На шаг впереди» он сам добавит встречу с напоминанием за час, когда в сообщении указаны дата и время.",
+        confirmLabel = "Подключить",
+        onConfirm = {
+            showCalendarConsent = false
+            calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+        },
+        onDismiss = { showCalendarConsent = false },
+    )
     val interactionModes = com.generativemascot.app.data.interactionPersonalities
     if (showInteractionSettings) {
         AlertDialog(onDismissRequest = { showInteractionSettings = false },
@@ -146,6 +247,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                         Row(Modifier.fillMaxWidth().clickable {
                             interactionId = mode.id
                             interactionPreferences.edit().putString(mascotId, mode.id).apply()
+                            enableReminders(mode.id)
                             showInteractionSettings = false
                         }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = mode.id == interactionId, onClick = null)
@@ -160,6 +262,14 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             confirmButton = { TextButton(onClick = { showInteractionSettings = false }) { Text("Закрыть") } })
     }
     var draft by remember(mascotId) { mutableStateOf("") }
+    var typingRevision by remember(mascotId) { mutableIntStateOf(0) }
+    var userTyping by remember(mascotId) { mutableStateOf(false) }
+    LaunchedEffect(typingRevision) {
+        if (userTyping) {
+            delay(1_600)
+            userTyping = false
+        }
+    }
     var pendingImage by remember(mascotId) { mutableStateOf<String?>(null) }
     var loadingImage by remember(mascotId) { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -179,29 +289,105 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     var busy by remember(mascotId) { mutableStateOf(false) }
     var status by remember(mascotId) { mutableStateOf("") }
-    var video by remember(mascotId) { mutableStateOf<String?>(null) }
-    var incomingVideo by remember(mascotId) { mutableStateOf<String?>(null) }
-    val foreground = rememberAppResumed()
-    LaunchedEffect(incomingVideo, active, foreground) {
-        val pending = incomingVideo ?: return@LaunchedEffect
-        if (!active || !foreground) return@LaunchedEffect
-        delay(30_000)
-        if (incomingVideo == pending) { incomingVideo = null; status = "Не удалось загрузить реакцию. Повторной генерации нет." }
+    var streamingTarget by remember(mascotId) { mutableStateOf("") }
+    var streamingVisible by remember(mascotId) { mutableStateOf("") }
+    LaunchedEffect(busy, mascotId) {
+        while (busy) {
+            val target = streamingTarget
+            if (!target.startsWith(streamingVisible)) {
+                streamingVisible = if (streamingVisible.startsWith(target)) target else ""
+            }
+            if (streamingVisible.length < target.length) {
+                val remaining = target.codePointCount(streamingVisible.length, target.length)
+                val count = (2 + remaining / 45).coerceAtMost(8).coerceAtMost(remaining)
+                val end = target.offsetByCodePoints(streamingVisible.length, count)
+                streamingVisible = target.substring(0, end)
+            }
+            delay(24)
+        }
     }
+    val foreground = rememberAppResumed()
     val chatBackground = Color(0xFFEAEBEC)
     val helios = remember(mascotId) { HeliosPlayerController() }
+    val heroReference = remember(mascotId) { ChatHeroReferenceCache() }
+    var heliosRequestActive by remember(mascotId) { mutableStateOf(false) }
+    var heliosRequestSerial by remember(mascotId) { mutableIntStateOf(0) }
+    var heliosReplayReady by remember(mascotId) { mutableStateOf(false) }
     var heliosVisible by remember(mascotId) { mutableStateOf(false) }
+    var restartingPortrait by remember(mascotId) { mutableStateOf(false) }
+    var initialPortraitLoading by remember(mascotId) { mutableStateOf(false) }
     var heliosRunning by remember(mascotId) { mutableStateOf(false) }
+    // Helios mounts only for explicit custom animation requests, then shuts down.
+    var heliosFailures by remember(mascotId) { mutableIntStateOf(0) }
     var heliosReady by remember(mascotId) { mutableStateOf(false) }
-    // A return from an in-chat settings screen must not start a new paid session.
-    var idleSessionStarted by remember(mascotId) { mutableStateOf(false) }
-    LaunchedEffect(active) { if (!active) idleSessionStarted = false }
-    val activities = remember(mascotId) { HeroLocalStore.current?.chatActivityVideos(mascotId).orEmpty() }
+    var speakingStartedAt by remember(mascotId) { mutableStateOf<Long?>(null) }
+    var speakingUntil by remember(mascotId) { mutableStateOf(0L) }
+    LaunchedEffect(speakingUntil) {
+        if (speakingUntil > 0L) {
+            delay((speakingUntil - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+            speakingUntil = 0L
+        }
+    }
+    var waitingAnimation by remember(mascotId) { mutableStateOf<String?>(null) }
+    var showWaitingAnimation by remember(mascotId) { mutableStateOf(false) }
+    LaunchedEffect(busy, streamingTarget.isNotEmpty()) {
+        showWaitingAnimation = false
+        if (busy && streamingTarget.isEmpty()) {
+            delay(320)
+            showWaitingAnimation = true
+        }
+    }
+    val dialogueVideos = remember(mascotId, animationVideoUrls) {
+        HeroLocalStore.current?.chatActivityVideos(mascotId).orEmpty()
+            .filterKeys { it == "speaking" || it == "listening" || (it == "thinking" && it !in animationVideoUrls) }
+            .let { clips ->
+                val sway = HeroLocalStore.current?.chatActivityVideos(mascotId)?.get("idle-sway")
+                if (sway == null) clips else clips + ("chat_idle" to sway)
+            }
+    }
+    val chatVideoUrls = remember(animationVideoUrls, dialogueVideos) { animationVideoUrls + dialogueVideos }
+    val availableChatActions = remember(chatVideoUrls) {
+        chatVideoUrls.keys.map(HeroLocalStore::normalizeVideoAction).toSet()
+    }
+    val defaultChatAnimationAction = if ("chat_idle" in availableChatActions) "chat_idle"
+        else defaultHomeVideoAction(animationVideoUrls.keys)
+    val chatAnimationAction = when {
+        (busy && streamingTarget.isNotEmpty()) || speakingUntil > 0L ->
+            listOf("speaking", "watching", "idle").firstOrNull { it in availableChatActions }
+        busy && showWaitingAnimation -> listOf("thinking", waitingAnimation, "watching", "idle")
+            .filterNotNull().firstOrNull { it in availableChatActions }
+        userTyping -> listOf("listening", "watching").firstOrNull { it in availableChatActions }
+        else -> null
+    } ?: defaultChatAnimationAction
+    val keepHeliosWarm = streamEnabled && foreground && heliosRequestActive
+    val glitchPalette = remember(mascotId) {
+        HeroLocalStore.current?.creativeContract(mascotId)?.glitchPalette ?: when (mascotId) {
+            "716cdb43-703b-4d7e-8a79-27f03d92b99c" -> com.generativemascot.app.data.CharacterGlitchPalette("#F05C78", "#9655A8")
+            "9f226b89-df35-4d3a-9b36-96c28ea1bb62" -> com.generativemascot.app.data.CharacterGlitchPalette("#E65362", "#A99CFF")
+            "a83e9d30-1270-40e6-902c-b44774e84c17" -> com.generativemascot.app.data.CharacterGlitchPalette("#FFD34E", "#F28F3B")
+            else -> com.generativemascot.app.data.CharacterGlitchPalette("#FF806B", "#AAA0FF")
+        }
+    }
+    val portraitTransition = rememberChatGlitchTransition(mascotId, heliosVisible, portraitVisible && foreground, glitchPalette)
+    // Keep the outgoing frame until the glitch reaches its fully covered midpoint.
+    val mountHelios = keepHeliosWarm || (foreground && portraitVisible && portraitTransition.displayedHelios)
+    val drawHelios = mountHelios && portraitVisible && !showProfile && !showInteractionScreen
+    val referenceFile = HeroLocalStore.current?.baseFile(mascotId)
+    LaunchedEffect(helios, drawHelios) {
+        helios.setPortraitVisible(drawHelios)
+    }
     val listState = rememberLazyListState()
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+        if (messages.isNotEmpty() && !choosingInteraction) listState.scrollToItem(messages.lastIndex)
     }
-    if (active && !showProfile && !showInteractionScreen) MascotSystemBars(chatBackground, chatBackground)
+    LaunchedEffect(streamingVisible) {
+        if (streamingVisible.isNotEmpty() && !listState.isScrollInProgress) {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            if (lastVisible >= info.totalItemsCount - 2) listState.scrollToItem(messages.size)
+        }
+    }
+    if (portraitVisible && !showProfile && !showInteractionScreen) MascotSystemBars(chatBackground, chatBackground)
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(chatBackground)
         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
@@ -209,64 +395,152 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val messagesTop = MascotChatIdentityTop + MascotChatIdentitySize
         MascotChatIdentity(heroName, Modifier.padding(start = 20.dp, top = MascotChatIdentityTop).size(MascotChatIdentitySize)
-            .align(Alignment.TopStart).zIndex(1f), circleBackground = chatBackground,
-            onClick = { showInteractionScreen = true }) {
-            // The live source is a wide frame with generous margins around the mascot.
-            // Crop the same way for the still and the live player to avoid a size jump.
-            Box(Modifier.fillMaxSize().graphicsLayer { scaleX = 2.1f; scaleY = 2.1f }, contentAlignment = Alignment.Center) {
-            // Match the same framing used when the reference is sent to Helios.
-            val heroFile = remember(mascotId) { HeroLocalStore.current?.baseFile(mascotId) }
+            .align(Alignment.TopStart).zIndex(1f), circleBackground = chatBackground, showName = true,
+            onClickLabel = "На главный экран",
+            loading = streamEnabled && portraitVisible && foreground && initialPortraitLoading,
+            overlay = { ChatGlitchOverlay(
+                portraitTransition,
+                Modifier.fillMaxSize(),
+                loading = streamEnabled && portraitVisible && foreground && (initialPortraitLoading || restartingPortrait),
+            ) },
+            onClick = {
+                onBack()
+            }) {
+            val portraitScale = if (largeChatPortrait) {
+                if (mascotId == "cfbb8855-b0ab-4bdb-a4cc-d2360e16f174") 4.25f else 4f
+            } else 2.2f
+            // Match the prop scene framing in both portrait sizes.
+            val playbackScale = 1.45f / portraitScale
+            val portraitOffsetFraction = if (largeChatPortrait) .45f else .08f
             BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val portraitWidth = maxWidth * portraitScale
+            val portraitHeight = maxHeight * portraitScale
+            val portraitOffset = maxHeight * portraitOffsetFraction
+            Box(Modifier.requiredSize(portraitWidth, portraitHeight).offset(y = portraitOffset)
+                .graphicsLayer { alpha = portraitTransition.alpha },
+                contentAlignment = Alignment.Center) {
+            // Match the same framing used when the reference is sent to Helios.
+            var localFrameVisible by remember(mascotId) { mutableStateOf(false) }
+            val showLocalVideo = portraitVisible && foreground &&
+                (chatVideoUrls.isNotEmpty() || !animationVideoUrl.isNullOrBlank())
+            LaunchedEffect(showLocalVideo) { if (!showLocalVideo) localFrameVisible = false }
+            val stillAlpha by animateFloatAsState(
+                targetValue = if (portraitTransition.displayedHelios || (showLocalVideo && localFrameVisible)) 0f else 1f,
+                animationSpec = tween(220), label = "chat still transition",
+            )
+            BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer {
+                alpha = if (portraitTransition.displayedHelios) 0f else 1f
+            }, contentAlignment = Alignment.Center) {
                 val frameHeight = minOf(maxHeight, maxWidth * (576f / 1024f))
-                AsyncImage(model = heroFile ?: previewUrl, contentDescription = heroName,
+                AsyncImage(model = referenceFile ?: previewUrl, contentDescription = heroName,
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().height(frameHeight * (460f / 576f)))
+                    modifier = Modifier.fillMaxWidth().height(frameHeight * (460f / 576f))
+                        .graphicsLayer { alpha = stillAlpha })
+                if (showLocalVideo) {
+                    key(mascotId, animationVideoUrl, chatVideoUrls) {
+                        SoraMascotVideo(
+                            videoUrl = animationVideoUrl, videoUrls = chatVideoUrls,
+                            neutralFrameUrl = neutralFrameUrl,
+                            action = chatAnimationAction,
+                            modifier = Modifier.fillMaxWidth().height(frameHeight),
+                            onFirstFrame = { localFrameVisible = true },
+                            useNeutralTransitions = false,
+                            switchActionsPromptly = true,
+                            independentMatteActions = dialogueVideos.keys,
+                        )
+                    }
+                }
             }
-            if (active && foreground && !showProfile) {
-                HeliosPlayer(helios, mascotId, onEvent = { type, detail ->
+            if (mountHelios) {
+                HeliosPlayer(helios, mascotId, glitchPalette = glitchPalette, onEvent = { type, detail ->
                     when (type) {
-                        "ready" -> { heliosReady = true }
-                        "frame" -> { heliosVisible = true; status = "" }
-                        "replay" -> { heliosVisible = true }
-                        "status" -> status = detail
-                        "error" -> { status = detail; heliosVisible = false; heliosRunning = false }
-                        "archive-error" -> { status = detail }
-                        "stopped" -> { status = detail; heliosVisible = false; heliosRunning = false }
+                        "ready" -> heliosReady = true
+                        "idle_complete" -> heliosRunning = false
+                        "frame" -> if (!restartingPortrait) { heliosVisible = true; initialPortraitLoading = false; heliosFailures = 0; status = "" }
+                        "restart-frame" -> { heliosVisible = true; initialPortraitLoading = false; restartingPortrait = false; heliosFailures = 0; if (!busy) status = "" }
+                        "replay" -> { heliosReplayReady = true; heliosVisible = true; restartingPortrait = false; initialPortraitLoading = false }
+                        // Provider progress is not useful in the chat. Keep it
+                        // in diagnostics rather than showing transport details.
+                        "status" -> Unit
+                        "error" -> {
+                            helios.invalidate(); heliosRequestActive = false; status = "Не удалось оживить персонажа. Проверь интернет и попробуй ещё раз."; heliosVisible = false; restartingPortrait = false; initialPortraitLoading = false
+                            if (heliosRunning) heliosFailures++
+                            heliosRunning = false
+                        }
+                        "archive-error" -> { status = "Не удалось сохранить анимацию." }
+                        "stopped" -> {
+                            helios.invalidate(); heliosRequestActive = false; status = if (detail.isBlank()) "" else "Не удалось оживить персонажа. Попробуй ещё раз."; restartingPortrait = false; initialPortraitLoading = false
+                            if (heliosRunning) heliosFailures++
+                            heliosRunning = false
+                            heliosVisible = false
+                        }
                     }
-                }, modifier = Modifier.fillMaxSize())
+                }, modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = playbackScale
+                    scaleY = playbackScale
+                    translationY = -size.height * portraitOffsetFraction / portraitScale
+                    alpha = if (portraitTransition.displayedHelios) 1f else 0f
+                })
             }
             }
-        }
-        LaunchedEffect(active, foreground, showProfile) {
-            if (!active || !foreground || showProfile) { helios.shutdown(); heliosReady = false; heliosVisible = false; heliosRunning = false }
-        }
-        LaunchedEffect(showInteractionScreen) {
-            // Settings are still inside the chat: stop billing but keep the recorded replay/player alive.
-            if (showInteractionScreen && heliosRunning) helios.stop()
-        }
-        LaunchedEffect(active, foreground, heliosReady, showProfile, showInteractionScreen) {
-            if (active && foreground && !showProfile && !showInteractionScreen && heliosReady && !heliosRunning && !idleSessionStarted) {
-                try {
-                    val file = HeroLocalStore.current?.baseFile(mascotId) ?: return@LaunchedEffect
-                    val image = withContext(Dispatchers.IO) { "data:image/png;base64," + Base64.encodeToString(file.readBytes(), Base64.NO_WRAP) }
-                    val appearance = withContext(Dispatchers.IO) { com.generativemascot.app.data.CharacterAppearance.read(file).orEmpty() }
-                    if (helios.react(image, "The character is calmly breathing, blinking, and gently looking around while waiting.", appearance = appearance)) {
-                        heliosRunning = true
-                        idleSessionStarted = true
-                    }
-                } catch (e: Exception) { status = e.message ?: "Не удалось подготовить персонажа." }
             }
         }
-        LazyColumn(
+        LaunchedEffect(mountHelios) {
+            if (!mountHelios) {
+                heliosRequestActive = false
+                helios.shutdown(); heliosReady = false; heliosVisible = false; heliosRunning = false; restartingPortrait = false; initialPortraitLoading = false
+                heliosFailures = 0
+            } else if (!heliosVisible) initialPortraitLoading = true
+        }
+        LaunchedEffect(heliosRequestSerial, heliosReplayReady) {
+            if (heliosRequestSerial == 0 || heliosReplayReady) return@LaunchedEffect
+            val request = heliosRequestSerial
+            delay(45_000)
+            if (request == heliosRequestSerial && heliosRequestActive) {
+                helios.shutdown()
+                heliosRequestActive = false
+                heliosReady = false
+                heliosVisible = false
+                heliosRunning = false
+                restartingPortrait = false
+                initialPortraitLoading = false
+            }
+        }
+        LaunchedEffect(restartingPortrait) {
+            if (restartingPortrait) {
+                delay(45_000)
+                helios.shutdown(); restartingPortrait = false; heliosVisible = false; heliosRunning = false
+                heliosFailures++; status = "Не удалось запустить новую анимацию."
+            }
+        }
+        LaunchedEffect(initialPortraitLoading) {
+            if (initialPortraitLoading) {
+                delay(45_000)
+                initialPortraitLoading = false
+            }
+        }
+        if (choosingInteraction) {
+            ChatInteractionOnboarding(heroName = heroName, choice = onboardingChoice,
+                onChoice = { onboardingChoice = it }, onSave = {
+                    val index = onboardingChoice.coerceIn(interactionModes.indices)
+                    interactionId = interactionModes[index].id
+                    interactionPreferences.edit().putString(mascotId, interactionId).apply()
+                    enableReminders(interactionId)
+                    val position = messages.indexOfFirst { it.interactionSetup }
+                    if (position >= 0) messages[position] = ChatMessage(false,
+                        "Ты выбрал настройку «${interactionDisplayTitles[index]}». Её всегда можно изменить в разделе «Поведение и доступы» в настройках на главном экране.")
+                    historyStore.write(mascotId, messages)
+                }, modifier = Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp,
+                    top = messagesTop + 20.dp, bottom = 20.dp))
+        } else LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize()
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
                     drawContent()
                     val fadeHeight = 28.dp.toPx().coerceAtMost(size.height)
                     if (fadeHeight > 0f) drawRect(
-                        brush = Brush.verticalGradient(listOf(Color.Transparent, Color.Black), endY = fadeHeight),
-                        size = Size(size.width, fadeHeight), blendMode = BlendMode.DstIn,
+                        brush = Brush.verticalGradient(listOf(chatBackground, Color.Transparent), endY = fadeHeight),
+                        size = Size(size.width, fadeHeight),
                     )
                 },
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = messagesTop + 12.dp, bottom = 12.dp),
@@ -282,6 +556,9 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 if (item.capabilities) {
                     ChatCapabilitiesCard(calendarEnabled, onCalendarChange = { enabled ->
                         if (enabled) showCalendarConsent = true else { calendarEnabled = false; calendarPreferences.edit().putBoolean("enabled", false).apply() }
+                    }, profanityEnabled = profanityEnabled, onProfanityChange = { enabled ->
+                        profanityEnabled = enabled
+                        service.setProfanityEnabled(enabled)
                     })
                 } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (item.user) Arrangement.End else Arrangement.Start) {
@@ -306,17 +583,39 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 }
                 }
             }
+            if (streamingVisible.isNotEmpty()) item(key = "streaming_reply") {
+                Text(streamingVisible, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp,
+                    letterSpacing = (-0.35).sp, color = FigmaInk)
+            }
         }
         }
-        if (heliosRunning) TextButton(onClick = { helios.stop(); heliosVisible = false; heliosRunning = false; status = "Останавливаем поток…" }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Остановить Helios", color = FigmaInk) }
-        if (status.isNotBlank()) Text(status, fontFamily = SbSansDisplayMedium, fontSize = 12.sp, color = FigmaInk.copy(alpha = .72f), modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        val visibleStatus = if (keepHeliosWarm && !heliosReplayReady && status.isBlank()) {
+            if (heliosVisible) "Записывает анимацию…" else "Готовит анимацию…"
+        } else if (busy && streamingTarget.isEmpty() && (status.isBlank() || status == "Думает")) "Думает" else status
+        if (!choosingInteraction && visibleStatus.isNotBlank()) {
+            val alpha = if (visibleStatus == "Думает") {
+                val transition = rememberInfiniteTransition(label = "thinking")
+                val opacity by transition.animateFloat(.42f, .78f,
+                    animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "thinking opacity")
+                opacity
+            } else .72f
+            Text(visibleStatus, fontFamily = SbSansDisplayMedium, fontSize = 12.sp,
+                color = FigmaInk.copy(alpha = alpha), modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
         pendingImage?.let { path ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(model = java.io.File(path), contentDescription = "Выбранное изображение", contentScale = ContentScale.Crop, modifier = Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)))
                 TextButton(onClick = { pendingImage = null }) { Text("Убрать", color = FigmaInk) }
             }
         }
-        MascotChatComposer(value = draft, onValueChange = { if (it.length <= 1500) draft = it }, busy = busy || incomingVideo != null || loadingImage, hasImage = pendingImage != null,
+        if (!choosingInteraction) MascotChatComposer(value = draft, onValueChange = { next ->
+            if (next.length <= 1500 && next != draft) {
+                draft = next
+                userTyping = next.isNotBlank()
+                typingRevision++
+            }
+        }, busy = busy || restartingPortrait || loadingImage, hasImage = pendingImage != null,
             onAttachment = { imagePicker.launch("image/*") },
             onVoice = {
                 try {
@@ -325,54 +624,170 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             }, onSend = send@{
                 val text = draft.trim()
                 val selectedImage = pendingImage
-                if (busy || loadingImage || incomingVideo != null || (text.isEmpty() && selectedImage == null)) return@send
+                if (choosingInteraction || busy || restartingPortrait || loadingImage || (text.isEmpty() && selectedImage == null)) return@send
+                speakingStartedAt = null
+                speakingUntil = 0L
+                waitingAnimation = chatAnimationForMessage(text, selectedImage != null, chatVideoUrls.keys)
+                heliosReplayReady = false
+                heliosVisible = false
+                heliosRequestActive = false
+                heliosRequestSerial++
+                userTyping = false
                 draft = ""; pendingImage = null; messages.add(ChatMessage(true, text, selectedImage)); historyStore.write(mascotId, messages)
                 if (selectedImage == null && isCalendarConnectionRequest(text)) {
                     messages.add(ChatMessage(false, "", capabilities = true)); historyStore.write(mascotId, messages); return@send
                 }
-                busy = true; status = "ИИ готовит ответ…"
+                streamingTarget = ""; streamingVisible = ""
+                busy = true; restartingPortrait = false; status = "Думает"
+                android.util.Log.i("MascotHeliosTiming", "request-sent")
                 scope.launch {
                     var answered = false
                     try {
-                        val calendar = if (calendarEnabled && isCalendarQuestion(text) &&
-                            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
-                            readUpcomingGoogleCalendar(context) else null
-                        val result = service.send(text, interactionModes.firstOrNull { it.id == interactionId }?.tone, calendar, selectedImage)
-                        messages.add(ChatMessage(false, result.getString("reply")))
-                        historyStore.write(mascotId, messages)
-                        answered = true
-                        val file = HeroLocalStore.current?.baseFile(mascotId) ?: throw IllegalStateException("Не найдено изображение персонажа.")
-                        val image = withContext(Dispatchers.IO) { "data:image/png;base64," + Base64.encodeToString(file.readBytes(), Base64.NO_WRAP) }
-                        if (!active || !foreground) throw IllegalStateException("Чат закрыт до запуска реакции.")
-                        if (!helios.react(image, result.getString("reaction"), text, result.optString("appearance"))) throw IllegalStateException("Плеер Helios ещё не готов. Попробуй ещё раз.")
-                        heliosRunning = true
-                        status = "Подключаем Helios…"
+                        supervisorScope {
+                            val answer = async {
+                                val calendar = if (calendarEnabled && isCalendarQuestion(text) &&
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
+                                    readUpcomingGoogleCalendar(context) else null
+                                service.send(text, interactionModes.firstOrNull { it.id == interactionId }?.tone, calendar, selectedImage, interactionId) { partial ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        if (partial.isNotEmpty() && speakingStartedAt == null) {
+                                            speakingStartedAt = android.os.SystemClock.elapsedRealtime()
+                                        }
+                                        streamingTarget = partial
+                                        if (status == "Думает") status = ""
+                                    }
+                                }
+                            }
+                            val result = answer.await()
+                            val reply = result.getString("reply")
+                            if (streamEnabled && result.optBoolean("custom_animation")) launch {
+                                try {
+                                    val file = HeroLocalStore.current?.baseFile(mascotId) ?: return@launch
+                                    val reference = heroReference.read(file)
+                                    val contextText = text.ifBlank { "Custom mascot reaction" }
+                                    heliosRequestActive = true
+                                    restartingPortrait = true
+                                    heliosRequestSerial++
+                                    var waitedMs = 0
+                                    while (heliosRequestActive && !helios.ready && waitedMs < 6_000) {
+                                        delay(40)
+                                        waitedMs += 40
+                                    }
+                                    if (heliosRequestActive && helios.ready) {
+                                        heliosRunning = helios.restart(
+                                            reference.image, result.getString("reaction"), contextText,
+                                            result.optString("appearance").ifBlank { reference.appearance }, reply,
+                                        )
+                                    } else {
+                                        heliosRequestActive = false
+                                        restartingPortrait = false
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    heliosRequestActive = false
+                                    restartingPortrait = false
+                                    status = "Не удалось оживить персонажа. Попробуй ещё раз."
+                                }
+                            }
+                            val characters = reply.codePointCount(0, reply.length)
+                            val speechDuration = (characters * 1_000L / 18).coerceIn(1_200L, 30_000L)
+                            speakingUntil = (speakingStartedAt ?: android.os.SystemClock.elapsedRealtime()) + speechDuration
+                            android.util.Log.i("MascotPlayback", "speech characters=$characters plannedMs=$speechDuration")
+                            streamingTarget = reply
+                            while (streamingVisible != streamingTarget) delay(24)
+                            streamingVisible = ""; streamingTarget = ""
+                            messages.add(ChatMessage(false, reply))
+                            historyStore.write(mascotId, messages)
+                            answered = true
+                            if (status == "Думает") status = ""
+                            result.optJSONObject("calendar_event")?.let { raw ->
+                                val event = parseCalendarEvent(raw)
+                                when {
+                                    interactionId != "proactive_solutions" -> {
+                                        messages.add(ChatMessage(false, "Режим общения изменился, поэтому событие не создано."))
+                                        historyStore.write(mascotId, messages)
+                                    }
+                                    event == null -> {
+                                        messages.add(ChatMessage(false, "Не удалось определить точное время события. Уточни дату и время."))
+                                        historyStore.write(mascotId, messages)
+                                    }
+                                    !calendarEnabled -> {
+                                        messages.add(ChatMessage(false, "Чтобы создать событие, сначала подключи Google Calendar, затем повтори просьбу."))
+                                        messages.add(ChatMessage(false, "", capabilities = true))
+                                        historyStore.write(mascotId, messages)
+                                    }
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED -> chooseCalendar(event)
+                                    else -> {
+                                        pendingCalendarEvent = event
+                                        calendarWritePermission.launch(Manifest.permission.WRITE_CALENDAR)
+                                    }
+                                }
+                            }
+                        }
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) {
+                        restartingPortrait = false
+                        if (!answered && streamingVisible.isNotBlank()) {
+                            messages.add(ChatMessage(false, streamingVisible + "\n\nОтвет прерван."))
+                            historyStore.write(mascotId, messages)
+                            answered = true
+                        }
                         if (!answered) {
                             if (messages.lastOrNull()?.let { it.user && it.text == text } == true) messages.removeAt(messages.lastIndex)
                             historyStore.write(mascotId, messages)
                             if (draft.isBlank()) draft = text
                             if (pendingImage == null) pendingImage = selectedImage
                         }
-                        status = e.message ?: "Нет связи с сервером. Автоповтора нет."
+                        status = friendlyChatError(e.message)
                     }
-                    finally { busy = false }
+                    finally {
+                        busy = false
+                        streamingVisible = ""; streamingTarget = ""
+                        if (status == "Думает") status = ""
+                    }
                 }
             })
     }
     AnimatedVisibility(visible = showInteractionScreen, modifier = Modifier.fillMaxSize(),
         enter = fadeIn(tween(220)), exit = fadeOut(tween(220))) {
-        ChatInteractionScreen(mascotId = mascotId, heroName = heroName, previewUrl = previewUrl,
-            selectedIndex = interactionModes.indexOfFirst { it.id == interactionId }.coerceAtLeast(0),
-            onSave = { index ->
+        ChatInteractionScreen(selectedIndex = interactionModes.indexOfFirst { it.id == interactionId }.coerceAtLeast(0),
+            largePortrait = largeChatPortrait,
+            calendarEnabled = calendarEnabled,
+            profanityEnabled = profanityEnabled,
+            onProfanityChange = { enabled ->
+                profanityEnabled = enabled
+                service.setProfanityEnabled(enabled)
+            },
+            overlayStreamEnabled = context.getSharedPreferences("mascot_overlay", Context.MODE_PRIVATE).getBoolean("stream_enabled", false),
+            streamEnabled = streamEnabled,
+            onCalendarChange = { enabled ->
+                if (enabled) showCalendarConsent = true
+                else { calendarEnabled = false; calendarPreferences.edit().putBoolean("enabled", false).apply() }
+            },
+            onSave = { index, largePortrait, overlayStream, stream ->
+                streamPreferences.edit().putBoolean("enabled", stream).apply()
+                streamEnabled = stream
+                if (!stream) { heliosRequestActive = false; helios.shutdown(); heliosVisible = false; heliosRunning = false; heliosReady = false; restartingPortrait = false; initialPortraitLoading = false }
+                context.getSharedPreferences("mascot_overlay", Context.MODE_PRIVATE).edit().putBoolean("stream_enabled", overlayStream).apply()
+                largeChatPortrait = largePortrait
+                portraitPreferences.edit().putBoolean(mascotId, largePortrait).apply()
                 val id = interactionModes[index].id
+                if (index == 0 || index == 2) {
+                    calendarEnabled = false
+                    calendarPreferences.edit().putBoolean("enabled", false).apply()
+                }
                 if (id != interactionId) {
                     interactionId = id
                     interactionPreferences.edit().putString(mascotId, id).apply()
+                    enableReminders(id)
                 }
                 showInteractionScreen = false
-            }, onBack = { showInteractionScreen = false })
+                onBack()
+            }, onBack = {
+                showInteractionScreen = false
+                onBack()
+            })
     }
     if (showProfile) {
         val mode = interactionModes.firstOrNull { it.id == interactionId } ?: interactionModes.first()
@@ -383,17 +798,112 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
 }
 
+private fun friendlyChatError(detail: String?): String = when {
+    detail?.contains("недостаточно средств", ignoreCase = true) == true ->
+        "Не удалось ответить. Проверь баланс и попробуй ещё раз."
+    detail?.contains("ключ", ignoreCase = true) == true ->
+        "Не удалось ответить. Проверь настройки и попробуй ещё раз."
+    detail?.contains("слишком большое", ignoreCase = true) == true ->
+        "Изображение слишком большое или недоступно. Выбери другое."
+    detail?.contains("временно занят", ignoreCase = true) == true ->
+        "Сейчас не получается ответить. Попробуй чуть позже."
+    detail?.contains("прервал", ignoreCase = true) == true ->
+        "Ответ прервался. Попробуй ещё раз."
+    else -> "Не удалось получить ответ. Проверь интернет и попробуй ещё раз."
+}
+
+internal fun shouldAutoStartHelios(keepWarm: Boolean, ready: Boolean, running: Boolean): Boolean =
+    keepWarm && ready && !running
+
+/** Cap retry traffic and costs when the service or network is unavailable. */
+internal fun heliosRetryDelayMillis(failures: Int): Long = when (failures.coerceAtLeast(0)) {
+    0 -> 0L
+    1 -> 5_000L
+    2 -> 10_000L
+    3 -> 20_000L
+    4 -> 40_000L
+    else -> 60_000L
+}
+
 @Composable
-private fun ChatCapabilitiesCard(calendarEnabled: Boolean, onCalendarChange: (Boolean) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+private fun ChatInteractionOnboarding(heroName: String, choice: Int, onChoice: (Int) -> Unit, onSave: () -> Unit, modifier: Modifier = Modifier) {
+    val index = choice.coerceIn(0, 3)
+    BoxWithConstraints(modifier) {
+    // The Figma field is 353 x 315 dp. It occupies the full content width on the
+    // 393 dp artboard (20 dp page margins) and must not be compacted independently.
+    val fieldWidth = maxWidth.coerceAtMost(353.dp)
+    val fieldHeight = fieldWidth * (315f / 353f)
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Привет! Рад познакомиться. Я $heroName.", fontFamily = SbSansTextRegular,
+            fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Давай выберем, как будем общаться?", fontFamily = SbSansDisplayMedium,
+                fontSize = 18.sp, lineHeight = 22.sp, letterSpacing = (-0.45).sp, color = FigmaInk)
+            Text("Я могу сам сообщать о важном или ждать, когда тебе понадобится помощь.",
+                fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
+        }
+        Box(
+            Modifier
+                .align(Alignment.CenterHorizontally)
+                .width(fieldWidth)
+                .height(fieldHeight)
+        ) {
+            InteractionPersonalityField(index, onChoice, Modifier.fillMaxSize())
+            Text("Готовлю решения", modifier = Modifier.align(Alignment.TopCenter).padding(top = 15.dp),
+                fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.White.copy(alpha = .55f))
+            Text("Проактивно", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)
+                .graphicsLayer { rotationZ = -90f }, fontFamily = SbSansTextMedium, fontSize = 11.sp,
+                maxLines = 1, color = Color.White.copy(alpha = .55f))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(interactionDisplayTitles[index], fontFamily = SbSansDisplayMedium, fontSize = 18.sp, color = FigmaInk)
+            Text(interactionDescriptions[index].replace('\n', ' '), fontFamily = SbSansTextRegular,
+                fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
+        }
+        Spacer(Modifier.weight(1f))
+        Button(onClick = onSave, modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(24.dp), colors = ButtonDefaults.buttonColors(containerColor = FigmaInk)) {
+            Text("Сохранить", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = Color.White)
+        }
+    }
+    }
+}
+
+@Composable
+internal fun ChatCapabilitiesCard(calendarEnabled: Boolean, onCalendarChange: (Boolean) -> Unit,
+    profanityEnabled: Boolean, onProfanityChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier, controlsEnabled: Boolean = true) {
+    val controlsAlpha by animateFloatAsState(if (controlsEnabled) 1f else .36f,
+        animationSpec = tween(160), label = "integration controls")
+    Column(modifier.fillMaxWidth().padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Давай расширим мои возможности", fontFamily = SbSansDisplayMedium, fontSize = 18.sp, color = FigmaInk)
-            Text("Выбери, к чему дать доступ, и я смогу следить за здоровьем и планировать твой день", fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
+            Text("Подключи календарь, чтобы я мог помогать планировать твой день", fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
+            if (!controlsEnabled) Text("Доступно в режимах, где герой действует проактивно.",
+                fontFamily = SbSansTextMedium, fontSize = 12.sp, lineHeight = 16.sp,
+                color = FigmaInk.copy(alpha = .5f))
         }
-        Column(Modifier.fillMaxWidth().border(1.dp, Color(0xFFE0E1E5), RoundedCornerShape(30.dp)).padding(16.dp),
+        Column(Modifier.fillMaxWidth().graphicsLayer { alpha = controlsAlpha }
+            .border(1.dp, Color(0xFFE0E1E5), RoundedCornerShape(30.dp)).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            ChatCapability(R.drawable.chat_whoop, "Whoop", "Подключение пока недоступно", false, null)
-            ChatCapability(R.drawable.chat_google_calendar, "Google Calendar", "Поможет планировать дела", calendarEnabled, onCalendarChange)
+            ChatCapability(R.drawable.chat_google_calendar, "Google Calendar", "Поможет планировать дела",
+                calendarEnabled && controlsEnabled, if (controlsEnabled) onCalendarChange else null)
+        }
+        Row(Modifier.fillMaxWidth().border(1.dp, Color(0xFFE0E1E5), RoundedCornerShape(24.dp))
+            .toggleable(value = profanityEnabled, role = androidx.compose.ui.semantics.Role.Switch,
+                onValueChange = onProfanityChange)
+            .padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("+18 ответы", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = FigmaInk)
+                Text("Маскот будет использовать мат в ответах", fontFamily = SbSansTextMedium,
+                    fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
+            }
+            Spacer(Modifier.width(12.dp))
+            Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
+                .background(if (profanityEnabled) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
+                contentAlignment = if (profanityEnabled) Alignment.CenterEnd else Alignment.CenterStart) {
+                Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
+            }
         }
     }
 }
@@ -417,22 +927,6 @@ private fun ChatCapability(icon: Int, title: String, description: String, enable
 }
 
 @Composable
-private fun ChatIdleMascot(mascotId: String, heroName: String, previewUrl: String?, animationVideoUrl: String?,
-    animationFrames: List<String>, animationFps: Int, animationVideoUrls: Map<String, String>, neutralFrameUrl: String?, active: Boolean) {
-    if (animationVideoUrls.isNotEmpty() || animationVideoUrl != null) {
-        val interaction = remember(mascotId) { PuppetInteraction() }
-        PhysicsMascot(mascotId = mascotId, videoUrls = animationVideoUrls, neutralFrameUrl = neutralFrameUrl,
-            action = "idle", interaction = interaction, onAnimationVisible = null, onOneShotFinished = null,
-            modifier = Modifier.fillMaxSize().padding(10.dp)) {
-            SoraMascotVideo(videoUrl = animationVideoUrl, videoUrls = animationVideoUrls,
-                neutralFrameUrl = neutralFrameUrl, action = "idle", modifier = Modifier.fillMaxSize())
-        }
-    } else PngSequence(frames = animationFrames, fps = animationFps, decodeSize = 500, fallback = previewUrl,
-        mascotIdHint = mascotId, puppetAction = "content", contentDescription = heroName,
-        modifier = Modifier.fillMaxSize().padding(10.dp), playbackEnabled = active)
-}
-
-@Composable
 private fun MascotChatComposer(value: String, onValueChange: (String) -> Unit, busy: Boolean, hasImage: Boolean,
     onAttachment: () -> Unit, onVoice: () -> Unit, onSend: () -> Unit) {
     val canSend = !busy && (value.isNotBlank() || hasImage)
@@ -440,7 +934,7 @@ private fun MascotChatComposer(value: String, onValueChange: (String) -> Unit, b
     val expanded = focused || value.isNotBlank() || hasImage
     val shape = RoundedCornerShape(if (expanded) 20.dp else 26.dp)
     val addButton: @Composable () -> Unit = {
-        IconButton(onClick = onAttachment, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onAttachment, enabled = !busy, modifier = Modifier.size(36.dp)) {
             Icon(painterResource(R.drawable.ic_chat_plus_figma), "Прикрепить изображение", tint = FigmaInk, modifier = Modifier.size(24.dp))
         }
     }
