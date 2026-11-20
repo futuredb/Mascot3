@@ -33,9 +33,9 @@ class StateResolverTest {
         WeatherObservation(at, temp, cloud, "test", rain, windGust = gust, fog = fog, thunderstorm = storm)
     private fun health(at: Long = now) = HealthSnapshot(healthDataUpdatedAt = at)
 
-    @Test fun allSeventeenIdsHaveUniqueExistingActions() {
-        assertEquals(17, all.size)
-        assertEquals(com.generativemascot.app.data.HeroLocalStore.LIBRARY_VIDEO_ACTIONS.toSet(), all)
+    @Test fun behaviorStatesHaveUniqueLegacyVideoActions() {
+        assertEquals(PetState.entries.size, all.size)
+        assertEquals(com.generativemascot.app.data.HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS.toSet(), all)
     }
     @Test fun noExternalDataWorksWithTimeOnly() {
         val r = resolve()

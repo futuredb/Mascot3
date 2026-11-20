@@ -41,7 +41,7 @@ import com.generativemascot.app.data.MascotDto
 import com.generativemascot.app.ui.AppViewModel
 import com.generativemascot.app.ui.AnimationLibraryScreen
 import com.generativemascot.app.ui.PersonalityGenerationScene
-import com.generativemascot.app.ui.CharacterTypeScreen
+import com.generativemascot.app.ui.CharacterCreationFlow
 import com.generativemascot.app.ui.KnockHeroScreen
 import com.generativemascot.app.ui.MascotLaunchScreen
 import com.generativemascot.app.ui.MascotConfirmationSheet
@@ -285,7 +285,7 @@ class MainActivity : ComponentActivity() {
                             }, fontSize = 12.sp, color = Color.White)
                         }
                         if (showCharacterType) Box(Modifier.fillMaxSize().zIndex(2f)) {
-                            CharacterTypeScreen(onClose = { if (!vm.state.value.creating) showCharacterType = false }, onFinish = { choice ->
+                            CharacterCreationFlow(onClose = { if (!vm.state.value.creating) showCharacterType = false }, onFinish = { choice ->
                                 vm.startHeroCreation(choice).also { started ->
                                     // Keep the selector covering the outgoing home until
                                     // its crossfade has completed; never reveal home in between.
@@ -322,6 +322,8 @@ class MainActivity : ComponentActivity() {
                         onBack = vm::closeAnimationLibrary,
                         onRefresh = vm::refreshAnimationLibrary,
                         onComplete = vm::completeAnimations,
+                        onCompleteChat = vm::completeChatAnimations,
+                        onGenerateAction = vm::generateSingleAnimation,
                         greetingRequiresResume = state.greetingPending && !state.creating && !state.busy,
                         onResumeGreeting = vm::accept,
                     )
@@ -388,13 +390,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        com.generativemascot.app.overlay.MascotOverlayService.setAppVisible(true)
         vm.onAppForegrounded()
         com.generativemascot.app.widget.WidgetDepthService.startIfPresent(this)
     }
 
     override fun onStop() {
         // A rotation is not leaving and re-entering the app.
-        if (!isChangingConfigurations) vm.onAppBackgrounded()
+        if (!isChangingConfigurations) {
+            com.generativemascot.app.overlay.MascotOverlayService.setAppVisible(false)
+            vm.onAppBackgrounded()
+        }
         super.onStop()
     }
 

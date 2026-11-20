@@ -132,7 +132,9 @@ class LightingPreparationTest {
         repeat(100) { seed ->
             assertTrue(buildCanonicalCharacterPrompt(seed).contains(relightableImageContract))
             HeroLocalStore.VIDEO_ACTIONS.forEach { action ->
-                val prompt = buildCharacterAnimationPrompt(action, seed)
+                val appearanceNotes = "Weathered fabric with visible seams and restrained armor accents."
+                val prompt = buildCharacterAnimationPrompt(action, seed, appearanceNotes = appearanceNotes)
+                assertTrue(prompt.contains(appearanceNotes))
                 validateResolvedVideoPrompt(prompt, "#00FF00")
                 assertTrue(prompt.contains(relightableAnimationContract))
             }

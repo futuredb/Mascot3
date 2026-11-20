@@ -32,6 +32,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.generativemascot.app.R
+import com.generativemascot.app.ui.ChatHistoryStore
 import com.generativemascot.app.physics.PhoneInteractionMotion
 import com.generativemascot.app.physics.PhoneMotion
 import com.generativemascot.app.physics.PhonePose
@@ -76,7 +77,10 @@ class MascotOverlayService : Service() {
     private var compactParams: WindowManager.LayoutParams? = null
     private var bubbleVisible = true
     private var hintIndex = 0
-    private var hasMessage = true
+    private var chatReplies = emptyList<String>()
+    private val hasMessage get() = chatReplies.isNotEmpty()
+    private val chatHistory by lazy { ChatHistoryStore(this) }
+    private var stopObservingChat: (() -> Unit)? = null
     private var position = OverlayPoint(0, 0)
     private var compactPosition = OverlayPoint(0, 0)
     private var collapsed = false
@@ -140,6 +144,10 @@ class MascotOverlayService : Service() {
         super.onCreate()
         windows = getSystemService(WindowManager::class.java)
         prefs.registerOnSharedPreferenceChangeListener(sizeListener)
+        stopObservingChat = chatHistory.observeChanges { id ->
+            if (id == activeHeroId && refreshChatReplies(id)) showIfUnlocked()
+        }
+        scope.launch { appVisible.collectLatest { showIfUnlocked() } }
         ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_USER_PRESENT)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -164,12 +172,13 @@ class MascotOverlayService : Service() {
         try { foregroundNotification() }
         catch (_: Exception) { fail("Android не разрешил включить героя. Попробуйте из приложения."); return START_NOT_STICKY }
         OverlaySession.enable(this, requireNotNull(id))
+        val sameHero = activeHeroId == id
+        refreshChatReplies(id, reset = !sameHero)
         if (intent?.action == ACTION_WIDGET) {
             widgetHomePackage = if (OverlayAppRules.read(this).mode != OverlayAppMode.EVERYWHERE && OverlayAppRules.hasUsageAccess(this))
                 packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
                     android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
             else null
-            hasMessage = prefs.getBoolean("hint_available", true)
             bubbleVisible = hasMessage
             prefs.edit().putBoolean("collapsed", !hasMessage).putBoolean("bubble_visible", hasMessage).apply()
             if (collapsed && artwork != null && hasMessage) setCollapsed(false)
@@ -187,10 +196,8 @@ class MascotOverlayService : Service() {
         cancelTouches.clear()
         heroWindow?.removeAllViews(); heroWindow = null
         hero = null; bubble = null; compact = null
-        hasMessage = prefs.getBoolean("hint_available", true)
-        collapsed = !hasMessage || prefs.getBoolean("collapsed", false)
-        bubbleVisible = hasMessage && prefs.getBoolean("bubble_visible", true)
-        hintIndex = prefs.getInt("hint_index", 0).coerceIn(0, overlayDemoHints.lastIndex)
+        collapsed = prefs.getBoolean("collapsed", false)
+        bubbleVisible = prefs.getBoolean("bubble_visible", true)
         artwork?.recycle(); artwork = null
         load = scope.launch {
             // Retain ownership on cancellation: a late decode must never leak bitmaps or re-add a window.
@@ -262,20 +269,19 @@ class MascotOverlayService : Service() {
                     }
                 decoded = null
                 bubble = OverlayHintView(this@MascotOverlayService, onNext = {
-                    if (hintIndex < overlayDemoHints.lastIndex) {
+                    if (hintIndex < chatReplies.lastIndex) {
                         hintIndex++
-                        prefs.edit().putInt("hint_index", hintIndex).apply()
-                        bubble?.setHint(overlayDemoHints[hintIndex]); updateBubble()
-                    } else {
-                        hasMessage = false
-                        prefs.edit().putBoolean("hint_available", false).apply()
-                        compact?.setHasMessage(false)
-                        setCollapsed(true)
+                        showCurrentReply()
+                        updateBubble()
                     }
-                }, onHide = { dismiss() }, onCollapse = { setCollapsed(true) }, onChat = {
+                }, onHide = {
+                    bubbleVisible = false
+                    prefs.edit().putBoolean("bubble_visible", false).apply()
+                    updateBubble()
+                }, onCollapse = { setCollapsed(true) }, onChat = {
                     startActivity(com.generativemascot.app.MainActivity.overlayChatIntent(this@MascotOverlayService, id))
-                })
-                    .apply { setHint(overlayDemoHints[hintIndex]); installDrag(this); installOverlayTouchRegion(this) { touchRegion() } }
+                }).apply { installDrag(this); installOverlayTouchRegion(this) { touchRegion() } }
+                showCurrentReply()
                 measureWindows()
                 restorePosition()
                 compactPosition = OverlayLayout.restore(usableArea(), compactParams!!.width, compactParams!!.height,
@@ -442,8 +448,21 @@ class MascotOverlayService : Service() {
         savePosition()
     }
 
+    private fun refreshChatReplies(heroId: String, reset: Boolean = false): Boolean {
+        val replies = overlayChatReplies(chatHistory.read(heroId))
+        if (!reset && replies == chatReplies) return false
+        chatReplies = replies
+        hintIndex = 0
+        showCurrentReply()
+        return true
+    }
+
+    private fun showCurrentReply() {
+        bubble?.setMessage(chatReplies.getOrNull(hintIndex).orEmpty(), hintIndex < chatReplies.lastIndex)
+    }
+
     private fun setCollapsed(value: Boolean) {
-        if ((!value && !hasMessage) || value == collapsed || destroyed || stopping) return
+        if (value == collapsed || destroyed || stopping) return
         collapsed = value
         if (!value) bubbleVisible = true
         prefs.edit().putBoolean("collapsed", value).putBoolean("bubble_visible", bubbleVisible).apply()
@@ -453,7 +472,7 @@ class MascotOverlayService : Service() {
     private fun showIfUnlocked() {
         main.removeCallbacks(unlockCheck)
         if (destroyed || stopping || !Settings.canDrawOverlays(this)) return
-        if (!getSystemService(PowerManager::class.java).isInteractive) {
+        if (appVisible.value || !getSystemService(PowerManager::class.java).isInteractive) {
             stopAppMonitor(); detachWindows(); return
         }
         if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
@@ -804,6 +823,8 @@ class MascotOverlayService : Service() {
         destroyed = true
         stopAppMonitor()
         prefs.unregisterOnSharedPreferenceChangeListener(sizeListener)
+        stopObservingChat?.invoke()
+        stopObservingChat = null
         load?.cancel(); scope.cancel(); main.removeCallbacksAndMessages(null)
         detachWindows()
         cancelTouches.clear()
@@ -823,6 +844,9 @@ class MascotOverlayService : Service() {
         internal const val ACTION_WIDGET = "com.generativemascot.app.overlay.WIDGET"
         private const val CHANNEL = "mascot_overlay"
         private const val NOTIFICATION = 7601
+        private val appVisible = MutableStateFlow(false)
+        internal fun setAppVisible(visible: Boolean) { appVisible.value = visible }
+
         private val mutableStatus = MutableStateFlow(OverlayStatus())
         val status = mutableStatus.asStateFlow()
         fun start(context: Context, heroId: String) {

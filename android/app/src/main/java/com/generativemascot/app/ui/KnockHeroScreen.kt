@@ -47,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -97,53 +98,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import com.generativemascot.app.data.characterPerformanceStyle
 import kotlin.random.Random
 import kotlinx.coroutines.delay
 
 private val KnockBg = Color(0xFFE8F4FC)
 private val KnockInk = Color(0xFF5B160F)
 private const val RippleMs = 760f
-
-private val heroLines = mapOf(
-    "idle" to listOf(
-        "Я тут. Просто наблюдаю за твоим днём.",
-        "Кажется, у меня созрел отличный план. Но чуть позже.",
-        "Тихий режим тоже считается приключением.",
-        "Иногда приятно просто побыть рядом.",
-    ),
-    "joyful" to listOf(
-        "О, вот теперь день стал заметно лучше!",
-        "Ещё раз! Кажется, мне это понравилось.",
-        "Ты вернулся — можно снова радоваться.",
-    ),
-    "sleeping" to listOf(
-        "Пять минут тишины… и я снова герой.",
-        "Не буди. Я сохраняю энергию для приключений.",
-        "Даже маскотам иногда нужен тихий час.",
-    ),
-    "sleep_loop" to listOf(
-        "Тс-с… мне снится что-то очень хорошее.",
-        "Заряжаюсь спокойствием. Почти готов.",
-    ),
-    "dancing" to listOf(
-        "Если есть ритм, повод уже не нужен.",
-        "Смотри, это мой фирменный танец!",
-        "Серьёзность отменяется на несколько секунд.",
-    ),
-    "resting" to listOf("Немного передохну и снова буду в форме."),
-    "thinking" to listOf("Тс-с… у меня почти появилась идея."),
-    "at_glass" to listOf("Интересно, что там, по ту сторону экрана?"),
-    "watching" to listOf("Я всё вижу. Ну… почти всё."),
-    "sad" to listOf("Можно я минутку погрущу? Скоро пройдёт."),
-    "angry" to listOf("Вот сейчас я очень серьёзный. Почти."),
-    "refusal" to listOf("Нет-нет, на это я точно не согласен."),
-    "frightened" to listOf("Ой! Это было немного неожиданно."),
-    "curious" to listOf("А что будет, если посмотреть чуть ближе?"),
-    "tender" to listOf("Хорошо, что ты рядом."),
-    "stretching" to listOf("Размялся. Теперь можно и в приключение."),
-    "greeting" to listOf("Привет! Я уже успел соскучиться."),
-    "signature_move" to listOf("А вот и мой фирменный номер!"),
-)
 
 private const val AMBIENT_MIN_DELAY_MS = 12_000L
 private const val AMBIENT_MAX_DELAY_MS = 19_000L
@@ -186,12 +147,6 @@ private fun shuffledActionDeck(actions: List<String>, previousAction: String?): 
         }
     }
     return shuffled
-}
-
-internal fun heroLine(action: String?, index: Int): String {
-    val normalized = HeroLocalStore.normalizeVideoAction(action ?: "idle")
-    val lines = heroLines[normalized] ?: heroLines.getValue("idle")
-    return lines[Math.floorMod(index, lines.size)]
 }
 
 private data class KnockRipple(
@@ -283,10 +238,36 @@ fun KnockHeroScreen(
     var gestureDownY by remember { mutableStateOf(0f) }
     var gestureDownAt by remember { mutableLongStateOf(0L) }
     var gestureTravel by remember { mutableStateOf(0f) }
-    var quoteAction by remember(mascotId) {
-        mutableStateOf(HeroLocalStore.normalizeVideoAction(stateKey ?: "idle"))
+    val moodPreferences = remember(context) {
+        context.getSharedPreferences(CHAT_MOOD_PREFERENCES, android.content.Context.MODE_PRIVATE)
     }
-    var quoteIndex by remember(mascotId) { mutableIntStateOf(0) }
+    val profanityStore = remember(context) { ChatProfanityStore(context) }
+    var homeMood by remember(mascotId) {
+        mutableStateOf(mascotId?.let { moodPreferences.readHomeChatMood(it, System.currentTimeMillis()) })
+    }
+    var moodProfanity by remember(mascotId) { mutableStateOf(false) }
+    var playedMood by remember(mascotId) { mutableStateOf<HomeChatMood?>(null) }
+    DisposableEffect(mascotId, visible, moodPreferences) {
+        val id = mascotId
+        if (id == null || !visible) return@DisposableEffect onDispose {}
+        fun refreshMood() {
+            homeMood = moodPreferences.readHomeChatMood(id, System.currentTimeMillis())
+            moodProfanity = profanityStore.read(id) == true
+        }
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "$id.home.at" || key == null) refreshMood()
+        }
+        moodPreferences.registerOnSharedPreferenceChangeListener(listener)
+        refreshMood()
+        onDispose { moodPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    LaunchedEffect(mascotId, homeMood, visible) {
+        val id = mascotId ?: return@LaunchedEffect
+        val mood = homeMood ?: return@LaunchedEffect
+        if (!visible) return@LaunchedEffect
+        delay((mood.expires - System.currentTimeMillis()).coerceAtLeast(1))
+        homeMood = moodPreferences.readHomeChatMood(id, System.currentTimeMillis())
+    }
     var greetingLoadingLineIndex by remember(mascotId) { mutableIntStateOf(0) }
     var navigationReady by remember(mascotId) { mutableStateOf(false) }
     var heroPickerExpanded by remember { mutableStateOf(false) }
@@ -351,6 +332,13 @@ fun KnockHeroScreen(
     val mainActionPool = remember(animationVideoUrls.keys) {
         mainScreenActionPool(animationVideoUrls.keys)
     }
+    val homeReactionActions = remember(animationVideoUrls.keys, stateKey) {
+        if ("idle" in animationVideoUrls) {
+            com.generativemascot.app.data.chatReactionActions
+                .filterNot { it == "idle" || it == "typing_reaction" || it == stateKey }.toSet()
+        } else emptySet()
+    }
+    val moodAnimation = homeMood?.availableAction(animationVideoUrls.keys)
     val showWaiting = !accepted && generating && visualPreviewUrl.isNullOrBlank()
     val heroReady = visualHeroLoading || (!visualPreviewUrl.isNullOrBlank() && !showWaiting)
     var hasPreparedPhysics by remember(visualMascotId) { mutableStateOf(false) }
@@ -383,8 +371,12 @@ fun KnockHeroScreen(
         if (showHomeSettings) menuTopBar else if (accepted) palette.top else FigmaCanvas,
         if (showHomeSettings) menuBottomBar else if (accepted) palette.end else FigmaCanvas,
     )
+    val boldMood = remember(mascotId, visible) {
+        mascotId?.let { HeroLocalStore.current?.chatCharacterTone(it) }
+            ?.let(::characterPerformanceStyle) == com.generativemascot.app.data.CharacterPerformanceStyle.BOLD
+    }
     val currentLine = if (visualHeroLoading) greetingLoadingLines[greetingLoadingLineIndex % greetingLoadingLines.size]
-        else heroLine(quoteAction, quoteIndex)
+        else homeMood?.line(boldMood, moodProfanity, moodAnimation) ?: "Я в порядке. Можем поболтать."
 
     fun postponeAmbientAction() {
         nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
@@ -408,8 +400,6 @@ fun KnockHeroScreen(
         if (playable != "sleeping" && playable != "sleep_loop") sleepLocked = false
         puppetAction = playable
         puppetActionSerial += 1
-        quoteAction = playable
-        quoteIndex = 0
     }
 
     val phoneInteraction = rememberHeroPhoneInteraction(
@@ -489,24 +479,16 @@ fun KnockHeroScreen(
         delay(320)
         navigationReady = true
     }
-    LaunchedEffect(mascotId, stateKey, animationVideoUrls.keys) {
-        if (puppetAction == null) {
-            quoteAction = resolveAvailableHomeAction(stateKey ?: "idle", animationVideoUrls.keys)
-            quoteIndex = 0
+    LaunchedEffect(homeMood, visible, accepted, heroReady, heroPickerExpanded, visualHeroLoading, visualMascotId, moodAnimation) {
+        if (!visible || !accepted || !heroReady || heroPickerExpanded || visualHeroLoading || visualMascotId != mascotId) {
+            return@LaunchedEffect
         }
-    }
-    LaunchedEffect(mascotId, accepted, quoteAction, visible) {
-        if (!accepted || !visible) return@LaunchedEffect
-        while (true) {
-            delay(if (quoteAction == "idle" || quoteAction == "sleep_loop" || quoteAction == "sleeping") 9_000 else 8_000)
-            if (onStateGesture != null) { quoteIndex += 1; continue }
-            if (quoteAction != "idle" && quoteAction != "sleep_loop" && quoteAction != "sleeping") {
-                quoteAction = defaultHomeVideoAction(animationVideoUrls.keys)
-                quoteIndex = 0
-                return@LaunchedEffect
-            }
-            quoteIndex += 1
-        }
+        val mood = homeMood ?: return@LaunchedEffect
+        if (mood == playedMood) return@LaunchedEffect
+        val action = moodAnimation ?: return@LaunchedEffect
+        playMainAction(action)
+        playedMood = mood
+        postponeAmbientAction()
     }
     LaunchedEffect(mascotId, visualHeroLoading, visible) {
         if (!visualHeroLoading) { greetingLoadingLineIndex = 0; return@LaunchedEffect }
@@ -522,7 +504,7 @@ fun KnockHeroScreen(
         while (true) {
             delay(500)
             val elapsedNow = SystemClock.elapsedRealtime()
-            if (!sleepLocked && elapsedNow >= nextAmbientAt) {
+            if (homeMood == null && !sleepLocked && elapsedNow >= nextAmbientAt) {
                 takeNextMainAction()?.let(::playMainAction)
                 nextAmbientAt = elapsedNow + nextAmbientDelayMs()
             }
@@ -883,8 +865,22 @@ fun KnockHeroScreen(
                                     videoUrl = visualAnimationVideoUrl, videoUrls = visualVideoUrls,
                                     neutralFrameUrl = visualNeutralFrameUrl, action = stateKey ?: "idle",
                                     interaction = interaction, lighting = phoneInteraction.lighting,
-                                    onAnimationVisible = onAnimationVisible, onOneShotFinished = onOneShotFinished,
+                                    onAnimationVisible = onAnimationVisible,
+                                    playOnceActions = if (puppetAction == moodAnimation && moodAnimation != null) {
+                                        homeReactionActions + moodAnimation
+                                    } else homeReactionActions,
+                                    onOneShotFinished = { finished ->
+                                        onOneShotFinished?.invoke(finished)
+                                        if (puppetAction == finished && (finished in homeReactionActions || finished == moodAnimation)) {
+                                            puppetAction = defaultHomeVideoAction(animationVideoUrls.keys)
+                                            puppetActionSerial += 1
+                                            postponeAmbientAction()
+                                        }
+                                    },
                                     playbackEnabled = visible, useNeutralTransitions = false,
+                                    interruptIdleForAction = moodAnimation?.takeIf {
+                                        it == puppetAction && playedMood == homeMood
+                                    },
                                     onFirstFrame = { videoReady = true },
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -1020,7 +1016,7 @@ fun KnockHeroScreen(
             }
         }
         if (accepted) {
-            val showOffer = !offerDismissed && !visualHeroLoading && visualMascotId == mascotId
+            val showOffer = homeMood == null && !offerDismissed && !visualHeroLoading && visualMascotId == mascotId
             fun dismissOffer() {
                 offerDismissed = true
                 offerPreferences.edit().putBoolean(mascotId.orEmpty(), true).apply()

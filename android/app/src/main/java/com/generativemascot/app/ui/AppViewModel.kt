@@ -24,6 +24,8 @@ import com.generativemascot.app.data.GenerationRoute
 import com.generativemascot.app.data.OpenRouterKeyVerifier
 import com.generativemascot.app.data.OpenRouterSettingsStore
 import com.generativemascot.app.data.planAnimationBatch
+import com.generativemascot.app.data.ANIMATION_BATCH_ORDER
+import com.generativemascot.app.data.chatReactionActions
 import com.generativemascot.app.data.validateAnimationBatch
 import com.generativemascot.app.data.AcceptanceGreetingStore
 import com.generativemascot.app.data.AcceptanceGreetingRequest
@@ -1001,7 +1003,18 @@ class AppViewModel(
         refreshAnimationLibrary()
     }
 
-    fun completeAnimations(requestedCount: Int) {
+    fun completeAnimations(requestedCount: Int) = startAnimationBatch(requestedCount, chatOnly = false)
+
+    fun completeChatAnimations(requestedCount: Int) = startAnimationBatch(requestedCount, chatOnly = true)
+
+    fun generateSingleAnimation(action: String) {
+        if (action in HeroLocalStore.LIBRARY_VIDEO_ACTIONS) {
+            startAnimationBatch(1, chatOnly = false, selectedAction = action)
+        }
+    }
+
+    private fun startAnimationBatch(requestedCount: Int, chatOnly: Boolean, selectedAction: String? = null) {
+        if ((chatOnly || selectedAction != null) && !directMode()) return
         val mascot = _state.value.mascot ?: return
         val animationStage = mascot.stages["animations"]
         if (
@@ -1018,6 +1031,18 @@ class AppViewModel(
                     heroStore.openRouterVideoJobId(mascot.id, it) != null
                 }.toSet(),
                 requestedCount,
+                eligibleActions = when {
+                    selectedAction != null -> listOf(selectedAction)
+                    chatOnly -> chatReactionActions
+                    directMode() -> ANIMATION_BATCH_ORDER
+                    else -> HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS
+                },
+                priorityActions = if (requestedCount == 2 && heroStore.characterChoice(mascot.id)?.type == "person") {
+                    listOf("idle", "thinking")
+                } else if (requestedCount == 1 && heroStore.actionVideoFile(mascot.id, "idle") != null &&
+                    heroStore.actionVideoFile(mascot.id, "thinking") != null) {
+                    listOf("typing_reaction")
+                } else emptyList(),
             )
         }.getOrElse { error ->
             _state.update { it.copy(error = error.message) }

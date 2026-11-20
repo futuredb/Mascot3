@@ -98,6 +98,8 @@ class HeroLocalStore(context: Context) {
         val editor = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
             .putString("$mascotId:type", choice.type).putString("$mascotId:style", choice.style)
             .putString("$mascotId:reference", choice.referencePath)
+            .putString("$mascotId:appearancePrompt", choice.appearancePrompt)
+            .putString("$mascotId:personalityPrompt", choice.personalityPrompt)
         if (choice.positionX != null && choice.positionY != null) {
             editor.putFloat("$mascotId:x", choice.positionX).putFloat("$mascotId:y", choice.positionY)
         } else {
@@ -112,7 +114,11 @@ class HeroLocalStore(context: Context) {
         val style = prefs.getString("$mascotId:style", null) ?: return null
         val x = if (prefs.contains("$mascotId:x")) prefs.getFloat("$mascotId:x", .5f) else null
         val y = if (prefs.contains("$mascotId:y")) prefs.getFloat("$mascotId:y", .5f) else null
-        return runCatching { CharacterCreationChoice(type, style, x, y, prefs.getString("$mascotId:reference", null)) }.getOrNull()
+        return runCatching { CharacterCreationChoice(
+            type, style, x, y, prefs.getString("$mascotId:reference", null),
+            prefs.getString("$mascotId:appearancePrompt", "").orEmpty(),
+            prefs.getString("$mascotId:personalityPrompt", "").orEmpty(),
+        ) }.getOrNull()
     }
 
     fun mascotName(mascotId: String): String? = synchronized(nameFileLock) {
@@ -1193,7 +1199,7 @@ class HeroLocalStore(context: Context) {
             "idle", "resting", "sleeping", "thinking", "at_glass", "watching", "joyful", "sad", "angry",
             "refusal", "frightened", "curious", "tender", "stretching", "greeting", "signature_move", "dancing",
         )
-        val LIBRARY_VIDEO_ACTIONS = LEGACY_LIBRARY_VIDEO_ACTIONS
+        val LIBRARY_VIDEO_ACTIONS = LEGACY_LIBRARY_VIDEO_ACTIONS + "typing_reaction" + chatEmotionPrompts.keys
         // `sleep_loop` is a free playback derivative of `sleeping`, not an
         // additional provider generation.
         val VIDEO_ACTIONS = LIBRARY_VIDEO_ACTIONS + "sleep_loop"
@@ -1231,11 +1237,11 @@ class HeroLocalStore(context: Context) {
             "happy", "joyful", "content", "eating" -> "joyful"
             "stretch", "stretching" -> "stretching"
             "playful", "dancing", "working" -> "dancing"
-            "listening", "chat_idle" -> stateKey
+            "listening", "chat_idle", "typing_reaction" -> stateKey
             "speaking", "talking" -> "speaking"
             "thinking", "at_glass", "watching", "sad", "angry", "refusal", "frightened", "curious",
             "tender", "greeting", "signature_move", "welcome" -> stateKey
-            else -> "idle"
+            else -> stateKey.takeIf(chatEmotionPrompts::containsKey) ?: "idle"
         }
 
         internal fun widgetVideoCandidates(stateKey: String): List<String> = when (stateKey) {

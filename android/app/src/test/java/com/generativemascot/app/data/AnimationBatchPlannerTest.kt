@@ -39,7 +39,7 @@ class AnimationBatchPlannerTest {
 
     @Test fun corruptOrInvalidPlansFailClosedWhileOldWorkersKeepTheirOriginalAuthorization() {
         assertTrue(runCatching { planAnimationBatch(emptySet(), emptySet(), 0) }.isFailure)
-        assertTrue(runCatching { planAnimationBatch(emptySet(), emptySet(), 18) }.isFailure)
+        assertTrue(runCatching { planAnimationBatch(emptySet(), emptySet(), HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size + 1) }.isFailure)
         assertTrue(runCatching { validateAnimationBatch(emptyList()) }.isFailure)
         assertTrue(runCatching { validateAnimationBatch(listOf("idle", "idle")) }.isFailure)
         assertTrue(runCatching { validateAnimationBatch(listOf("unknown")) }.isFailure)
@@ -49,13 +49,29 @@ class AnimationBatchPlannerTest {
         assertEquals(listOf("dancing"), validateAnimationBatch(listOf("dancing")))
     }
 
-    @Test fun seventeenAreCompleteAndRetiredWelcomeIsNotSubmittedByLegacyWorkers() {
+    @Test fun legacyCatalogOnlyNeedsTheTypingReactionAndDoesNotSubmitRetiredWelcome() {
         val saved = HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS.toSet()
-        assertTrue(planAnimationBatch(saved, emptySet(), 4).isEmpty())
-        assertTrue(planAnimationBatch(saved, emptySet(), 17).isEmpty())
-        assertEquals(17, validateAnimationBatch(HeroLocalStore.LIBRARY_VIDEO_ACTIONS + "welcome").size)
+        assertEquals("typing_reaction", planAnimationBatch(saved, emptySet(), 4).first())
+        assertEquals(HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size, validateAnimationBatch(HeroLocalStore.LIBRARY_VIDEO_ACTIONS + "welcome").size)
         assertTrue(validateAnimationBatch(listOf("welcome")).isEmpty())
         assertEquals(listOf("idle"), validateAnimationBatch(listOf("idle", "welcome")))
+    }
+
+    @Test fun chatPackContainsAllAgreedReactionsAndResumesWithoutOrderingExtraClips() {
+        val expected = setOf(
+            "idle", "curious", "thinking", "chat_happy", "excited", "laughing", "shy",
+            "proud", "affection", "surprised", "confused", "skeptical", "sad", "offended",
+            "annoyed", "angry", "worried", "encouraging", "bored", "sleepy", "typing_reaction",
+        )
+        assertEquals(expected.size, chatReactionActions.size)
+        assertEquals(expected, chatReactionActions.toSet())
+        val ready = setOf("idle", "thinking")
+        val pending = setOf("angry", "greeting")
+        val batch = validateAnimationBatch(planAnimationBatch(
+            ready, pending, expected.size - ready.size, eligibleActions = chatReactionActions,
+        ))
+        assertEquals("angry", batch.first())
+        assertEquals(expected - ready, batch.toSet())
     }
 
     @Test fun ambiguousPaidSubmissionCannotAutomaticallyRepeatAfterWorkerRestart() {

@@ -9,7 +9,7 @@ main{max-width:720px;margin:auto}section{display:flex;flex-wrap:wrap;gap:28px}
 figure{margin:0;text-align:center}canvas{display:block;width:160px;height:160px;border-radius:50%;background:#eaebec;margin-bottom:8px}
 button{font:inherit;margin:0 8px 20px 0}p{color:#aaa}
 </style>
-<main><h1>Циклы диалога</h1><nav aria-label="Персонаж"></nav><section></section><h2>Архивный клип Helios</h2>
+<main><h1>Циклы диалога</h1><nav aria-label="Персонаж"></nav><p><label><input id="large-portrait" type="checkbox" checked> Крупный портрет</label></p><section></section><h2>Архивный клип Helios</h2>
 <p>Аким · запись из предыдущей версии. Масштаб соответствует текущему кружку.</p>
 <canvas id="archive-frame" width="320" height="320" aria-label="Аким с бананом"></canvas>
 <button id="play-archive">Воспроизвести</button>
@@ -51,6 +51,7 @@ const heroes = {
   'Аким': '9f226b89-df35-4d3a-9b36-96c28ea1bb62',
   'Марс': 'a83e9d30-1270-40e6-902c-b44774e84c17'
 };
+const largePortrait = document.querySelector('#large-portrait');
 let players = [];
 function show(hero) {
   for (const video of players) { video.pause(); video.removeAttribute('src'); video.load(); }
@@ -72,7 +73,12 @@ function show(hero) {
     video.addEventListener('error', () => { status.textContent = 'Клип ещё не готов'; });
     function draw() {
       if (!players.includes(video)) return;
-      ctx.drawImage(video, 0, 0, 320, 320);
+      const scale = largePortrait.checked ? 1.65 : 1;
+      const size = canvas.width * scale;
+      const inset = (canvas.width - size) / 2;
+      const faceOffset = largePortrait.checked ? canvas.height * 0.26 : 0;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, inset, inset + faceOffset, size, size);
       const frame = ctx.getImageData(0, 0, 320, 320);
       for (let i = 0; i < frame.data.length; i += 4) {
         const d = frame.data[i+1] - Math.max(frame.data[i],frame.data[i+2]);

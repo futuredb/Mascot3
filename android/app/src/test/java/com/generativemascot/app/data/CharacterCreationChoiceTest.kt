@@ -4,6 +4,44 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CharacterCreationChoiceTest {
+    @Test fun creationTraitsDriveEachChatReactionPrompt() {
+        val profiles = mapOf(
+            "Спокойный и уравновешенный" to CharacterPerformanceStyle.CALM,
+            "Дерзкий и уверенный в себе" to CharacterPerformanceStyle.BOLD,
+            "Любопытный, любит исследовать новое" to CharacterPerformanceStyle.CURIOUS,
+            "Застенчивый и деликатный" to CharacterPerformanceStyle.SHY,
+            "Мечтательный, с живым воображением" to CharacterPerformanceStyle.DREAMY,
+            "Жизнерадостный и энергичный" to CharacterPerformanceStyle.JOYFUL,
+        )
+        for ((traits, style) in profiles) {
+            val choice = CharacterCreationChoice("person", "neutral", appearancePrompt = "Потёртая куртка",
+                personalityPrompt = traits)
+            val contract = mobileCharacterContract(71, choice)
+            assertEquals(traits, contract.behavior.worldview)
+            assertEquals(style, characterPerformanceStyle(contract.behavior.worldview))
+            for (action in chatReactionActions) {
+                val prompt = buildCharacterAnimationPrompt(action, seed = 71, character = contract,
+                    appearanceNotes = choice.appearancePrompt)
+                assertTrue(prompt.contains(style.motion))
+                assertTrue(prompt.contains("Потёртая куртка"))
+                assertTrue(prompt.contains("only where they are visible in the supplied image"))
+                assertEquals(style == CharacterPerformanceStyle.BOLD && action == "angry", prompt.contains("middle-finger"))
+                validateResolvedVideoPrompt(prompt, "#00FF00")
+            }
+        }
+    }
+
+    @Test fun freeTextAppearanceFitsTheProviderPromptAndDoesNotIntroduceSceneGeometry() {
+        val notes = "glass visor and weathered armor " + "layered fabric ".repeat(60)
+        val choice = CharacterCreationChoice("person", "neutral", appearancePrompt = notes,
+            personalityPrompt = "Дерзкий " + "уверенный ".repeat(60))
+        val prompt = buildCharacterAnimationPrompt("angry", character = mobileCharacterContract(71, choice),
+            appearanceNotes = choice.appearancePrompt)
+        assertTrue(prompt.contains("visor and weathered armor"))
+        assertFalse(prompt.contains("glass visor"))
+        validateResolvedVideoPrompt(prompt, "#00FF00")
+    }
+
     @Test fun referenceCharactersUseTheFullAnimationContract() {
         val choice = CharacterCreationChoice("person", "friendly", referencePath = "/private/reference.jpg")
         val contract = mobileCharacterContract(71, choice)

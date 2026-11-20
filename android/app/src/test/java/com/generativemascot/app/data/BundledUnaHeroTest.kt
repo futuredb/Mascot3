@@ -50,8 +50,10 @@ class BundledUnaHeroTest {
         assertTrue(store.hasOpenRouterVideoProgress(id)) // Approved video files are durable progress, not jobs.
         assertTrue(HeroLocalStore.LIBRARY_VIDEO_ACTIONS.all { store.openRouterVideoJobId(id, it) == null })
         assertNull(store.latestAnimationBatchId(id))
-        assertTrue(store.animationPackReady(id))
-        assertTrue(planAnimationBatch(store.actionVideoUrls(id).keys, emptySet(), 17).isEmpty())
+        val savedActions = store.actionVideoUrls(id).keys
+        assertFalse(store.animationPackReady(id))
+        val missing = planAnimationBatch(savedActions, emptySet(), chatReactionActions.size, eligibleActions = chatReactionActions)
+        assertEquals(chatReactionActions.toSet() - savedActions, missing.toSet())
         val json = Json { ignoreUnknownKeys = true }
         val manifest = json.decodeFromString<VideoPackManifest>(File(context.filesDir, "hero/$id/videos/manifest.json").readText())
         assertEquals(id, manifest.mascotId)

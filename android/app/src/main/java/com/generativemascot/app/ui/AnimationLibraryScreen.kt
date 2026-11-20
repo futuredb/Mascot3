@@ -87,6 +87,8 @@ fun AnimationLibraryScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onComplete: (Int) -> Unit,
+    onCompleteChat: ((Int) -> Unit)? = null,
+    onGenerateAction: ((String) -> Unit)? = null,
     greetingRequiresResume: Boolean = false,
     onResumeGreeting: () -> Unit = {},
 ) {
@@ -94,6 +96,8 @@ fun AnimationLibraryScreen(
         heroHeadingName(mascotId?.let { HeroLocalStore.current?.mascotName(it) }, heroName)
     }
     var confirmPack by remember { mutableStateOf(false) }
+    var confirmChatPack by remember(mascotId) { mutableStateOf(false) }
+    var confirmAction by remember(mascotId) { mutableStateOf<String?>(null) }
     var selectedAction by remember { mutableStateOf<String?>(null) }
     var chatClips by remember(mascotId) { mutableStateOf(emptyList<ChatAnimationClip>()) }
     val foreground = rememberAppResumed()
@@ -119,6 +123,7 @@ fun AnimationLibraryScreen(
         }
     }
     val readyCount = progress.readyCount
+    val remainingChatActions = com.generativemascot.app.data.chatReactionActions.count { it !in progress.readyActions }
     var selectedCount by rememberSaveable(mascotId) {
         mutableIntStateOf(defaultAnimationBatchSize(progress.remainingCount))
     }
@@ -242,10 +247,15 @@ fun AnimationLibraryScreen(
                         val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS }
                         val cardStatus = progress.cardStatus(stateKey, inProgress, syncing, interrupted, sequential, selectedBatch)
                         val available = stateKey in playableActions
+                        val canGenerate = onGenerateAction != null && sequential && !inProgress &&
+                            !syncing && !greetingRequiresResume && stateKey !in progress.readyActions
                         Column(
                             modifier = Modifier.fillMaxWidth()
-                                .mascotClickable(enabled = available, onClickLabel = "Посмотреть анимацию") {
-                                    selectedAction = stateKey
+                                .mascotClickable(
+                                    enabled = available || canGenerate,
+                                    onClickLabel = if (available) "Посмотреть анимацию" else "Создать анимацию",
+                                ) {
+                                    if (available) selectedAction = stateKey else confirmAction = stateKey
                                 },
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -315,10 +325,43 @@ fun AnimationLibraryScreen(
                             fontFamily = SbSansDisplayBold, fontWeight = FontWeight.Bold, fontSize = 13.4.sp,
                         )
                     }
+                    if (onCompleteChat != null && sequential && !greetingRequiresResume && remainingChatActions > 0) {
+                        TextButton(onClick = { confirmChatPack = true }, enabled = !inProgress && !syncing) {
+                            Text("Реакции для чата · $remainingChatActions")
+                        }
+                    }
                     Spacer(Modifier.height(24.dp))
                 }
             }
         }
+    }
+    confirmAction?.let { action ->
+        AlertDialog(
+            onDismissRequest = { confirmAction = null },
+            title = { Text(stateTitle(action)) },
+            text = { Text("Создать один ролик? Генерация платная. Если задание уже сохранено, приложение продолжит его.") },
+            dismissButton = { TextButton(onClick = { confirmAction = null }) { Text("Отмена") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmAction = null
+                    onGenerateAction?.invoke(action)
+                }, enabled = !inProgress && !syncing) { Text("Создать · 1") }
+            },
+        )
+    }
+    if (onCompleteChat != null && confirmChatPack && remainingChatActions > 0) {
+        AlertDialog(
+            onDismissRequest = { confirmChatPack = false },
+            title = { Text("Реакции для чата") },
+            text = { Text("Будет создано до $remainingChatActions недостающих роликов. Генерация платная. Готовые ролики сохранятся, а существующие задания продолжатся.") },
+            dismissButton = { TextButton(onClick = { confirmChatPack = false }) { Text("Отмена") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmChatPack = false
+                    onCompleteChat(remainingChatActions)
+                }, enabled = !inProgress && !syncing) { Text("Создать · $remainingChatActions") }
+            },
+        )
     }
     if (confirmPack && progress.remainingCount > 0) {
         AlertDialog(

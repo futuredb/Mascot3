@@ -38,11 +38,11 @@ object OverlayLayout {
     }
 }
 
-data class OverlayHint(val category: String, val title: String, val detail: String)
-
-/** Deliberately local examples, never inferred from another app or submitted to a provider. */
-val overlayDemoHints = listOf(
-    OverlayHint("Накопления", "Отложим с зарплаты\n89 000 ₽ на квартиру?", ""),
-    OverlayHint("Перерыв", "Давай на минутку выдохнем", "Небольшая пауза среди дел"),
-    OverlayHint("Прогулка", "Может, пройдёмся?", "Можно начать с короткого маршрута"),
-)
+internal fun overlayChatReplies(messages: List<com.generativemascot.app.ui.ChatMessage>): List<String> =
+    messages.dropWhile { !it.user || it.capabilities || it.interactionSetup }
+        .asReversed()
+        .asSequence()
+        .filter { !it.user && !it.capabilities && !it.interactionSetup && it.text.isNotBlank() }
+        .map { it.text.trim() }
+        .take(5)
+        .toList()

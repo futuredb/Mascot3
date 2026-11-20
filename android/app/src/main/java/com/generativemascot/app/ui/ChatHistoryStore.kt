@@ -17,6 +17,14 @@ internal fun initialChatMessages(saved: List<ChatMessage>, hasInteractionSetting
 internal class ChatHistoryStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences("mascot_chat_history", Context.MODE_PRIVATE)
 
+    fun observeChanges(onChanged: (String) -> Unit): () -> Unit {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key != null) onChanged(key)
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        return { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     fun read(heroId: String): List<ChatMessage> = runCatching {
         val rows = JSONArray(preferences.getString(heroId, "[]"))
         buildList {

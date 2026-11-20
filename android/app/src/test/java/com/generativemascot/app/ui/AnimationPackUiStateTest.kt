@@ -7,13 +7,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnimationPackUiStateTest {
-    @Test fun selectedFourDoNotQueueTheOtherThirteen() {
+    @Test fun selectedFourDoNotQueueUnselectedActions() {
         val progress = animationPackProgress(emptyMap())
         val batch = listOf("idle", "joyful", "sleeping", "dancing")
         val statuses = ANIMATION_STATE_KEYS.map { progress.cardStatus(it, true, false, false, true, batch) }
         assertEquals(1, statuses.count { it == AnimationCardStatus.WORKING })
         assertEquals(3, statuses.count { it == AnimationCardStatus.QUEUED })
-        assertEquals(13, statuses.count { it == AnimationCardStatus.NOT_STARTED })
+        assertEquals(ANIMATION_STATE_KEYS.size - batch.size, statuses.count { it == AnimationCardStatus.NOT_STARTED })
         assertEquals("joyful", animationPackProgress(mapOf("idle" to "idle.mp4")).activeAction(true, true, batch))
     }
 
@@ -22,19 +22,19 @@ class AnimationPackUiStateTest {
         val progress = animationPackProgress(batch.associateWith { "$it.mp4" })
         assertNull(progress.activeAction(true, true, batch))
         assertEquals(4, progress.readyCount)
-        assertEquals(13, progress.remainingCount)
+        assertEquals(ANIMATION_STATE_KEYS.size - 4, progress.remainingCount)
         assertEquals(AnimationCardStatus.NOT_STARTED, progress.cardStatus("angry", false, false, false, true, batch))
     }
     @Test
-    fun freshBatchHasExactlyOneWorkingActionAndSixteenQueued() {
+    fun freshBatchHasExactlyOneWorkingAction() {
         val progress = animationPackProgress(emptyMap())
         val statuses = ANIMATION_STATE_KEYS.map { progress.cardStatus(it, true, false, false, true) }
 
         assertEquals(0, progress.readyCount)
-        assertEquals(17, progress.remainingCount)
+        assertEquals(ANIMATION_STATE_KEYS.size, progress.remainingCount)
         assertEquals("idle", progress.activeAction(true, true))
         assertEquals(1, statuses.count { it == AnimationCardStatus.WORKING })
-        assertEquals(16, statuses.count { it == AnimationCardStatus.QUEUED })
+        assertEquals(ANIMATION_STATE_KEYS.size - 1, statuses.count { it == AnimationCardStatus.QUEUED })
     }
 
     @Test
@@ -43,7 +43,7 @@ class AnimationPackUiStateTest {
         val progress = animationPackProgress(videos)
 
         assertEquals(4, progress.readyCount)
-        assertEquals(13, progress.remainingCount)
+        assertEquals(ANIMATION_STATE_KEYS.size - 4, progress.remainingCount)
         assertEquals("at_glass", progress.activeAction(true, true))
         assertEquals(AnimationCardStatus.READY, progress.cardStatus("sleeping", true, false, false, true))
         assertEquals(AnimationCardStatus.QUEUED, progress.cardStatus("dancing", true, false, false, true))
@@ -54,7 +54,7 @@ class AnimationPackUiStateTest {
         val progress = animationPackProgress(mapOf("joyful" to "joyful.mp4", "dancing" to "dancing.mp4"))
 
         assertEquals("idle", progress.activeAction(true, true))
-        assertEquals(15, progress.remainingCount)
+        assertEquals(ANIMATION_STATE_KEYS.size - 2, progress.remainingCount)
     }
 
     @Test
@@ -79,7 +79,7 @@ class AnimationPackUiStateTest {
             mapOf("sleep_loop" to "sleep_loop.mp4", "unknown" to "extra.mp4")
         val progress = animationPackProgress(videos)
 
-        assertEquals(17, progress.readyCount)
+        assertEquals(ANIMATION_STATE_KEYS.size, progress.readyCount)
         assertEquals(0, progress.remainingCount)
         assertNull(progress.activeAction(true, true))
     }

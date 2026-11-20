@@ -19,6 +19,12 @@ internal class FalVideoProvider(
     private val key: String,
     private val baseUrl: String = "https://queue.fal.run",
 ) {
+    private val falClient = client.newBuilder().followRedirects(false).dns(
+        ProviderDnsFallback(client.dns) { host ->
+            host == "queue.fal.run" || validFalVideoUrl("https://$host/")
+        },
+    ).build()
+
     suspend fun submit(reference: File, prompt: String, durationSeconds: Int): String = withContext(Dispatchers.IO) {
         require(key.isNotBlank()) { "Ключ fal недоступен" }
         val image = "data:image/png;base64," + Base64.encodeToString(reference.readBytes(), Base64.NO_WRAP)
@@ -55,7 +61,7 @@ internal class FalVideoProvider(
         val url = result.optJSONObject("video")?.optString("url").orEmpty()
         if (!validFalVideoUrl(url)) throw IOException("fal вернул некорректную ссылку на видео")
         // Never send the fal credential to the video CDN.
-        client.newBuilder().followRedirects(false).build().newCall(Request.Builder().url(url).get().build())
+        falClient.newCall(Request.Builder().url(url).get().build())
             .execute().use { response ->
                 if (!response.isSuccessful) throw IOException("Не удалось скачать видео fal (HTTP ${response.code})")
                 response.body?.bytes()?.takeIf { it.size > 1024 } ?: throw IOException("fal вернул пустое видео")
@@ -65,7 +71,7 @@ internal class FalVideoProvider(
     private fun authorizedGet(url: String): Request = Request.Builder().url(url)
         .header("Authorization", "Key $key").get().build()
 
-    private fun executeJson(request: Request): JSONObject = client.newBuilder().followRedirects(false).build()
+    private fun executeJson(request: Request): JSONObject = falClient
         .newCall(request).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {

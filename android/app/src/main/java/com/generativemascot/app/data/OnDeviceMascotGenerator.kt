@@ -162,15 +162,11 @@ class OnDeviceMascotGenerator(
         // Reuse the actual character created by the art director. Rebuilding
         // from the seed alone loses the user's human/animal/creature choice.
         val choice = store.characterChoice(mascotId)
-        val original = savedCharacter ?: mobileCharacterContract(creativeSeed, choice)
-        val style = choice?.let { characterPersonalityById(it.style) }
-        val character = if (style != null) original.copy(behavior = original.behavior.copy(
-            motivation = "Express a ${style.name} personality: ${style.tone}", worldview = style.tone)) else original
-        val hasExistingCoreVideo = HeroLocalStore.CORE_VIDEO_ACTIONS.any {
-            store.actionVideoFile(mascotId, it) != null
-        }
+        val character = savedCharacter ?: mobileCharacterContract(creativeSeed, choice)
+        // The anchor belongs to the character, including before the first
+        // core animation is ready or when resuming a partial paid batch.
         val existingNeutral = store.neutralVideoFrameFile(mascotId)
-        val reference = if (hasExistingCoreVideo && existingNeutral != null) {
+        val reference = if (existingNeutral != null) {
             VideoReference(
                 file = existingNeutral,
                 matteColor = store.videoMatteColor(mascotId) ?: detectReferenceMatte(existingNeutral),
@@ -180,7 +176,7 @@ class OnDeviceMascotGenerator(
             createVideoReference(mascotId, base, VIDEO_MATTE_COLOR)
         }
         try {
-            if (!hasExistingCoreVideo || existingNeutral == null) {
+            if (existingNeutral == null) {
                 store.saveNeutralVideoFrame(mascotId, reference.file.readBytes())
                 store.saveVideoMatteColor(mascotId, reference.matteColor)
             }
@@ -211,6 +207,7 @@ class OnDeviceMascotGenerator(
                     durationSeconds = durationSeconds,
                     matteHex = matteHex,
                     character = character,
+                    appearanceNotes = choice?.appearancePrompt.orEmpty(),
                 )
                 validateResolvedVideoPrompt(prompt, matteHex)
                 if (existingJobId == null) {

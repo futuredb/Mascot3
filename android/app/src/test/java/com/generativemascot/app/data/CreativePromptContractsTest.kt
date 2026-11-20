@@ -30,7 +30,9 @@ class CreativePromptContractsTest {
         assertTrue(prompt.contains("solid #00FF00 chroma-key green background"))
         assertTrue(prompt.contains("removed"))
         assertTrue(prompt.contains("locally"))
-        assertTrue(prompt.contains("every documented body part"))
+        assertTrue(prompt.contains(Regex("Keep documented body parts\\s+naturally attached")))
+        assertTrue(prompt.contains("natural overlap is allowed"))
+        assertTrue(prompt.contains(Regex("Do not crop or detach\\s+limbs")))
     }
 
     @Test
@@ -157,9 +159,9 @@ class CreativePromptContractsTest {
     }
 
     @Test
-    fun providerPackHasSeventeenCatalogActionsAndOneHundredTwelveSeconds() {
-        assertEquals(17, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size)
-        assertEquals(112, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.sumOf(::videoDurationSeconds))
+    fun providerPackHasThirtyThreeCatalogActionsAndTwoHundredEightSeconds() {
+        assertEquals(33, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size)
+        assertEquals(208, HeroLocalStore.LIBRARY_VIDEO_ACTIONS.sumOf(::videoDurationSeconds))
         assertEquals(
             HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size,
             HeroLocalStore.LIBRARY_VIDEO_ACTIONS.map { animationContract(it, seed = 19).actionGoal }.toSet().size,

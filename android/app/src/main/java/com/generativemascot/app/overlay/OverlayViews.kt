@@ -84,7 +84,7 @@ class OverlayHintView(context: Context, onNext: () -> Unit, onHide: () -> Unit,
     val tailInset get() = context.overlayDp(32)
     val tailHeight get() = (context.overlayDp(20) * compositionScale).toInt()
     init { isMotionEventSplittingEnabled = false; clipChildren = false; clipToPadding = false; addView(card) }
-    fun setHint(hint: OverlayHint) = card.setHint(hint)
+    fun setMessage(text: String, hasMore: Boolean) = card.setMessage(text, hasMore)
     fun pointTowardHero(onLeft: Boolean) = card.pointTowardHero(onLeft)
     fun aimAtHero(x: Float) = card.aimAtHero(x / compositionScale)
     internal fun tailCenters() = card.tailCenters().map { PointF(it.x * compositionScale, it.y * compositionScale) }
@@ -140,6 +140,7 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
     private var heroTargetX: Float? = null
     private val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
     private val title = label("", 17.5f, Color.BLACK)
+    private lateinit var nextButton: TextView
     private val tail = android.graphics.BitmapFactory.decodeResource(resources, com.generativemascot.app.R.drawable.overlay_tail)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     init {
@@ -153,19 +154,23 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         title.typeface = resources.getFont(com.generativemascot.app.R.font.sb_sans_display_medium)
         title.gravity = Gravity.CENTER
         title.setLineSpacing(0f, 1f)
+        title.maxLines = 5
+        title.ellipsize = android.text.TextUtils.TruncateAt.END
         content.addView(title, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         val actions = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        fun button(text: String, width: Int, action: () -> Unit) {
-            actions.addView(label(text, 16f, Color.WHITE).apply {
+        fun button(text: String, width: Int, action: () -> Unit): TextView {
+            val view = label(text, 16f, Color.WHITE).apply {
                 gravity = Gravity.CENTER; isClickable = true; isFocusable = true
                 setAutoSizeTextTypeUniformWithConfiguration(12, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
                 background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(Color.rgb(29,29,29), Color.rgb(56,56,56))).apply { cornerRadius = dp(12).toFloat() }
                 setOnClickListener { action() }
-            }, LinearLayout.LayoutParams(dp(width), dp(40)).apply { rightMargin = dp(7) })
+            }
+            actions.addView(view, LinearLayout.LayoutParams(dp(width), dp(40)).apply { rightMargin = dp(7) })
+            return view
         }
-        button("Да", 51, onNext)
-        button("Позже", 82, onNext)
+        nextButton = button("Дальше", 72, onNext)
+        button("Скрыть", 76, onHide)
         actions.addView(android.widget.ImageView(context).apply {
             setImageResource(com.generativemascot.app.R.drawable.overlay_chat)
             setPadding(dp(3), dp(3), dp(3), dp(3))
@@ -184,9 +189,11 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         }, LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.RIGHT).apply {
             topMargin = -dp(20); rightMargin = -dp(17)
         })
-        setHint(overlayDemoHints.first())
     }
-    fun setHint(hint: OverlayHint) { title.text = hint.title }
+    fun setMessage(text: String, hasMore: Boolean) {
+        title.text = text
+        nextButton.visibility = if (hasMore) VISIBLE else GONE
+    }
     fun pointTowardHero(onLeft: Boolean) { /* The new card is centred below the body. */ }
     fun aimAtHero(x: Float) { if (x.isFinite() && heroTargetX != x) { heroTargetX = x; invalidate() } }
     internal fun tailCenters(): List<PointF> {

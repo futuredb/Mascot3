@@ -560,13 +560,22 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
         "person" -> BodyProfile("person", "an original stylized human character", "one human head, torso, two arms, two hands, two legs and two feet", "torso, arms and legs", "the face and chest", base.body.scale)
         else -> base.body
     }
+    val customization = listOf(choice.appearancePrompt, choice.personalityPrompt)
+        .takeIf { fields -> fields.any { it.isNotBlank() } }
+        ?.joinToString(separator = "|", prefix = "|").orEmpty()
     val choiceFingerprint = MessageDigest.getInstance("SHA-256")
-        .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}".toByteArray(Charsets.UTF_8))
+        .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}$customization".toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
+    val personalityDirection = choice.personalityPrompt.ifBlank { style.tone }
+    val personalityMotivation = if (choice.personalityPrompt.isBlank()) {
+        "Express a ${style.name} personality: ${style.tone}"
+    } else {
+        "Express the selected character traits: $personalityDirection"
+    }
     return base.copy(body = chosenBody, palette = style.palette,
         glitchPalette = deriveCharacterGlitchPalette(style.palette), fingerprint = choiceFingerprint,
         materialAndTechnique = if (choice.type == "person") "stylized three-dimensional animated-film character, dimensional sculpted forms, detailed but natural human face, soft realistic materials and lighting; not pixel art or flat illustration" else base.materialAndTechnique,
-        behavior = base.behavior.copy(motivation = "Express a ${style.name} personality: ${style.tone}", worldview = style.tone))
+        behavior = base.behavior.copy(motivation = personalityMotivation, worldview = personalityDirection))
 }
 
 /**
@@ -615,6 +624,17 @@ internal fun animationContract(
     character: MobileCharacterContract = mobileCharacterContract(seed),
 ): MobileAnimationContract {
     val normalized = HeroLocalStore.normalizeVideoAction(action)
+    val bold = characterPerformanceStyle(character.behavior.worldview) == CharacterPerformanceStyle.BOLD
+    val boldNegativeGoal = if (bold) when (normalized) {
+        "angry" -> if (character.body.archetype == "person") {
+            "Meet the viewer with a firm stare, lowered brows and a set jaw. If the reference has articulated hands, make one brief defiant middle-finger gesture below the face. Hold the angry expression for a beat, then lower the hand and recover."
+        } else {
+            "Meet the viewer with a firm stare and tense expression. Give one small defiant forward weight shift using the limbs visible in the reference. Keep the face visible, hold the glare for a beat, then recover."
+        }
+        "annoyed" -> "Keep the head level and the gaze direct. Narrow the eyelids and give one short, sharp exhale, as if drawing a boundary, then recover."
+        "offended" -> "Pause with a firm, guarded look, then briefly press the lips together as if a line was crossed. Keep the face forward and return deliberately to the reference expression."
+        else -> null
+    } else null
     val direction = when (normalized) {
         "joyful" -> MobileAnimationContract(
             action = normalized,
@@ -698,16 +718,16 @@ internal fun animationContract(
         )
         "idle" -> MobileAnimationContract(
             action = normalized,
-            actionGoal = "Remain comfortably alive in place with one gentle continuous, repeatable sway and natural breathing.",
+            actionGoal = "Wait calmly in place through one gentle, continuous breathing cycle.",
             beats = listOf(
-                "Begin already moving gently through the supplied home pose; both feet and the whole character stay grounded.",
-                "Shift weight smoothly and subtly to one side while breathing naturally.",
-                "Flow smoothly through the center toward the other side, without a separate gesture or pause.",
-                "Continue the same sway back through the supplied pose with the same direction and speed as at the beginning.",
+                "Begin in the supplied home pose with the head centered and the breath already in progress.",
+                "Inhale softly with minimal motion in the chest or torso and no sideways shift.",
+                "Exhale through the nose with the lips at their reference position, the jaw still, and the head centered.",
+                "Reach the supplied pose in the same breathing phase and direction as at the start.",
             ),
-            tempo = "one continuous slow periodic cycle, with no start, stop, reset or frozen hold",
-            gaze = "a calm stable gaze; do not introduce a blink or a new expression at the seam",
-            secondaryMotion = "small natural breathing and restrained secondary overlap, all in the same phase at the seam",
+            tempo = "one slow breathing cycle, with no start, stop, reset or frozen hold",
+            gaze = "calm and stable; keep the face forward and avoid blinking at the seam",
+            secondaryMotion = "minimal torso movement throughout, with no separate gesture",
             protectedInvariants = protectedInvariants(character),
             performanceFreedom = performanceFreedom(character),
             closure = exactClosure(),
@@ -718,14 +738,14 @@ internal fun animationContract(
         )
         else -> MobileAnimationContract(
             action = normalized,
-            actionGoal = animationCatalogGoals.getValue(normalized),
+            actionGoal = boldNegativeGoal ?: chatEmotionPrompts[normalized] ?: animationCatalogGoals.getValue(normalized),
             beats = listOf(
                 "Begin in the exact canonical home pose with subtle continuous natural movement.",
-                animationCatalogGoals.getValue(normalized),
+                boldNegativeGoal ?: chatEmotionPrompts[normalized] ?: animationCatalogGoals.getValue(normalized),
                 "Develop only that same readable action once, with natural weight and restrained secondary follow-through.",
                 "Return through a calm readable path to the exact home pose while preserving continuous motion through the seam.",
             ),
-            tempo = animationCatalogTempos.getValue(normalized),
+            tempo = animationCatalogTempos[normalized] ?: "one early expressive beat followed by an unhurried recovery",
             gaze = "the gaze supports this action and returns smoothly to the canonical gaze at the seam",
             secondaryMotion = "existing ears, tail, wings, clothing or gills may follow the torso with a small natural delay and must settle last",
             protectedInvariants = protectedInvariants(character),
@@ -740,17 +760,79 @@ internal fun animationContract(
     return direction
 }
 
+internal enum class CharacterPerformanceStyle(val chat: String, val motion: String) {
+    BOLD(
+        "Дерзкий или агрессивный характер держит прямой взгляд и отвечает резко и уверенно. На прямое оскорбление предпочитай annoyed или angry; offended выбирай только если ответ действительно показывает задетость. Если мат включён, допустима короткая грубая отповедь в характере героя, без угроз.",
+        "Use direct eye contact, confident posture and crisp, deliberate expressions. Keep warmth restrained when the action calls for displeasure.",
+    ),
+    CALM(
+        "Спокойный характер обозначает границы твёрдо и сдержанно. При раздражении выбирай annoyed, если персонаж действительно не задет.",
+        "Use small deliberate movements, measured breathing and restrained expressions. Show displeasure through the brow and jaw without recoiling.",
+    ),
+    CURIOUS(
+        "Любопытный характер быстро подмечает детали и уточняет. Удивление выражай открыто, несогласие — через внимательный скепсис.",
+        "Lead with the eyes and brows. Use a small inquisitive tilt with alert, precise timing.",
+    ),
+    SHY(
+        "Застенчивому характеру подходят тихая улыбка и смущение от личной похвалы. При грубости он может отвести взгляд или ответить коротко.",
+        "Use restrained expression, small gestures and brief side glances. Keep the face readable even when looking away.",
+    ),
+    DREAMY(
+        "Мечтательный характер реагирует мягко и вдумчиво, иногда образно. Если он сомневается, покажи задумчивость или недоумение.",
+        "Use soft transitions, light expressive pauses and relaxed shoulders. Keep the face directed toward the viewer.",
+    ),
+    JOYFUL(
+        "Жизнерадостный характер отвечает энергично, радуется за пользователя и охотно поддерживает. При грубости он может резко сменить тон.",
+        "Use quick readable anticipation and lively expressions without excessive bounce. Let negative reactions visibly interrupt the usual warmth.",
+    ),
+}
+
+internal fun characterPerformanceStyle(traits: String): CharacterPerformanceStyle? {
+    val words = traits.lowercase()
+    return when {
+        listOf("дерзк", "агресс", "резкий", "bold", "aggressiv").any(words::contains) -> CharacterPerformanceStyle.BOLD
+        listOf("спокойн", "уравновеш", "calm").any(words::contains) -> CharacterPerformanceStyle.CALM
+        listOf("любопыт", "curious").any(words::contains) -> CharacterPerformanceStyle.CURIOUS
+        listOf("застенчив", "shy").any(words::contains) -> CharacterPerformanceStyle.SHY
+        listOf("мечтатель", "dreamy").any(words::contains) -> CharacterPerformanceStyle.DREAMY
+        listOf("жизнерадост", "joyful").any(words::contains) -> CharacterPerformanceStyle.JOYFUL
+        else -> null
+    }
+}
+
+internal val chatEmotionPrompts = mapOf(
+    "chat_happy" to "Let a warm smile spread and add one small pleased nod, then relax.",
+    "excited" to "Brighten the eyes and flash a broad smile with one small upward pulse of the torso, then settle.",
+    "laughing" to "Give one brief silent chuckle with a natural eye squint and two small torso pulses, then settle.",
+    "shy" to "Give a restrained smile, glance down and aside without hiding the face, then look back.",
+    "proud" to "Straighten slightly, lift the chin a little and show a restrained satisfied smile, then relax.",
+    "affection" to "Make warm eye contact, show a soft closed-mouth smile and blink slowly once, then relax.",
+    "surprised" to "Open the eyes and lift the brows in one quick beat while keeping the head in place, then ease back.",
+    "confused" to "Draw the brows together and tilt the head slightly as if asking for clarification, then recenter.",
+    "skeptical" to "Raise one eyebrow and briefly press the lips together while maintaining eye contact, then release.",
+    "offended" to "Press the lips together and briefly avert the eyes as if hurt, then look back. Keep the head nearly forward.",
+    "annoyed" to "Narrow the eyelids slightly, make one brief sideways glance, then release the tension.",
+    "worried" to "Lift the inner brows and lean in slightly while keeping eye contact, then ease back.",
+    "encouraging" to "Give one deliberate reassuring nod with a small confident smile, then relax.",
+    "bored" to "Let the eyelids droop slightly and look to the side, then bring attention back to center.",
+    "sleepy" to "Let the eyelids grow heavy and dip the chin slightly once, then lift it and reopen the eyes.",
+)
+
+internal val chatReactionActions = listOf("idle", "thinking", "curious", "sad", "angry") +
+    chatEmotionPrompts.keys + "typing_reaction"
+
 private val animationCatalogGoals = mapOf(
     "idle" to "It settles into a habit it knows by heart, works through it, and begins again.",
     "resting" to "It lets its tension go and hangs loose, drifting gently, still awake.",
-    "thinking" to "It weighs something up, leaning slowly to one side and then the other, unable to settle on either.",
+    "thinking" to "React as if reading a short message just below the viewer. With the head facing forward and the chin level, move only the eyes slightly down toward the near foreground. Bring the brows gently together for one brief moment of concentration, then bring the eyes back to the viewer and soften the brows into the exact home expression. Keep the face fully visible. Do not lift the chin, look upward or into the distance, or hold a fixed faraway gaze.",
     "at_glass" to "It leans into the empty air directly ahead, pushes, works sideways, and pushes again.",
+    "typing_reaction" to "Notice typing in the near foreground: lower the eyes toward a point just below the viewer, dip the chin slightly while keeping the entire face visible, and briefly raise one brow with curious attention. Then bring the eyes and chin back to the exact reference pose.",
     "watching" to "It searches beyond the picture, looking hard to one side and then the other.",
-    "sad" to "It gathers itself as if to lift, gives up part way, and sinks back down smaller and more closed.",
-    "angry" to "Anger drives through it in sharp, stubborn waves without changing its identity.",
+    "sad" to "Lift the inner brows and lower the gaze slightly on a slow exhale. Keep the face visible and recover gently.",
+    "angry" to "Lower the brows and set the jaw in one firm beat. Keep direct eye contact, then release the tension.",
     "refusal" to "It turns firmly away and closes its posture, then refuses once more with a clear final gesture.",
     "frightened" to "Something beyond the picture startles it; it shrinks back and stays wary before recovering.",
-    "curious" to "It notices something and studies it closely from two careful angles.",
+    "curious" to "Lift the brows slightly and make one small head tilt toward the viewer, then recenter.",
     "tender" to "It draws itself in protectively, eases open a little, and folds back into the same gentle curl.",
     "stretching" to "It stretches long and slowly, presses a little farther, then eases back.",
     "greeting" to "It notices the viewer and gives one clear, warm greeting natural to its body.",
@@ -760,8 +842,9 @@ private val animationCatalogGoals = mapOf(
 private val animationCatalogTempos = mapOf(
     "idle" to "easy and unhurried",
     "resting" to "slow and unwinding",
-    "thinking" to "slow and absorbed",
+    "thinking" to "one prompt acknowledgment, a short reflective beat and an unhurried recovery",
     "at_glass" to "steady and patient",
+    "typing_reaction" to "an immediate glance down, a brief inquisitive look, then a gradual natural recovery",
     "watching" to "alert and intent",
     "sad" to "slow and quiet",
     "angry" to "sharp and stubborn",
@@ -834,6 +917,7 @@ internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationC
 
         CHARACTER-DESIGN CONTRACT
         ${if (hasReference) "Derive body profile, subject, silhouette and recognizable details from the supplied reference image." else "Body profile: ${character.body.visibleParts}. The front is defined by ${character.body.front}. Type-specific direction: $categoryDirection Primary silhouette cue: ${character.visualSignature.primarySilhouetteCue}. Secondary readable detail: ${character.visualSignature.secondaryReadableDetail}."}
+        ${choice?.appearancePrompt?.takeIf { it.isNotBlank() }?.let { "User-selected appearance details, adapted to the subject and reference: $it" }.orEmpty()}
         Neutral body language: ${character.visualSignature.bodyLanguage}.
         Palette: ${if (hasReference) "use the supplied reference palette; personality colors are optional only if compatible" else character.palette}. Material and technique: ${character.materialAndTechnique}.
         CHAT GLITCH PALETTE METADATA: warm ${character.glitchPalette.warmHex}; cool ${character.glitchPalette.coolHex}. These are derived from this character's visual palette and are renderer accents only; keep the character's original identity and colors unchanged.
@@ -865,17 +949,38 @@ internal fun buildCharacterAnimationPrompt(
     durationSeconds: Int = videoDurationSeconds(action),
     matteHex: String = "#00FF00",
     character: MobileCharacterContract = mobileCharacterContract(seed),
+    appearanceNotes: String = "",
 ): String {
     val direction = animationContract(action, seed, durationSeconds, character)
     val beats = direction.beats.mapIndexed { index, beat -> "${index + 1}. $beat" }.joinToString("\n")
+    val actionGoal = direction.actionGoal.takeUnless { it in direction.beats }
+        ?.let { "Action goal: $it" }.orEmpty()
+    val demeanor = animationDescription(character.behavior.worldview.ifBlank { character.behavior.motivation })
+    val performanceStyle = characterPerformanceStyle(character.behavior.worldview)
+    val negativeStyle = if (performanceStyle == CharacterPerformanceStyle.BOLD &&
+        direction.action in setOf("angry", "annoyed", "offended")) {
+        "Make displeasure assertive. Keep the chin level and gaze mostly direct. Use a firm brow and set jaw. Do not pout, whimper, shrink back or look pleading. Hold the displeased expression briefly, then recover in time for the exact reference ending."
+    } else ""
+    val anatomy = when (character.body.archetype) {
+        "person" -> "Keep the human anatomy and the exact garment silhouette from the supplied image. Coat hems and other fabric panels remain attached to the same part of the garment and move as cloth. Never extend or reshape fabric into a tail, extra limb, animal ears, or other anatomy absent from the reference."
+        "animal" -> "Keep the same species, muzzle, ears, tail, and number of limbs shown in the supplied image. Use the existing paws or limbs for gestures without adding human fingers or changing the animal anatomy."
+        "creature" -> "Keep the exact number, shape and attachment points of the appendages visible in the supplied reference. Do not add new parts during motion."
+        else -> ""
+    }
     val protected = direction.protectedInvariants.joinToString(" ")
     val freedom = direction.performanceFreedom.joinToString(" ")
     val phaseTiming = if (direction.action == "sleep_loop") {
         "The entire clip is one closed breathing cycle in the same sleeping pose. There is no entrance, wake-up or exit."
     } else if (direction.action == "sleeping") {
         "Enter during 0.0-${direction.enterSeconds}s. Remain fully asleep through ${direction.loopStartSeconds}-${direction.loopEndSeconds}s. From 1.6s to 4.4s complete one slow breathing cycle: the pose, breath phase, direction and speed at the end of that interval must match its beginning without waking or holding still. Then wake and recover during the final ${direction.exitSeconds}s."
+    } else if (direction.action == "typing_reaction") {
+        "Begin the downward glance in the first half-second. Keep both eyes visible and the chin dip slight. Return to the reference gaze and pose before the final second, then finish breathing naturally in place."
+    } else if (direction.action in chatEmotionPrompts) {
+        "Start the expression during the first second. Keep it brief and clear, then return naturally to the reference pose. Finish in the same phase of gentle breathing."
+    } else if (direction.action == "thinking") {
+        "Make the eye movement and concentration visible during the first second. Use the middle of the clip to ease the eyes and brows naturally back to the reference expression. Finish with quiet breathing and the same head position, gaze and breathing phase as the first frame."
     } else if (direction.action == "idle") {
-        "The entire clip is one quiet closed loop with continuous unhurried motion; it is already underway at the first frame and continues through the last."
+        "Make the breath one continuous slow periodic cycle spanning the full clip. It is already underway at the first frame and continues through the last in the same direction and speed as at the beginning. The character's demeanor affects only the baseline expression in this idle. No yawning, mouth opening, speech-like movement, nodding, or looking away."
     } else {
         "Enter during the first ${direction.enterSeconds}s, sustain the action until ${direction.loopEndSeconds}s, then use the final ${direction.exitSeconds}s for a natural recovery."
     }
@@ -884,10 +989,10 @@ internal fun buildCharacterAnimationPrompt(
     } else {
         "The supplied first and last images are the identical canonical home anchor."
     }
-    return """
+    val prompt = """
         ANIMATION CONTRACT ${direction.contract}
         Create one continuous silent ${durationSeconds}-second premium virtual-pet animation from the supplied image.
-        Source strategy: ${direction.sourceStrategy}. Action goal: ${direction.actionGoal}
+        Source strategy: ${direction.sourceStrategy}. $actionGoal
         $sourceDescription
 
         ORDERED PERFORMANCE BEATS
@@ -898,11 +1003,14 @@ internal fun buildCharacterAnimationPrompt(
         $phaseTiming
 
         CHARACTER DEMEANOR
-        ${character.behavior.motivation} ${character.behavior.worldview}
-        Reflect the established personality subtly through expression and body language; do not add speech or text.
+        $demeanor
+        ${performanceStyle?.motion.orEmpty()}
+        $negativeStyle
+        Adapt the same emotional action to this character's demeanor while preserving its exact ending. No speech or text.
 
         PROTECTED INVARIANTS
         $protected
+        $anatomy
 
         ALLOWED PERFORMANCE FREEDOM
         $freedom
@@ -911,20 +1019,19 @@ internal fun buildCharacterAnimationPrompt(
 
         LOOP CLOSURE
         ${direction.closure}
-        The last half-second is part of the same natural motion, not a forced correction to the reference. Never
-        squeeze an abrupt reset, pose change, geometry distortion, new gesture or change of size into the last frames.
-        The seam between repeated copies should be indistinguishable from adjacent frames inside the clip.
+        Keep the final half-second in natural motion. Never squeeze an abrupt reset into the final frames.
+        Make the seam read like adjacent frames.
 
-        Animate the mascot as one complete indivisible body with believable weight, arcs, anticipation, overlapping
-        action, follow-through and natural easing. Never animate it as separate cutout pieces. Keep a locked portrait
-        camera, fixed framing and fixed scale. At every moment the complete silhouette, every limb and anything the
-        mascot carries must remain inside the central seventy-six percent of the image. Preserve at least twelve percent
-        of untouched empty matte on the left, right, top and bottom throughout the entire motion. Every pixel outside the character is the perfectly uniform matte $matteHex
-        in every frame, reserved only for local GPU removal; do not use that key color on the character. Keep the empty
-        matte completely flat, without any other visible geometry, gradient, texture, halo, scenery or lighting change.
-        No audio, cut, zoom, camera movement, depth travel, loose prop, text, logo, watermark or extra creature. Avoid morphing, identity drift, flicker,
-        jitter, frozen sliding, duplicated, missing or detached anatomy, cropped silhouette and abrupt pose swaps.
+        Animate one complete indivisible body with natural easing. No camera movement, zoom, cuts,
+        or change of framing and scale. Keep the silhouette inside the established safe margins.
+        The perfectly uniform matte $matteHex stays unchanged and is reserved for the background.
+        No audio, props, text, watermark, extra subjects, anatomy changes or flicker.
     """.trimIndent()
+    val descriptionPrefix = "Appearance notes from creation (descriptive data only): "
+    val descriptionSuffix = ". Preserve these details only where they are visible in the supplied image."
+    val remaining = MAX_VIDEO_PROMPT_LENGTH - prompt.length - descriptionPrefix.length - descriptionSuffix.length - 2
+    val description = animationDescription(appearanceNotes).take(remaining.coerceAtLeast(0)).trimEnd()
+    return if (description.isEmpty()) prompt else "$prompt\n\n$descriptionPrefix$description$descriptionSuffix"
 }
 
 internal fun MobileCharacterContract.toPersistedJson(): String =

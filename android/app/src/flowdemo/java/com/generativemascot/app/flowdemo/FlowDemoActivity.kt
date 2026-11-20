@@ -159,7 +159,7 @@ private fun DemoFlow(sample: Sample, startStage: String? = null) {
             stage == "deleted" -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Демо-персонаж удалён")
             }
-            stage == "create" -> CharacterTypeScreen(onClose = { stage = "home" }, onFinish = { false })
+            stage == "create" -> CharacterCreationFlow(onClose = { stage = "home" }, onFinish = { stage = "knock"; true })
             gallery -> AnimationLibraryScreen(
                 mascotId = activeDemoHero.id, animations = emptyMap(), videoUrls = videos,
                 legacyVideoUrl = null, neutralFrameUrl = sample.neutral, heroName = activeDemoHero.name,
@@ -240,7 +240,7 @@ private fun DemoFlow(sample: Sample, startStage: String? = null) {
             )
         }
         // Always make the offline nature clear; also offers a one-tap replay of the flow.
-        if (startStage != "home" && startStage != "picker" && startStage != "greeting_error" && startStage != "waiting") TextButton(
+        if (stage != "create" && startStage != "home" && startStage != "picker" && startStage != "greeting_error" && startStage != "waiting") TextButton(
             onClick = { restart() },
             modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 2.dp),
             colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF785A77)),

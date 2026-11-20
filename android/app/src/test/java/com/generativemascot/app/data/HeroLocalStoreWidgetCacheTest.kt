@@ -25,10 +25,10 @@ class HeroLocalStoreWidgetCacheTest {
             parentFile!!.mkdirs()
             writeBytes(ByteArray(2048) { 1 })
         }
-        val key = "${video.length()}:${video.lastModified()}:320:12:v4"
+        val key = "${video.length()}:${video.lastModified()}:320:12:v5"
         val directory = File(context.filesDir, "hero/$id/widget-frames/greeting/cache-${promptSha256(key).take(16)}")
         directory.mkdirs()
-        File(directory, "source.txt").writeText("${video.length()}:${video.lastModified()}:24:320:12:v4")
+        File(directory, "source.txt").writeText("${video.length()}:${video.lastModified()}:24:320:12:v5")
         File(directory, "interval-ms.txt").writeText("83")
         val frames = List(24) { index -> File(directory, "frame_%02d.png".format(index)).apply {
             writeBytes(ByteArray(256) { 2 })
@@ -50,9 +50,8 @@ class HeroLocalStoreWidgetCacheTest {
         writeBytes(ByteArray(2048) { 1 })
     }
 
-    private fun writeCache(video: File, count: Int = 24, legacy: Boolean = false): List<File> {
-        val side = if (legacy) 160 else 320
-        val version = if (legacy) 3 else 4
+    private fun writeCache(video: File, count: Int = 24, version: Int = 5): List<File> {
+        val side = if (version == 3) 160 else 320
         val key = "${video.length()}:${video.lastModified()}:$side:12:v$version"
         val root = File(context.filesDir, "hero/$id/widget-frames/idle/cache-${promptSha256(key).take(16)}")
         root.mkdirs()
@@ -127,12 +126,15 @@ class HeroLocalStoreWidgetCacheTest {
 
     @Test fun legacyCacheRemainsVisibleDuringLocalUpgradeAndNewCacheTakesPriority() = runBlocking {
         val video = fakeVideo()
-        val oldFrames = writeCache(video, legacy = true)
+        val oldFrames = writeCache(video, version = 3)
         assertEquals(oldFrames.drop(1), store.cachedWidgetAnimation(id, "idle").files)
+        assertTrue(store.needsWidgetPreparation(id, "idle"))
+        val previousFrames = writeCache(video, version = 4)
+        assertEquals(previousFrames.drop(1), store.cachedWidgetAnimation(id, "idle").files)
         assertTrue(store.needsWidgetPreparation(id, "idle"))
         val newFrames = writeCache(video)
         assertEquals(newFrames.drop(1), store.widgetAnimation(id, "idle").files)
         assertFalse(store.needsWidgetPreparation(id, "idle"))
-        assertTrue(oldFrames.all { it.isFile })
+        assertTrue((oldFrames + previousFrames).all { it.isFile })
     }
 }

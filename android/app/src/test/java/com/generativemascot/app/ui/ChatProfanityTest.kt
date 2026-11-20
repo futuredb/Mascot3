@@ -110,14 +110,72 @@ class ChatProfanityTest {
         assertTrue(prompts.last().contains("Режим общения с матом ВЫКЛЮЧЕН"))
     }
 
+    @Test fun characterMoodSurvivesRecreationAndStaysSeparateFromTheLocalReaction() = runBlocking {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val moods = context.getSharedPreferences("character_mood_test", Context.MODE_PRIVATE)
+        moods.edit().clear().commit()
+        val prompts = mutableListOf<String>()
+        fun chat(id: String, moodChange: String = "keep", reaction: String? = null) = DirectMascotChat(
+            id, apiKey = "offline", requestClient = offline(prompts, moodChange, reaction),
+            moodPreferences = moods, moodKey = id,
+        )
+
+        val angryReply = chat("green", "insult", "angry")
+            .send("Ты дурак", availableReactions = setOf("angry"))
+        assertEquals("angry", angryReply.getString("local_reaction"))
+        val neutralReply = chat("green").send("Сколько будет два плюс два?", availableReactions = setOf("angry"))
+        assertTrue(prompts.last().contains("Настроение к собеседнику: hurt"))
+        assertFalse(neutralReply.has("local_reaction"))
+
+        chat("emor").send("Привет")
+        assertTrue(prompts.last().contains("Настроение к собеседнику: neutral"))
+        chat("green", "apology").send("Извини")
+        chat("green").send("Продолжим?")
+        assertTrue(prompts.last().contains("Настроение к собеседнику: neutral"))
+    }
+
+    @Test fun completedChatTurnDrivesTheHomeTextAndAvailableClip() = runBlocking {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val moods = context.getSharedPreferences("home_chat_mood_test", Context.MODE_PRIVATE)
+        var change = "insult"
+        fun chat(reaction: String) = DirectMascotChat(
+            "Грин", tone = "дерзкий", apiKey = "offline",
+            requestClient = offline(mutableListOf(), change, reaction),
+            moodPreferences = moods, moodKey = "green",
+        )
+        chat("angry").send("Ты дурак", availableReactions = setOf("angry"))
+        val anger = requireNotNull(moods.readHomeChatMood("green", System.currentTimeMillis()))
+        assertEquals("angry", anger.availableAction(setOf("idle", "angry", "annoyed")))
+        assertEquals("annoyed", anger.availableAction(setOf("idle", "annoyed")))
+        assertNull(anger.availableAction(setOf("idle", "chat_happy")))
+        assertTrue(anger.line(true, true, "annoyed").contains("раздражает"))
+        assertTrue(anger.line(true, true).startsWith("Бля,"))
+        assertFalse(anger.line(true, false).startsWith("Бля,"))
+        assertFalse(anger.line(false, true).startsWith("Бля,"))
+        assertNull(moods.readHomeChatMood("emor", System.currentTimeMillis()))
+
+        change = "praise"
+        chat("shy").send("Ты отлично справился", availableReactions = setOf("shy"))
+        val praise = requireNotNull(moods.readHomeChatMood("green", System.currentTimeMillis()))
+        assertEquals("shy", praise.availableAction(setOf("idle", "shy")))
+        assertTrue(praise.line(true, true).contains("смутился"))
+        assertTrue(praise.line(true, true, "chat_happy").contains("Спасибо за похвалу"))
+        assertNull(moods.readHomeChatMood("green", praise.expires))
+    }
+
     /** Intercepts the real request before networking; no key or provider call. */
-    private fun offline(prompts: MutableList<String>) = OkHttpClient.Builder().addInterceptor { chain ->
+    private fun offline(
+        prompts: MutableList<String>,
+        moodChange: String = "keep",
+        localReaction: String? = null,
+    ) = OkHttpClient.Builder().addInterceptor { chain ->
         val buffer = okio.Buffer()
         chain.request().body!!.writeTo(buffer)
         val body = JSONObject(buffer.readUtf8())
         prompts.add(body.getJSONArray("messages").getJSONObject(0).getString("content"))
         val answer = JSONObject().put("reply_ru", "Понятно, продолжим.").put("reaction_en", "The character nods calmly.")
             .put("mood_ru", "спокойствие").put("calendar_event", JSONObject.NULL)
+            .put("mood_change", moodChange).put("local_reaction", localReaction ?: JSONObject.NULL)
         val event = JSONObject().put("choices", JSONArray().put(JSONObject()
             .put("delta", JSONObject().put("content", answer.toString())).put("finish_reason", "stop")))
         Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Offline fixture")

@@ -89,6 +89,10 @@ class OverlayTest {
         context.assets.open("bundled-heroes/$id/base.png").use { input ->
             File(folder, "base.png").outputStream().use(input::copyTo)
         }
+        com.generativemascot.app.ui.ChatHistoryStore(context).write(id, listOf(
+            com.generativemascot.app.ui.ChatMessage(true, "Привет"),
+            com.generativemascot.app.ui.ChatMessage(false, "Привет, я здесь."),
+        ))
         return folder
     }
 
@@ -238,6 +242,14 @@ class OverlayTest {
             awaitOverlay()
             waitFor("Widget reveals the hero", { view("hero").isAttachedToWindow })
             assertTrue(view("bubble").isAttachedToWindow); assertFalse(view("compact").isAttachedToWindow)
+            try {
+                MascotOverlayService.setAppVisible(true)
+                waitFor("Mascot hides the floating hero", { !view("hero").isAttachedToWindow })
+                assertFalse(view("bubble").isAttachedToWindow)
+            } finally {
+                MascotOverlayService.setAppVisible(false)
+            }
+            waitFor("The overlay returns when Mascot is left", { view("hero").isAttachedToWindow })
             assertEquals(rules, OverlayAppRules.read(context))
             foregroundEvent("org.example.bank")
             waitFor("Excluded app hides it", { !view("hero").isAttachedToWindow })
@@ -1554,6 +1566,15 @@ class OverlayTest {
             com.generativemascot.app.overlayChatNavigation(ready.copy(backgroundCreation = true), "other"))
     }
 
+    @Test fun overlayShowsRecentHeroRepliesFromActualConversations() {
+        fun message(text: String, user: Boolean = false) = com.generativemascot.app.ui.ChatMessage(user, text)
+        val intro = message("Привет! Рад познакомиться.")
+        assertTrue(overlayChatReplies(listOf(intro)).isEmpty())
+        val history = listOf(intro, message("Привет", user = true)) +
+            (1..6).map { message("Ответ $it") }
+        assertEquals((6 downTo 2).map { "Ответ $it" }, overlayChatReplies(history))
+    }
+
     @Test fun onlyCollapseIsPresentAndTouchable() {
         val card = OverlayHintView(context, {}, {})
         card.measure(View.MeasureSpec.makeMeasureSpec(248, View.MeasureSpec.EXACTLY),
@@ -1574,16 +1595,16 @@ class OverlayTest {
         })
         fun labels(view: View): List<TextView> = if (view is TextView) listOf(view)
             else if (view is ViewGroup) (0 until view.childCount).flatMap { labels(view.getChildAt(it)) } else emptyList()
-        labels(card).first { it.text == "Да" }.performClick()
-        labels(card).first { it.text == "Позже" }.performClick()
-        assertEquals(2, next); assertEquals(0, closed); assertEquals(0, collapsed)
+        card.setMessage("Давай на минутку выдохнем", hasMore = true)
+        labels(card).first { it.text == "Дальше" }.performClick()
+        labels(card).first { it.text == "Скрыть" }.performClick()
+        assertEquals(1, next); assertEquals(1, closed); assertEquals(0, collapsed)
         card.findViewWithTag<View>("collapse").performClick()
         assertEquals(1, collapsed)
         card.findViewWithTag<View>("hint-chat").performClick()
         val chatIntent = shadowOf(context).nextStartedActivity
         assertEquals(com.generativemascot.app.MainActivity::class.java.name, chatIntent.component?.className)
         assertEquals(heroId, chatIntent.getStringExtra(com.generativemascot.app.MainActivity.EXTRA_OVERLAY_CHAT_HERO))
-        card.setHint(overlayDemoHints[1])
         card.measure(View.MeasureSpec.makeMeasureSpec(248, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.AT_MOST))
         card.layout(0, 0, card.measuredWidth, card.measuredHeight)

@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.util.LruCache
 import java.io.File
 
 /** Optional correction for clips where the model shaded a green backdrop. */
@@ -25,6 +26,12 @@ internal fun chooseGreenMatteTuning(border: List<Int>, subject: List<Int>): Gree
     return GreenMatteTuning(low = .04f, high = (tenth - .01f).coerceIn(.10f, .14f), adaptive = true)
 }
 
+private data class MatteSource(val path: String, val length: Long, val modifiedAt: Long)
+private data class MatteInputs(val video: MatteSource, val base: MatteSource)
+private val localGreenMatteTunings = LruCache<MatteInputs, GreenMatteTuning>(48)
+
+private fun File.matteSource() = MatteSource(path, length(), lastModified())
+
 /** Local-only inspection; leaves the original files and their cached QA untouched. */
 internal fun detectAdaptiveGreenMatte(videoUrl: String, neutralUrl: String?): GreenMatteTuning = runCatching {
     val video = Uri.parse(videoUrl.substringBefore('?'))
@@ -32,7 +39,10 @@ internal fun detectAdaptiveGreenMatte(videoUrl: String, neutralUrl: String?): Gr
     if (video.scheme != "file" || neutral?.scheme != "file") return@runCatching GreenMatteTuning()
     val anchor = File(requireNotNull(neutral.path))
     val base = File(anchor.parentFile?.parentFile ?: return@runCatching GreenMatteTuning(), "base.png")
-    if (!base.isFile) return@runCatching GreenMatteTuning()
+    val videoFile = File(requireNotNull(video.path))
+    if (!base.isFile || !videoFile.isFile) return@runCatching GreenMatteTuning()
+    val inputs = MatteInputs(videoFile.matteSource(), base.matteSource())
+    localGreenMatteTunings.get(inputs)?.let { return@runCatching it }
     val subjectBitmap = BitmapFactory.decodeFile(base.path) ?: return@runCatching GreenMatteTuning()
     val subject = mutableListOf<Int>()
     try {
@@ -45,7 +55,7 @@ internal fun detectAdaptiveGreenMatte(videoUrl: String, neutralUrl: String?): Gr
     val border = mutableListOf<Int>()
     val retriever = MediaMetadataRetriever()
     try {
-        retriever.setDataSource(requireNotNull(video.path))
+        retriever.setDataSource(videoFile.path)
         val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             ?: return@runCatching GreenMatteTuning()
         for (fraction in listOf(.25, .5, .75)) {
@@ -57,5 +67,7 @@ internal fun detectAdaptiveGreenMatte(videoUrl: String, neutralUrl: String?): Gr
             } finally { frame.recycle() }
         }
     } finally { retriever.release() }
-    chooseGreenMatteTuning(border, subject)
+    chooseGreenMatteTuning(border, subject).also {
+        if (border.size >= 36) localGreenMatteTunings.put(inputs, it)
+    }
 }.getOrDefault(GreenMatteTuning())

@@ -119,8 +119,13 @@ private val absentAnimationGeometry = Regex(
     RegexOption.IGNORE_CASE,
 )
 
+internal const val MAX_VIDEO_PROMPT_LENGTH = 6_000
+
+internal fun animationDescription(text: String): String =
+    absentAnimationGeometry.replace(text, " ").replace(Regex("\\s+"), " ").trim().take(700)
+
 internal fun validateResolvedVideoPrompt(prompt: String, matteHex: String) {
-    require(prompt.length <= 6_000) { "Промпт анимации слишком длинный: ${prompt.length}" }
+    require(prompt.length <= MAX_VIDEO_PROMPT_LENGTH) { "Промпт анимации слишком длинный: ${prompt.length}" }
     require(prompt.contains(matteHex, ignoreCase = true)) { "Промпт потерял цвет технического фона" }
     require(prompt.contains("one complete indivisible body", ignoreCase = true)) {
         "Промпт потерял правило цельного тела"

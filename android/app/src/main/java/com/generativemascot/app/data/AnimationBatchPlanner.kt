@@ -15,11 +15,14 @@ internal fun planAnimationBatch(
     readyActions: Set<String>,
     pendingActions: Set<String>,
     requestedCount: Int,
+    priorityActions: List<String> = emptyList(),
+    eligibleActions: List<String> = ANIMATION_BATCH_ORDER,
 ): List<String> {
-    require(requestedCount in 1..HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size) {
-        "Выберите от 1 до ${HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size} анимаций"
+    require(requestedCount in 1..eligibleActions.size) {
+        "Выберите от 1 до ${eligibleActions.size} анимаций"
     }
-    val missing = ANIMATION_BATCH_ORDER.filterNot(readyActions::contains)
+    val order = (priorityActions.filter { it in eligibleActions } + eligibleActions).distinct()
+    val missing = order.filterNot(readyActions::contains)
     return (missing.filter(pendingActions::contains) + missing.filterNot(pendingActions::contains))
         .take(requestedCount)
 }

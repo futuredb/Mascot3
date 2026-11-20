@@ -28,13 +28,14 @@ class BundledHeroSettingsTest {
             assertEquals(.2f, saved.positionX!!, .001f); assertEquals(.8f, saved.positionY!!, .001f)
             assertNull(saved.referencePath)
             assertEquals("proactive_guidance", interactions.getString(heroId, null))
-            HeroLocalStore(context).saveCharacterChoice(heroId, CharacterCreationChoice("person", "expert"))
+            val updated = CharacterCreationChoice(type = "person", style = "expert", personalityPrompt = "Спокойный")
+            HeroLocalStore(context).saveCharacterChoice(heroId, updated)
             interactions.edit().putString(heroId, "request_guidance").commit()
             BundledHeroSettings.importIfAbsent(context, heroId, directory)
-            assertEquals("expert", HeroLocalStore(context).characterChoice(heroId)?.style)
+            assertEquals(updated, HeroLocalStore(context).characterChoice(heroId))
             assertEquals("request_guidance", interactions.getString(heroId, null))
         } finally {
-            listOf("type", "style", "reference", "x", "y").forEach { choices.edit().remove("$heroId:$it").commit() }
+            listOf("type", "style", "reference", "x", "y", "personalityPrompt").forEach { choices.edit().remove("$heroId:$it").commit() }
             interactions.edit().remove(heroId).commit()
             directory.deleteRecursively()
         }

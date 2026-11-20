@@ -52,8 +52,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 196
-        versionName = "0.1.195-dialogue-timing"
+        versionCode = 235
+        versionName = "0.1.234-smooth-portrait"
         val serverUrl = providers.gradleProperty("MASCOT3_SERVER_URL").orElse("http://127.0.0.1:8788")
         val clientToken = providers.gradleProperty("MASCOT3_CLIENT_TOKEN").orElse("")
         buildConfigField("String", "API_BASE_URL", quotedBuildConfig(serverUrl.get()))

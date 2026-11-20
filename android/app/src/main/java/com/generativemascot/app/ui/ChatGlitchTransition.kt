@@ -19,7 +19,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import kotlin.math.PI
 import kotlin.math.sin
@@ -75,14 +80,22 @@ internal fun rememberChatGlitchTransition(
 }
 
 @Composable
-internal fun ChatGlitchOverlay(state: ChatGlitchState, modifier: Modifier = Modifier, loading: Boolean = false) {
+internal fun ChatGlitchOverlay(
+    state: ChatGlitchState,
+    modifier: Modifier = Modifier,
+    loading: Boolean = false,
+    softenEdges: Boolean = false,
+) {
     val loadingProgress by rememberInfiniteTransition(label = "helios-loading-glitch").animateFloat(
         initialValue = .18f,
         targetValue = .82f,
         animationSpec = infiniteRepeatable(tween(920, easing = LinearEasing), RepeatMode.Reverse),
         label = "helios-loading-glitch-progress",
     )
-    Canvas(modifier) {
+    val canvasModifier = if (softenEdges) modifier.graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+    } else modifier
+    Canvas(canvasModifier) {
         val transitioning = state.progress.value > 0f && state.progress.value < 1f
         if (!transitioning && !loading) return@Canvas
         val t = if (transitioning) state.progress.value else loadingProgress
@@ -90,14 +103,15 @@ internal fun ChatGlitchOverlay(state: ChatGlitchState, modifier: Modifier = Modi
         val cover = chatGlitchOcclusion(t)
         val warm = state.warm
         val cool = state.cool
-        val unit = size.width / 256f
+        val unitX = size.width / 256f
+        val unitY = if (softenEdges) size.height / 256f else unitX
         val tick = (t * 8).toInt()
         fun noise(seed: Int): Float {
             val n = sin(seed * 127.1 + 311.7) * 43758.5453
             return (n - kotlin.math.floor(n)).toFloat()
         }
         fun rect(color: Color, alpha: Float, x: Float, y: Float, w: Float, h: Float) {
-            drawRect(color.copy(alpha = alpha.coerceIn(0f, 1f)), Offset(x * unit, y * unit), Size(w * unit, h * unit))
+            drawRect(color.copy(alpha = alpha.coerceIn(0f, 1f)), Offset(x * unitX, y * unitY), Size(w * unitX, h * unitY))
         }
         when (state.effect) {
             ChatGlitchEffect.Slices -> for (y in 0..255 step 14) {
@@ -130,8 +144,23 @@ internal fun ChatGlitchOverlay(state: ChatGlitchState, modifier: Modifier = Modi
             ChatGlitchEffect.Echo -> for (i in 0..2) {
                 val distance = (i + 1) * 7 * wave * .7375f
                 drawRect((if (i % 2 == 1) warm else cool).copy(alpha = wave * .5f),
-                    Offset((66 - distance) * unit, (30 - distance) * unit),
-                    Size((124 + distance * 2) * unit, (196 + distance * 2) * unit), style = Stroke(unit))
+                    Offset((66 - distance) * unitX, (30 - distance) * unitY),
+                    Size((124 + distance * 2) * unitX, (196 + distance * 2) * unitY), style = Stroke(unitX))
+            }
+        }
+        if (softenEdges) {
+            scale(scaleX = size.width / size.height, scaleY = 1f, pivot = center) {
+                drawRect(
+                    brush = Brush.radialGradient(
+                        .54f to Color.Black,
+                        1f to Color.Transparent,
+                        center = center,
+                        radius = size.height / 2f,
+                    ),
+                    topLeft = Offset(center.x - size.height / 2f, 0f),
+                    size = Size(size.height, size.height),
+                    blendMode = BlendMode.DstIn,
+                )
             }
         }
     }

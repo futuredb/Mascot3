@@ -61,5 +61,6 @@ class VideoLoopQualityTest {
         val idle = buildCharacterAnimationPrompt("idle", seed = 73)
         assertTrue(idle.contains("one continuous slow periodic cycle"))
         assertTrue(idle.contains("same direction and speed as at the beginning"))
+        assertTrue(idle.contains("No yawning, mouth opening"))
     }
 }

@@ -68,11 +68,12 @@ class AcceptanceGreetingStoreTest {
         assertEquals(setOf("rejected"), store().unacceptedIds())
     }
 
-    @Test fun greetingIsOneOfSeventeenAndFollowingBatchNeverRegeneratesIt() {
+    @Test fun followingBatchNeverRegeneratesAcceptedGreeting() {
         assertEquals(listOf("greeting"), validateAnimationBatch(listOf("greeting")))
         val next = planAnimationBatch(setOf("greeting"), emptySet(), 4)
         assertEquals(listOf("idle", "joyful", "sleeping", "dancing"), next)
-        assertEquals(16, planAnimationBatch(setOf("greeting"), emptySet(), 17).size)
+        assertEquals(ANIMATION_BATCH_ORDER - "greeting",
+            planAnimationBatch(setOf("greeting"), emptySet(), ANIMATION_BATCH_ORDER.size))
     }
 
     @Test fun deferDoesNotRestartGenerationOrLoseOriginalAuthorization() {
