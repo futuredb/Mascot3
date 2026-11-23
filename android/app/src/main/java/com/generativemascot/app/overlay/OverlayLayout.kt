@@ -46,3 +46,12 @@ internal fun overlayChatReplies(messages: List<com.generativemascot.app.ui.ChatM
         .map { it.text.trim() }
         .take(5)
         .toList()
+
+internal enum class OverlayControls { NONE, REPLY, COMPACT }
+
+internal fun overlayControls(heroVisible: Boolean, collapsed: Boolean, showReply: Boolean, hasReply: Boolean): OverlayControls =
+    when {
+        !heroVisible -> OverlayControls.NONE
+        !collapsed && showReply && hasReply -> OverlayControls.REPLY
+        else -> OverlayControls.COMPACT
+    }

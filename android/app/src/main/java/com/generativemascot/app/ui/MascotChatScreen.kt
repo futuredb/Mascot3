@@ -1,6 +1,7 @@
 package com.generativemascot.app.ui
 
 import android.Manifest
+import com.generativemascot.app.data.CommunicationTrait
 import com.generativemascot.app.data.chatEmotionPrompts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -51,7 +52,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
@@ -84,6 +84,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -105,12 +107,24 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     val historyStore = remember { ChatHistoryStore(context) }
     val profanityStore = remember { ChatProfanityStore(context) }
     val interactionPreferences = remember { context.getSharedPreferences("mascot_chat_interaction", Context.MODE_PRIVATE) }
+    val moodPreferences = remember(context) { context.getSharedPreferences(CHAT_MOOD_PREFERENCES, Context.MODE_PRIVATE) }
     var portraitExpanded by remember(mascotId) { mutableStateOf(false) }
-    BackHandler(enabled = portraitExpanded && active) { portraitExpanded = false }
-    val portraitPreferences = remember { context.getSharedPreferences("mascot_chat_portrait", Context.MODE_PRIVATE) }
+    val listState = rememberLazyListState()
+    var latestMessagesTopPx by remember(mascotId) { mutableFloatStateOf(0f) }
+    var portraitToggleChatAnchor by remember(mascotId) { mutableStateOf<Triple<Int, Int, Float>?>(null) }
+    val setPortraitExpanded: (Boolean) -> Unit = { expanded ->
+        if (expanded != portraitExpanded) {
+            portraitToggleChatAnchor = Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                latestMessagesTopPx,
+            )
+            portraitExpanded = expanded
+        }
+    }
+    BackHandler(enabled = portraitExpanded && active) { setPortraitExpanded(false) }
     val streamPreferences = remember { context.getSharedPreferences("mascot_stream", Context.MODE_PRIVATE) }
     var streamEnabled by remember { mutableStateOf(streamPreferences.getBoolean("enabled", true)) }
-    var largeChatPortrait by remember(mascotId) { mutableStateOf(portraitPreferences.getBoolean(mascotId, true)) }
     val messages = remember(mascotId) { mutableStateListOf<ChatMessage>().apply {
         addAll(initialChatMessages(historyStore.read(mascotId), interactionPreferences.contains(mascotId), heroName))
     } }
@@ -133,6 +147,11 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     val openRouterApiKey = (context.applicationContext as? com.generativemascot.app.MascotApp)
         ?.openRouterSettings?.apiKey().orEmpty()
+    LaunchedEffect(mascotId, portraitVisible) {
+        if (portraitVisible) HeroLocalStore.current?.communication(mascotId)?.let {
+            profanityEnabled = it[CommunicationTrait.PROFANITY] > 0
+        }
+    }
     val service = remember(mascotId, heroName, openRouterApiKey) {
         val store = HeroLocalStore.current
         val tone = store?.chatCharacterTone(mascotId)
@@ -143,10 +162,21 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             onProfanityModeChanged = { enabled ->
                 profanityEnabled = enabled
                 profanityStore.write(mascotId, enabled)
+                store?.communication(mascotId)?.let { profile ->
+                    store.saveCommunication(mascotId, profile.withLevel(
+                        CommunicationTrait.PROFANITY, if (enabled) 100 else 0,
+                    ))
+                }
             },
-            moodPreferences = context.getSharedPreferences(CHAT_MOOD_PREFERENCES, Context.MODE_PRIVATE),
+            moodPreferences = moodPreferences,
             moodKey = mascotId,
+            communication = { store?.communication(mascotId) },
         )
+    }
+    val setProfanity: (Boolean) -> Unit = { enabled ->
+        if (!service.setProfanityEnabled(enabled)) {
+            Toast.makeText(context, "Эта настройка временно недоступна: герой обижен", Toast.LENGTH_SHORT).show()
+        }
     }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -165,6 +195,14 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     val calendarPreferences = remember { context.getSharedPreferences("mascot_calendar", Context.MODE_PRIVATE) }
     var calendarEnabled by remember { mutableStateOf(calendarPreferences.getBoolean("enabled", false) &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) }
+    DisposableEffect(calendarPreferences) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "enabled") calendarEnabled = prefs.getBoolean("enabled", false) &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        }
+        calendarPreferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { calendarPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     LaunchedEffect(active, mascotId, interactionId, calendarEnabled) {
         if (active) com.generativemascot.app.worker.configureCalendarReminders(context, calendarEnabled, interactionId)
     }
@@ -356,12 +394,17 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
         }
     }
     val dialogueVideos = remember(mascotId, animationVideoUrls) {
-        HeroLocalStore.current?.chatActivityVideos(mascotId).orEmpty()
-            .filterKeys { it == "speaking" || it == "listening" || (it == "thinking" && it !in animationVideoUrls) }
-            .let { clips ->
-                val sway = HeroLocalStore.current?.chatActivityVideos(mascotId)?.get("idle-sway")
-                if (sway == null) clips else clips + ("chat_idle" to sway)
-            }
+        // Modern full animation packs are higher resolution than the legacy
+        // 480px dialogue clips. Prefer their expressive idle/watching/thinking
+        // states instead of enlarging a soft chat-only asset in the portrait.
+        if ("idle" in animationVideoUrls) emptyMap() else {
+            HeroLocalStore.current?.chatActivityVideos(mascotId).orEmpty()
+                .filterKeys { it == "speaking" || it == "listening" || (it == "thinking" && it !in animationVideoUrls) }
+                .let { clips ->
+                    val sway = HeroLocalStore.current?.chatActivityVideos(mascotId)?.get("idle-sway")
+                    if (sway == null) clips else clips + ("chat_idle" to sway)
+                }
+        }
     }
     val chatVideoUrls = remember(animationVideoUrls, dialogueVideos) { animationVideoUrls + dialogueVideos }
     val availableChatActions = remember(chatVideoUrls) {
@@ -369,67 +412,105 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     val defaultChatAnimationAction = if ("chat_idle" in availableChatActions) "chat_idle"
         else defaultHomeVideoAction(animationVideoUrls.keys)
-    val savedEmotions = availableChatActions.intersect(chatEmotionPrompts.keys + setOf("curious", "sad", "angry"))
+    val savedEmotions = availableChatActions.intersect(chatEmotionPrompts.keys + chatMoodReactionActions + "curious")
     val hasThinkingClip = "thinking" in availableChatActions
     val usePreparedChatAnimations = "idle" in animationVideoUrls && (
         "typing_reaction" in availableChatActions ||
             availableChatActions.any(chatEmotionPrompts::containsKey) ||
             (HeroLocalStore.current?.characterChoice(mascotId) != null && (hasThinkingClip || savedEmotions.isNotEmpty()))
         )
-    val availableEmotions = if (usePreparedChatAnimations) savedEmotions else emptySet()
+    val availableEmotions = if (usePreparedChatAnimations) savedEmotions else availableChatActions.intersect(chatMoodReactionActions)
     var preparedEmotion by remember(mascotId) { mutableStateOf<String?>(null) }
     var preparedReactionRequestedAt by remember(mascotId) { mutableStateOf<Long?>(null) }
     var preparedReactionVisible by remember(mascotId) { mutableStateOf(false) }
-    var typingReactionArmed by remember(mascotId) { mutableStateOf(false) }
     var typingReactionRequested by remember(mascotId) { mutableStateOf(false) }
-    var typingReactionVisible by remember(mascotId) { mutableStateOf(false) }
     var typingGlitchTarget by remember(mascotId) { mutableStateOf(false) }
-    val hasTypingReaction = usePreparedChatAnimations && "typing_reaction" in availableChatActions
-    LaunchedEffect(typingReactionArmed, hasTypingReaction) {
-        if (typingReactionArmed && hasTypingReaction) {
-            delay(350)
-            if (typingReactionArmed && userTyping) typingReactionRequested = true
-            typingReactionArmed = false
-        }
-    }
-    val typingZoom by animateFloatAsState(
-        targetValue = if (typingReactionVisible && typingReactionRequested) 3f else 1f,
-        animationSpec = tween(300),
-        label = "typing reaction zoom",
-    )
+    val typingReactionAction = listOf("typing_reaction", "thinking", "listening", "watching")
+        .firstOrNull { it in availableChatActions && it != defaultChatAnimationAction }
+    var typingActionSerial by remember(mascotId) { mutableIntStateOf(0) }
+    var typingGlitchPlayed by remember(mascotId) { mutableStateOf(false) }
     val chatAnimationAction = when {
         usePreparedChatAnimations && preparedReactionRequestedAt != null -> "thinking"
-        usePreparedChatAnimations && preparedEmotion != null -> preparedEmotion
-        hasTypingReaction && typingReactionRequested -> "typing_reaction"
+        typingReactionRequested -> typingReactionAction
+        preparedEmotion != null -> preparedEmotion
         usePreparedChatAnimations -> "idle"
         (busy && streamingTarget.isNotEmpty()) || speakingUntil > 0L ->
             listOf("speaking", "watching", "idle").firstOrNull { it in availableChatActions }
         busy && showWaitingAnimation -> listOf("thinking", waitingAnimation, "watching", "idle")
             .filterNotNull().firstOrNull { it in availableChatActions }
-        userTyping -> listOf("listening", "watching").firstOrNull { it in availableChatActions }
         else -> null
     } ?: defaultChatAnimationAction
     val keepHeliosWarm = streamEnabled && foreground && heliosRequestActive
     val glitchPalette = remember(mascotId) {
-        HeroLocalStore.current?.creativeContract(mascotId)?.glitchPalette ?: when (mascotId) {
-            "716cdb43-703b-4d7e-8a79-27f03d92b99c" -> com.generativemascot.app.data.CharacterGlitchPalette("#F05C78", "#9655A8")
-            "9f226b89-df35-4d3a-9b36-96c28ea1bb62" -> com.generativemascot.app.data.CharacterGlitchPalette("#E65362", "#A99CFF")
-            "a83e9d30-1270-40e6-902c-b44774e84c17" -> com.generativemascot.app.data.CharacterGlitchPalette("#FFD34E", "#F28F3B")
-            else -> com.generativemascot.app.data.CharacterGlitchPalette("#FF806B", "#AAA0FF")
+        val savedPalette = HeroLocalStore.current?.creativeContract(mascotId)?.glitchPalette
+        when (mascotId) {
+            "6dccb53c-6086-4e07-b387-a36d2335844d" -> com.generativemascot.app.data.CharacterGlitchPalette("#EC8B36", "#FFD25B") // Рико
+            "716cdb43-703b-4d7e-8a79-27f03d92b99c" -> savedPalette ?: com.generativemascot.app.data.CharacterGlitchPalette("#F05C78", "#9655A8")
+            "9f226b89-df35-4d3a-9b36-96c28ea1bb62" -> savedPalette ?: com.generativemascot.app.data.CharacterGlitchPalette("#E65362", "#A99CFF")
+            "a83e9d30-1270-40e6-902c-b44774e84c17" -> savedPalette ?: com.generativemascot.app.data.CharacterGlitchPalette("#FFD34E", "#F28F3B")
+            else -> savedPalette ?: com.generativemascot.app.data.CharacterGlitchPalette("#FF806B", "#AAA0FF")
         }
     }
-    val typingTransition = rememberChatGlitchTransition(
-        "$mascotId:typing", typingGlitchTarget, hasTypingReaction && portraitVisible && foreground, glitchPalette,
+    val expansion by animateFloatAsState(
+        targetValue = if (portraitExpanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 320, easing = MascotEase),
+        label = "chat portrait expansion",
     )
-    val portraitTransition = rememberChatGlitchTransition(mascotId, heliosVisible, portraitVisible && foreground, glitchPalette)
+    val showPortraitGlitch = portraitExpanded && expansion == 1f && portraitVisible && foreground
+    val typingTransition = rememberChatGlitchTransition(
+        "$mascotId:typing", typingGlitchTarget, showPortraitGlitch, glitchPalette,
+        typingCue = true,
+    )
+    val portraitTransition = rememberChatGlitchTransition(mascotId, heliosVisible, showPortraitGlitch, glitchPalette)
     // Keep the outgoing frame until the glitch reaches its fully covered midpoint.
-    val mountHelios = keepHeliosWarm || (foreground && portraitVisible && portraitTransition.displayedHelios)
+    val displayedHelios = if (showPortraitGlitch) portraitTransition.displayedHelios else heliosVisible
+    val mountHelios = keepHeliosWarm || (foreground && portraitVisible && displayedHelios)
     val drawHelios = mountHelios && portraitVisible && !showProfile && !showInteractionScreen
     val referenceFile = HeroLocalStore.current?.baseFile(mascotId)
+    val face by produceState(chatFaceFraming(mascotId), mascotId, referenceFile, neutralFrameUrl, chatVideoUrls) {
+        value = chatFaceFraming(mascotId)
+        value = withContext(Dispatchers.IO) {
+            estimateChatFaceFraming(referenceFile, neutralFrameUrl, chatVideoUrls["idle"] ?: animationVideoUrl, value)
+        }
+    }
+    var persistentMood by remember(mascotId, moodPreferences) {
+        mutableStateOf(moodPreferences.readPersistentChatMood(mascotId, System.currentTimeMillis()))
+    }
+    var lastVisibleEmotion by remember(mascotId) { mutableStateOf<String?>(null) }
+    DisposableEffect(mascotId, moodPreferences) {
+        fun refreshMood() {
+            persistentMood = moodPreferences.readPersistentChatMood(mascotId, System.currentTimeMillis())
+        }
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == null || key == mascotId || key == "$mascotId.expires" || key == "$mascotId.home.at") refreshMood()
+        }
+        moodPreferences.registerOnSharedPreferenceChangeListener(listener)
+        refreshMood()
+        onDispose { moodPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    LaunchedEffect(persistentMood, foreground) {
+        val mood = persistentMood ?: return@LaunchedEffect
+        if (!foreground) return@LaunchedEffect
+        delay((mood.expires - System.currentTimeMillis()).coerceAtLeast(1L))
+        persistentMood = moodPreferences.readPersistentChatMood(mascotId, System.currentTimeMillis())
+    }
+    val canPlayMood = active && portraitVisible && foreground && !choosingInteraction &&
+        !showProfile && !showInteractionScreen && !busy && !mountHelios && draft.isBlank() &&
+        pendingImage == null && !userTyping && !typingReactionRequested && preparedReactionRequestedAt == null &&
+        preparedEmotion == null
+    LaunchedEffect(persistentMood, availableEmotions, canPlayMood, lastVisibleEmotion) {
+        if (!canPlayMood) return@LaunchedEffect
+        val mood = persistentMood ?: return@LaunchedEffect
+        val actions = mood.compatibleActions(availableEmotions)
+        if (actions.isEmpty()) return@LaunchedEffect
+        delay(if (lastVisibleEmotion == null) 900L else 3_500L)
+        if (System.currentTimeMillis() < mood.expires) {
+            preparedEmotion = actions[(actions.indexOf(lastVisibleEmotion) + 1) % actions.size]
+        }
+    }
     LaunchedEffect(helios, drawHelios) {
         helios.setPortraitVisible(drawHelios)
     }
-    val listState = rememberLazyListState()
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty() && !choosingInteraction) listState.scrollToItem(messages.lastIndex)
     }
@@ -453,7 +534,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     val useNeutralEntry = usePreparedChatAnimations && neutralFrameUrl != null && showLocalVideo
     val entryGlitchVisible = usePreparedChatAnimations && showLocalVideo &&
-        !localFrameVisible && !portraitTransition.displayedHelios
+        !localFrameVisible && !displayedHelios
 
     if (portraitVisible && !showProfile && !showInteractionScreen) MascotSystemBars(chatBackground, chatBackground)
     Box(Modifier.fillMaxSize()) {
@@ -461,30 +542,37 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
         .safeDrawingPadding().imePadding()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-        val messagesTop = MascotChatIdentityTop + MascotChatIdentitySize
-        val expansion by animateFloatAsState(
-            targetValue = if (portraitExpanded) 1f else 0f,
-            animationSpec = tween(durationMillis = 320, easing = MascotEase),
-            label = "chat portrait expansion",
-        )
-        val expandedWidth = maxWidth * .94f
-        val expandedHeight = maxHeight * .86f
+        val figureSize = MascotChatFigureSize.coerceAtMost(maxWidth)
+        val portraitSize = lerp(figureSize, MascotChatIdentitySize, expansion)
+        val portraitTop = MascotChatIdentityTop * expansion
+        val messagesTop = portraitTop + portraitSize
+        val messagesTopPx = with(androidx.compose.ui.platform.LocalDensity.current) { messagesTop.toPx() }
+        SideEffect { latestMessagesTopPx = messagesTopPx }
+        LaunchedEffect(messagesTopPx, portraitToggleChatAnchor) {
+            portraitToggleChatAnchor?.let { (index, offset, initialTopPx) ->
+                // LazyColumn's content padding moves every message while the
+                // portrait changes size. Compensate by the exact padding delta
+                // so the first visible message remains at the same screen Y.
+                val compensatedOffset = (offset + messagesTopPx - initialTopPx)
+                    .toInt().coerceAtLeast(0)
+                listState.scrollToItem(index, compensatedOffset)
+            }
+            if (expansion == 0f || expansion == 1f) portraitToggleChatAnchor = null
+        }
         val portraitModifier = Modifier.align(Alignment.TopStart)
-            .offset(
-                x = lerp(20.dp, (maxWidth - expandedWidth) / 2, expansion),
-                y = lerp(MascotChatIdentityTop, (maxHeight - expandedHeight) / 2, expansion),
-            )
-            .size(
-                lerp(MascotChatIdentitySize, expandedWidth, expansion),
-                lerp(MascotChatIdentitySize, expandedHeight, expansion),
-            )
+            .offset(x = lerp(MascotChatFigureStart, MascotChatIdentityStart, expansion), y = portraitTop)
+            .size(portraitSize)
         MascotChatIdentity(heroName, portraitModifier.zIndex(1f),
             circleBackground = chatBackground,
             expansion = expansion,
-            onLongClick = if (portraitExpanded) null else ({ portraitExpanded = true }),
+            onLongClick = if (portraitExpanded) null else ({
+                focusManager.clearFocus(force = true)
+                keyboard?.hide()
+                setPortraitExpanded(true)
+            }),
             onClickLabel = if (portraitExpanded) "Свернуть персонажа" else "На главный экран",
-            loading = streamEnabled && portraitVisible && foreground && initialPortraitLoading,
             overlay = {
+                if (!showPortraitGlitch) return@MascotChatIdentity
                 val glitchModifier = Modifier.align(Alignment.Center)
                     .fillMaxWidth(1f - .52f * expansion)
                     .fillMaxHeight(1f - .45f * expansion)
@@ -502,7 +590,14 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                         loading = true, softenEdges = softenGlitch,
                     )
                 }
-                ChatGlitchOverlay(typingTransition, glitchModifier, softenEdges = softenGlitch)
+                ChatGlitchOverlay(
+                    typingTransition,
+                    Modifier.align(Alignment.Center)
+                        .fillMaxWidth(.42f + .36f * expansion)
+                        .fillMaxHeight(.46f + .16f * expansion),
+                    softenEdges = true,
+                    typingCue = true,
+                )
                 ChatGlitchOverlay(
                     portraitTransition,
                     glitchModifier,
@@ -512,53 +607,37 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             },
             onClick = {
                 if (portraitExpanded) {
-                    portraitExpanded = false
+                    setPortraitExpanded(false)
                 } else {
                     focusManager.clearFocus(force = true)
                     keyboard?.hide()
                     onBack()
                 }
             }) {
-            val bundledUna = mascotId == "716cdb43-703b-4d7e-8a79-27f03d92b99c"
-            val collapsedScale = when {
-                !largeChatPortrait -> 2.2f
-                usePreparedChatAnimations -> 5.2f
-                bundledUna -> 4.6f
-                mascotId == "cfbb8855-b0ab-4bdb-a4cc-d2360e16f174" -> 4.25f
-                else -> 4f
-            }
-            // Compensate for the portrait transform when drawing the Helios stream.
-            val playbackScale = (1f - expansion) * (1.45f / collapsedScale) + expansion
-            val collapsedOffsetFraction = when {
-                !largeChatPortrait -> .08f
-                usePreparedChatAnimations -> .53f
-                bundledUna -> .32f
-                else -> .45f
-            }
-            BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            val collapsedVideoSize = MascotChatPortraitSize * collapsedScale
-            val portraitWidth = lerp(collapsedVideoSize, expandedWidth * 2.8f, expansion)
-            val portraitHeight = lerp(collapsedVideoSize, expandedHeight * 2.8f, expansion)
-            val portraitOffset = (MascotChatPortraitSize * collapsedOffsetFraction) * (1f - expansion)
-            Box(Modifier.requiredSize(portraitWidth, portraitHeight).offset(y = portraitOffset)
-                .graphicsLayer { alpha = portraitTransition.alpha },
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                alpha = if (showPortraitGlitch) portraitTransition.alpha * typingTransition.alpha else 1f
+            },
                 contentAlignment = Alignment.Center) {
-            // Match the same framing used when the reference is sent to Helios.
             val stillAlpha by animateFloatAsState(
-                targetValue = if (portraitTransition.displayedHelios || (showLocalVideo && localFrameVisible)) 0f else 1f,
+                targetValue = if (displayedHelios || (showLocalVideo && localFrameVisible)) 0f else 1f,
                 animationSpec = tween(if (usePreparedChatAnimations) 0 else 220), label = "chat still transition",
             )
-            BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer {
-                alpha = if (portraitTransition.displayedHelios) 0f else 1f
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                alpha = if (displayedHelios) 0f else 1f
             }, contentAlignment = Alignment.Center) {
-                val frameHeight = minOf(maxHeight, maxWidth * (576f / 1024f))
                 // Keep the portrait under the entry glitch until the decoder can draw.
                 // Draw video above the still so the handoff preserves its opacity.
                 if (!useNeutralEntry && stillAlpha > 0f) {
                     AsyncImage(model = referenceFile ?: previewUrl, contentDescription = heroName,
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth().height(frameHeight * (460f / 576f))
-                            .graphicsLayer { alpha = stillAlpha })
+                        modifier = Modifier.fillMaxSize().graphicsLayer {
+                            val scale = 1f + (face.stillScale - 1f) * expansion
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = (.5f - face.stillX) * scale * size.width * expansion
+                            translationY = ((.5f - face.stillCenter) * scale + .09f) * size.height * expansion
+                            alpha = stillAlpha
+                        })
                 }
                 if (showLocalVideo) {
                     key(mascotId, animationVideoUrl, chatVideoUrls) {
@@ -566,10 +645,16 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                             videoUrl = animationVideoUrl, videoUrls = chatVideoUrls,
                             neutralFrameUrl = neutralFrameUrl,
                             action = chatAnimationAction,
-                            modifier = Modifier.fillMaxWidth().height(frameHeight).graphicsLayer {
-                                transformOrigin = TransformOrigin(.5f, .32f)
-                                scaleX = typingZoom
-                                scaleY = typingZoom
+                            interaction = PuppetInteraction(
+                                actionName = typingReactionAction.takeIf { typingReactionRequested },
+                                actionSerial = typingActionSerial,
+                            ),
+                            modifier = Modifier.fillMaxSize().graphicsLayer {
+                                val scale = 1f + (face.videoScale - 1f) * expansion
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = (.5f - face.videoX) * scale * size.width * expansion
+                                translationY = ((.5f - face.videoCenter) * scale + .09f) * size.height * expansion
                             },
                             onFirstFrame = {
                                 if (!localFrameVisible && usePreparedChatAnimations) {
@@ -579,17 +664,17 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                                 localFrameVisible = true
                             },
                             onPlaybackError = if (usePreparedChatAnimations) ({ localVideoStartupFailed = true }) else null,
-                            playOnceActions = if (usePreparedChatAnimations) availableEmotions + setOf("thinking", "typing_reaction") else emptySet(),
+                            playOnceActions = availableEmotions + setOfNotNull(typingReactionAction, "thinking".takeIf { usePreparedChatAnimations }),
                             onOneShotFinished = { action ->
                                 if (action == preparedEmotion) preparedEmotion = null
-                                if (action == "typing_reaction") typingReactionRequested = false
+                                if (action == typingReactionAction && preparedReactionRequestedAt == null) typingReactionRequested = false
                                 if (usePreparedChatAnimations && action == "thinking") {
                                     preparedReactionRequestedAt = null
                                     preparedReactionVisible = false
                                 }
                             },
                             onAnimationVisible = { action ->
-                                typingReactionVisible = action == "typing_reaction"
+                                if (action in availableEmotions) lastVisibleEmotion = action
                                 if (usePreparedChatAnimations && action == "thinking" && !preparedReactionVisible) {
                                     preparedReactionRequestedAt?.let { requestedAt ->
                                         val elapsed = android.os.SystemClock.elapsedRealtime() - requestedAt
@@ -600,7 +685,17 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                             },
                             useNeutralTransitions = false,
                             showNeutralOnStartup = useNeutralEntry,
-                            preloadIdleReaction = "typing_reaction".takeIf { hasTypingReaction },
+                            preloadIdleReaction = typingReactionAction,
+                            interruptOneShotForAction = typingReactionAction.takeIf { typingReactionRequested },
+                            onTypingCutReady = {
+                                if (showPortraitGlitch && typingReactionRequested && !typingGlitchPlayed) {
+                                    typingGlitchPlayed = true
+                                    typingGlitchTarget = !typingGlitchTarget
+                                    withTimeoutOrNull(280) {
+                                        snapshotFlow { typingTransition.progress.value }.first { it in .44f.. .68f }
+                                    }
+                                }
+                            },
                             switchActionsPromptly = true,
                             independentMatteActions = dialogueVideos.keys,
                         )
@@ -608,7 +703,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 }
             }
             if (mountHelios) {
-                HeliosPlayer(helios, mascotId, glitchPalette = glitchPalette, onEvent = { type, detail ->
+                HeliosPlayer(helios, mascotId, glitchPalette = glitchPalette, glitchEnabled = showPortraitGlitch, onEvent = { type, detail ->
                     when (type) {
                         "ready" -> heliosReady = true
                         "idle_complete" -> heliosRunning = false
@@ -632,12 +727,12 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                         }
                     }
                 }, modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = playbackScale
-                    scaleY = playbackScale
-                    translationY = -portraitOffset.toPx()
-                    alpha = if (portraitTransition.displayedHelios) 1f else 0f
+                    val scale = 1f + 2.8f * expansion
+                    scaleX = scale
+                    scaleY = scale
+                    translationY = (.12f * scale + .09f) * size.height * expansion
+                    alpha = if (displayedHelios) 1f else 0f
                 })
-            }
             }
             }
         }
@@ -687,7 +782,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                         "Ты выбрал настройку «${interactionDisplayTitles[index]}». Её всегда можно изменить в разделе «Поведение и доступы» в настройках на главном экране.")
                     historyStore.write(mascotId, messages)
                 }, modifier = Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp,
-                    top = messagesTop + 20.dp, bottom = 20.dp))
+                    top = (messagesTop + 20.dp).coerceAtMost(maxHeight * .37f), bottom = 20.dp))
         } else LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize()
@@ -712,10 +807,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 if (item.capabilities) {
                     ChatCapabilitiesCard(calendarEnabled, onCalendarChange = { enabled ->
                         if (enabled) showCalendarConsent = true else { calendarEnabled = false; calendarPreferences.edit().putBoolean("enabled", false).apply() }
-                    }, profanityEnabled = profanityEnabled, onProfanityChange = { enabled ->
-                        profanityEnabled = enabled
-                        service.setProfanityEnabled(enabled)
-                    })
+                    }, profanityEnabled = profanityEnabled, onProfanityChange = setProfanity)
                 } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (item.user) Arrangement.End else Arrangement.Start) {
                     val messageModifier = if (item.user) Modifier.widthIn(max = 280.dp)
@@ -767,10 +859,16 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
         }
         if (!choosingInteraction) MascotChatComposer(value = draft, onValueChange = { next ->
             if (next.length <= 1500 && next != draft) {
-                if (hasTypingReaction && next.isNotBlank() && !userTyping && !typingReactionArmed && !typingReactionRequested &&
+                if (next.isNotBlank() && !userTyping &&
                     preparedReactionRequestedAt == null) {
-                    typingReactionArmed = true
-                    typingGlitchTarget = !typingGlitchTarget
+                    typingGlitchPlayed = false
+                    if (typingReactionAction == null || !showLocalVideo) {
+                        if (showPortraitGlitch) typingGlitchTarget = !typingGlitchTarget
+                    } else {
+                        preparedEmotion = null
+                        typingReactionRequested = true
+                        typingActionSerial += 1
+                    }
                 }
                 draft = next
                 userTyping = next.isNotBlank()
@@ -794,7 +892,6 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 heliosRequestActive = false
                 heliosRequestSerial++
                 userTyping = false
-                typingReactionArmed = false
                 typingReactionRequested = false
                 draft = ""; pendingImage = null; messages.add(ChatMessage(true, text, selectedImage)); historyStore.write(mascotId, messages)
                 if (selectedImage == null && isCalendarConnectionRequest(text)) {
@@ -921,26 +1018,20 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     AnimatedVisibility(visible = showInteractionScreen, modifier = Modifier.fillMaxSize(),
         enter = fadeIn(tween(220)), exit = fadeOut(tween(220))) {
         ChatInteractionScreen(selectedIndex = interactionModes.indexOfFirst { it.id == interactionId }.coerceAtLeast(0),
-            largePortrait = largeChatPortrait,
             calendarEnabled = calendarEnabled,
             profanityEnabled = profanityEnabled,
-            onProfanityChange = { enabled ->
-                profanityEnabled = enabled
-                service.setProfanityEnabled(enabled)
-            },
+            onProfanityChange = setProfanity,
             overlayStreamEnabled = context.getSharedPreferences("mascot_overlay", Context.MODE_PRIVATE).getBoolean("stream_enabled", false),
             streamEnabled = streamEnabled,
             onCalendarChange = { enabled ->
                 if (enabled) showCalendarConsent = true
                 else { calendarEnabled = false; calendarPreferences.edit().putBoolean("enabled", false).apply() }
             },
-            onSave = { index, largePortrait, overlayStream, stream ->
+            onSave = { index, overlayStream, stream ->
                 streamPreferences.edit().putBoolean("enabled", stream).apply()
                 streamEnabled = stream
                 if (!stream) { heliosRequestActive = false; helios.shutdown(); heliosVisible = false; heliosRunning = false; heliosReady = false; restartingPortrait = false; initialPortraitLoading = false }
                 context.getSharedPreferences("mascot_overlay", Context.MODE_PRIVATE).edit().putBoolean("stream_enabled", overlayStream).apply()
-                largeChatPortrait = largePortrait
-                portraitPreferences.edit().putBoolean(mascotId, largePortrait).apply()
                 val id = interactionModes[index].id
                 if (index == 0 || index == 2) {
                     calendarEnabled = false
@@ -997,44 +1088,39 @@ internal fun heliosRetryDelayMillis(failures: Int): Long = when (failures.coerce
 @Composable
 private fun ChatInteractionOnboarding(heroName: String, choice: Int, onChoice: (Int) -> Unit, onSave: () -> Unit, modifier: Modifier = Modifier) {
     val index = choice.coerceIn(0, 3)
-    BoxWithConstraints(modifier) {
-    // The Figma field is 353 x 315 dp. It occupies the full content width on the
-    // 393 dp artboard (20 dp page margins) and must not be compacted independently.
-    val fieldWidth = maxWidth.coerceAtMost(353.dp)
-    val fieldHeight = fieldWidth * (315f / 353f)
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Привет! Рад познакомиться. Я $heroName.", fontFamily = SbSansTextRegular,
             fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Давай выберем, как будем общаться?", fontFamily = SbSansDisplayMedium,
                 fontSize = 18.sp, lineHeight = 22.sp, letterSpacing = (-0.45).sp, color = FigmaInk)
             Text("Я могу сам сообщать о важном или ждать, когда тебе понадобится помощь.",
-                fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
+                fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
         }
-        Box(
-            Modifier
-                .align(Alignment.CenterHorizontally)
-                .width(fieldWidth)
-                .height(fieldHeight)
+        BoxWithConstraints(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
-            InteractionPersonalityField(index, onChoice, Modifier.fillMaxSize())
-            Text("Готовлю решения", modifier = Modifier.align(Alignment.TopCenter).padding(top = 15.dp),
-                fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.White.copy(alpha = .55f))
-            Text("Проактивно", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)
-                .graphicsLayer { rotationZ = -90f }, fontFamily = SbSansTextMedium, fontSize = 11.sp,
-                maxLines = 1, color = Color.White.copy(alpha = .55f))
+            val fieldWidth = maxWidth.coerceAtMost(353.dp)
+            val fieldHeight = (fieldWidth * (315f / 353f)).coerceAtMost(maxHeight)
+            Box(Modifier.width(fieldWidth).height(fieldHeight)) {
+                InteractionPersonalityField(index, onChoice, Modifier.fillMaxSize())
+                Text("Готовлю решения", modifier = Modifier.align(Alignment.TopCenter).padding(top = 15.dp),
+                    fontFamily = SbSansTextMedium, fontSize = 11.sp, color = Color.White.copy(alpha = .55f))
+                Text("Проактивно", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)
+                    .graphicsLayer { rotationZ = -90f }, fontFamily = SbSansTextMedium, fontSize = 11.sp,
+                    maxLines = 1, color = Color.White.copy(alpha = .55f))
+            }
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(interactionDisplayTitles[index], fontFamily = SbSansDisplayMedium, fontSize = 18.sp, color = FigmaInk)
             Text(interactionDescriptions[index].replace('\n', ' '), fontFamily = SbSansTextRegular,
-                fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
+                fontSize = 14.sp, lineHeight = 20.sp, color = FigmaInk)
         }
-        Spacer(Modifier.weight(1f))
         Button(onClick = onSave, modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(24.dp), colors = ButtonDefaults.buttonColors(containerColor = FigmaInk)) {
             Text("Сохранить", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = Color.White)
         }
-    }
     }
 }
 
@@ -1078,7 +1164,7 @@ internal fun ChatCapabilitiesCard(calendarEnabled: Boolean, onCalendarChange: (B
 }
 
 @Composable
-private fun ChatCapability(icon: Int, title: String, description: String, enabled: Boolean, onChange: ((Boolean) -> Unit)?) {
+internal fun ChatCapability(icon: Int, title: String, description: String, enabled: Boolean, onChange: ((Boolean) -> Unit)?) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Image(painterResource(icon), contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape))
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -1086,12 +1172,7 @@ private fun ChatCapability(icon: Int, title: String, description: String, enable
             Text(description, fontFamily = SbSansTextMedium, fontSize = 12.sp, color = FigmaInk.copy(alpha = .5f), maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
-        Box(Modifier.size(width = 46.dp, height = 20.dp)
-            .clip(RoundedCornerShape(50)).background(if (enabled) Color.Black else Color(0xFFB3B3B6))
-            .then(if (onChange != null) Modifier.toggleable(value = enabled, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onChange) else Modifier)
-            .padding(2.dp), contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart) {
-            Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
-        }
+        MascotSettingsSwitch(title, enabled, onChange)
     }
 }
 

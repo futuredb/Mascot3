@@ -29,7 +29,7 @@ internal class FalVideoProvider(
         require(key.isNotBlank()) { "Ключ fal недоступен" }
         val image = "data:image/png;base64," + Base64.encodeToString(reference.readBytes(), Base64.NO_WRAP)
         val body = JSONObject().put("prompt", prompt).put("image_url", image).put("end_image_url", image)
-            .put("duration", durationSeconds).put("resolution", "768P").put("prompt_expansion_mode", "disabled")
+            .put("duration", durationSeconds).put("resolution", "1080P").put("prompt_expansion_mode", "disabled")
             .toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder().url("$baseUrl/minimax/h3-max-turbo/image-to-video")
             .header("Authorization", "Key $key").post(body).build()

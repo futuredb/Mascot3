@@ -63,13 +63,20 @@ internal fun InteractionPersonalityField(choice: Int, onSelect: (Int) -> Unit, m
                 settings.allowFileAccess = true
                 settings.allowContentAccess = false
                 settings.blockNetworkLoads = true
+                addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop && view is WebView) {
+                        val height = (view.height / view.resources.displayMetrics.density).toInt().coerceAtLeast(1)
+                        view.evaluateJavascript("document.documentElement?.style.setProperty('--mascot-field-height','${height}px')", null)
+                    }
+                }
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         view?.post {
                             val height = (view.height / view.resources.displayMetrics.density).toInt().coerceAtLeast(1)
                             view.evaluateJavascript("""(function(){
+                              document.documentElement.style.setProperty('--mascot-field-height','${height}px');
                               const style=document.createElement('style');
-                              style.textContent='html,body,#surface,#content{height:${height}px!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important} #characterTitle,.intro,.axis,.selection{display:none!important} #content{max-width:none!important} .matrix-wrap{width:100%!important;max-width:none!important;height:100%!important;margin:0!important} #field{width:100%!important;height:100%!important;aspect-ratio:auto!important}';
+                              style.textContent='html,body,#surface,#content{height:var(--mascot-field-height)!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important} #characterTitle,.intro,.axis,.selection{display:none!important} #content{max-width:none!important} .matrix-wrap{width:100%!important;max-width:none!important;height:100%!important;margin:0!important} #field{width:100%!important;height:100%!important;aspect-ratio:auto!important}';
                               document.head.append(style);
                             })();""".trimIndent(), null)
                             view.requestLayout(); view.invalidate()
@@ -110,16 +117,14 @@ internal fun InteractionPersonalityField(choice: Int, onSelect: (Int) -> Unit, m
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 internal fun ChatInteractionScreen(selectedIndex: Int,
-    largePortrait: Boolean,
     calendarEnabled: Boolean, onCalendarChange: (Boolean) -> Unit,
     profanityEnabled: Boolean, onProfanityChange: (Boolean) -> Unit,
     overlayStreamEnabled: Boolean,
     streamEnabled: Boolean,
-    onSave: (Int, Boolean, Boolean, Boolean) -> Unit, onBack: () -> Unit) {
+    onSave: (Int, Boolean, Boolean) -> Unit, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     MascotSystemBars(FigmaCanvas, FigmaCanvas)
     var choice by remember { mutableIntStateOf(selectedIndex.coerceIn(0, 3)) }
-    var portraitChoice by remember { mutableStateOf(largePortrait) }
     var overlayStreamChoice by remember { mutableStateOf(overlayStreamEnabled) }
     var streamChoice by remember { mutableStateOf(streamEnabled) }
     val regular = SbSansTextRegular
@@ -149,22 +154,6 @@ internal fun ChatInteractionScreen(selectedIndex: Int,
                 controlsEnabled = integrationsEnabled)
             HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp),
                 color = Color.Black.copy(alpha = .08f))
-            Row(Modifier.fillMaxWidth().toggleable(value = portraitChoice, role = Role.Switch,
-                onValueChange = { portraitChoice = it }).padding(vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Крупный план в чате", fontFamily = SbSansDisplayMedium, fontSize = 15.sp, color = FigmaInk)
-                    Text("Выключено — персонаж целиком по центру", fontFamily = SbSansTextMedium,
-                        fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
-                }
-                Spacer(Modifier.width(12.dp))
-                Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
-                    .background(if (portraitChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
-                    contentAlignment = if (portraitChoice) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
-                }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color.Black.copy(alpha = .08f))
             Row(Modifier.fillMaxWidth().toggleable(value = streamChoice, role = Role.Switch,
                 onValueChange = { streamChoice = it }).padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -202,7 +191,7 @@ internal fun ChatInteractionScreen(selectedIndex: Int,
         MascotSettingsHeader("Поведение и доступы", onBack = onBack,
             modifier = Modifier.align(Alignment.TopCenter).background(FigmaCanvas))
         Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 33.dp).clip(CircleShape).background(FigmaInk)
-            .clickable { onSave(choice, portraitChoice, overlayStreamChoice, streamChoice) }.padding(horizontal = 28.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
+            .clickable { onSave(choice, overlayStreamChoice, streamChoice) }.padding(horizontal = 28.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
             Text("СОХРАНИТЬ", fontFamily = SbSansDisplayMedium, fontSize = 13.4.sp, color = Color.White)
         }
     }

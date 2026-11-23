@@ -45,3 +45,23 @@ internal fun animationPlayableActions(
     }.toSet()
 
 internal val LEGACY_PERFORMANCE_ACTIONS = setOf("idle", "joyful", "sleeping", "dancing")
+
+/** Keep alternate playback states out of the gallery and list shared media once. */
+internal fun galleryAnimationActions(
+    videos: Map<String, String>, frames: Map<String, List<String>>, legacyVideo: String?,
+): List<String> {
+    val shownVideos = mutableSetOf<String>()
+    val shownFrames = mutableSetOf<List<String>>()
+    return ANIMATION_STATE_KEYS.filter { action ->
+        if (action == "idle" || action == "typing_reaction") return@filter false
+        val video = videos[action]?.takeIf(String::isNotBlank)
+            ?: legacyVideo?.takeIf { it.isNotBlank() && action in LEGACY_PERFORMANCE_ACTIONS &&
+                frames[action].orEmpty().size <= 1 }
+        val sequence = frames[action].orEmpty()
+        when {
+            video != null -> shownVideos.add(video)
+            sequence.size > 1 -> shownFrames.add(sequence)
+            else -> true // Keep individual generation available.
+        }
+    }
+}

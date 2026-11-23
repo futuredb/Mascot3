@@ -24,6 +24,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
@@ -35,7 +37,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Groups
@@ -60,6 +61,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithContent
@@ -118,16 +121,20 @@ private val greetingLoadingLines = listOf(
 )
 
 /**
- * Idle is already the baseline and sleep belongs to a deliberate long press.
- * App entry reuses the existing greeting; no extra video is generated.
- * Every other generated library action participates in a shuffled home-screen
- * deck, so all authored clips are seen before the deck starts repeating.
+ * Keep baseline, chat input, and quiet-time reactions out of the tap deck.
+ * App entry reuses the existing greeting.
  */
 internal fun mainScreenActionPool(availableActions: Set<String>): List<String> {
     val normalized = availableActions.map(HeroLocalStore::normalizeVideoAction).toSet()
     return HeroLocalStore.LIBRARY_VIDEO_ACTIONS.filter { action ->
-        action != "idle" && action != "sleeping" && action != "welcome" && action in normalized
+        action !in setOf("idle", "sleeping", "welcome", "typing_reaction", "bored", "sleepy") && action in normalized
     }
+}
+
+internal fun quietHomeReaction(localHour: Int, available: Set<String>): String? = when {
+    localHour in 21..22 && "sleepy" in available -> "sleepy"
+    localHour in 7..20 && "bored" in available -> "bored"
+    else -> null
 }
 
 private fun nextAmbientDelayMs(): Long = Random.nextLong(
@@ -192,6 +199,7 @@ fun KnockHeroScreen(
     onChat: () -> Unit = {},
     onCapabilities: () -> Unit = onChat,
     onBehavior: () -> Unit = onChat,
+    onCharacterSettings: (() -> Unit)? = null,
     onGenerate: () -> Unit = {},
     onPoll: () -> Unit,
     onRefresh: () -> Unit = {},
@@ -231,6 +239,7 @@ fun KnockHeroScreen(
     var nextAmbientAt by remember(mascotId) {
         mutableLongStateOf(SystemClock.elapsedRealtime() + nextAmbientDelayMs())
     }
+    var quietReactionAt by remember(mascotId, visible) { mutableLongStateOf(SystemClock.elapsedRealtime() + 60_000L) }
     var heroPressed by remember { mutableStateOf(false) }
     var rawDragX by remember { mutableStateOf(0f) }
     var rawDragY by remember { mutableStateOf(0f) }
@@ -241,11 +250,15 @@ fun KnockHeroScreen(
     val moodPreferences = remember(context) {
         context.getSharedPreferences(CHAT_MOOD_PREFERENCES, android.content.Context.MODE_PRIVATE)
     }
+    val bedtimePreferences = remember(context) {
+        context.getSharedPreferences("hero_bedtime_reaction", android.content.Context.MODE_PRIVATE)
+    }
     val profanityStore = remember(context) { ChatProfanityStore(context) }
     var homeMood by remember(mascotId) {
         mutableStateOf(mascotId?.let { moodPreferences.readHomeChatMood(it, System.currentTimeMillis()) })
     }
     var moodProfanity by remember(mascotId) { mutableStateOf(false) }
+    var lastMoodAction by remember(mascotId) { mutableStateOf<String?>(null) }
     var playedMood by remember(mascotId) { mutableStateOf<HomeChatMood?>(null) }
     DisposableEffect(mascotId, visible, moodPreferences) {
         val id = mascotId
@@ -292,7 +305,8 @@ fun KnockHeroScreen(
     var offerDismissed by remember(mascotId) {
         mutableStateOf(offerPreferences.getBoolean(mascotId.orEmpty(), false))
     }
-    var pickerSelectedId by remember { mutableStateOf<String?>(null) }
+    // A picker preview belongs to the active hero it was opened for.
+    var pickerSelectedId by remember(mascotId) { mutableStateOf(mascotId) }
     var previousHeroPainter by remember { mutableStateOf<Painter?>(null) }
     var editingHeroName by remember { mutableStateOf(false) }
     var heroNameDraft by remember { mutableStateOf(TextFieldValue()) }
@@ -338,7 +352,9 @@ fun KnockHeroScreen(
                 .filterNot { it == "idle" || it == "typing_reaction" || it == stateKey }.toSet()
         } else emptySet()
     }
-    val moodAnimation = homeMood?.availableAction(animationVideoUrls.keys)
+    val moodActions = homeMood?.compatibleActions(animationVideoUrls.keys).orEmpty()
+    val moodAnimation = moodActions.firstOrNull()
+    val oneShotActions = homeReactionActions + listOfNotNull(lastMoodAction, moodAnimation)
     val showWaiting = !accepted && generating && visualPreviewUrl.isNullOrBlank()
     val heroReady = visualHeroLoading || (!visualPreviewUrl.isNullOrBlank() && !showWaiting)
     var hasPreparedPhysics by remember(visualMascotId) { mutableStateOf(false) }
@@ -380,6 +396,7 @@ fun KnockHeroScreen(
 
     fun postponeAmbientAction() {
         nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
+        quietReactionAt = SystemClock.elapsedRealtime() + 60_000L
     }
 
     fun takeNextMainAction(): String? {
@@ -479,15 +496,21 @@ fun KnockHeroScreen(
         delay(320)
         navigationReady = true
     }
-    LaunchedEffect(homeMood, visible, accepted, heroReady, heroPickerExpanded, visualHeroLoading, visualMascotId, moodAnimation) {
-        if (!visible || !accepted || !heroReady || heroPickerExpanded || visualHeroLoading || visualMascotId != mascotId) {
-            return@LaunchedEffect
-        }
+    LaunchedEffect(homeMood, visible, accepted, heroReady, heroPickerExpanded, visualHeroLoading,
+        visualMascotId, moodActions, puppetAction, heroPressed, sleepLocked, showHomeSettings, stateKey) {
+        if (!visible || !accepted || !heroReady || heroPickerExpanded || visualHeroLoading || visualMascotId != mascotId ||
+            heroPressed || sleepLocked || showHomeSettings ||
+            stateKey == "sleeping" || stateKey == "sleep_loop" || puppetAction in oneShotActions) return@LaunchedEffect
         val mood = homeMood ?: return@LaunchedEffect
-        if (mood == playedMood) return@LaunchedEffect
-        val action = moodAnimation ?: return@LaunchedEffect
-        playMainAction(action)
+        if (moodActions.isEmpty()) return@LaunchedEffect
+        val continuing = playedMood == mood
+        if (continuing) delay(3_500L)
+        if (System.currentTimeMillis() >= mood.expires) return@LaunchedEffect
+        val index = if (continuing) (moodActions.indexOf(lastMoodAction) + 1) % moodActions.size else 0
+        val action = moodActions[index]
+        lastMoodAction = action
         playedMood = mood
+        playMainAction(action)
         postponeAmbientAction()
     }
     LaunchedEffect(mascotId, visualHeroLoading, visible) {
@@ -508,6 +531,28 @@ fun KnockHeroScreen(
                 takeNextMainAction()?.let(::playMainAction)
                 nextAmbientAt = elapsedNow + nextAmbientDelayMs()
             }
+        }
+    }
+    LaunchedEffect(mascotId, visible, accepted, heroReady, heroPickerExpanded, visualHeroLoading, showHomeSettings,
+        stateKey, animationVideoUrls.keys) {
+        if (!visible || !accepted || !heroReady || heroPickerExpanded || visualHeroLoading || showHomeSettings ||
+            stateKey in setOf("sleeping", "sleep_loop")) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            val elapsed = SystemClock.elapsedRealtime()
+            if (elapsed < quietReactionAt || heroPressed || sleepLocked || puppetAction in homeReactionActions ||
+                moodActions.isNotEmpty()) continue
+            val time = java.time.LocalDateTime.now()
+            val action = quietHomeReaction(time.hour, animationVideoUrls.keys)
+            quietReactionAt = elapsed + 5 * 60_000L
+            val day = time.toLocalDate().toString()
+            if (action == null) continue
+            if (action == "sleepy") {
+                val id = mascotId ?: continue
+                if (bedtimePreferences.getString(id, null) == day) continue
+                bedtimePreferences.edit().putString(id, day).apply()
+            }
+            playMainAction(action)
         }
     }
     LaunchedEffect(heroPickerExpanded) {
@@ -866,21 +911,16 @@ fun KnockHeroScreen(
                                     neutralFrameUrl = visualNeutralFrameUrl, action = stateKey ?: "idle",
                                     interaction = interaction, lighting = phoneInteraction.lighting,
                                     onAnimationVisible = onAnimationVisible,
-                                    playOnceActions = if (puppetAction == moodAnimation && moodAnimation != null) {
-                                        homeReactionActions + moodAnimation
-                                    } else homeReactionActions,
+                                    playOnceActions = oneShotActions,
                                     onOneShotFinished = { finished ->
                                         onOneShotFinished?.invoke(finished)
-                                        if (puppetAction == finished && (finished in homeReactionActions || finished == moodAnimation)) {
+                                        if (puppetAction == finished && finished in oneShotActions) {
                                             puppetAction = defaultHomeVideoAction(animationVideoUrls.keys)
                                             puppetActionSerial += 1
-                                            postponeAmbientAction()
+                                            nextAmbientAt = SystemClock.elapsedRealtime() + nextAmbientDelayMs()
                                         }
                                     },
                                     playbackEnabled = visible, useNeutralTransitions = false,
-                                    interruptIdleForAction = moodAnimation?.takeIf {
-                                        it == puppetAction && playedMood == homeMood
-                                    },
                                     onFirstFrame = { videoReady = true },
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -1025,7 +1065,22 @@ fun KnockHeroScreen(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = quoteBottom),
                 enter = fadeIn(tween(200)) + slideInVertically(tween(240, easing = MascotEase)) { it / 6 },
                 exit = fadeOut(tween(120))) {
-                HomeQuoteCard(
+                if (error != null && !greetingInterrupted) {
+                    Text(
+                        error,
+                        color = KnockInk,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(screenWidth * .817f)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color.White.copy(alpha = .88f))
+                            .heightIn(max = 138.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("hero-error"),
+                    )
+                } else HomeQuoteCard(
                     line = if (showOffer) "Давай расширим мои возможности" else currentLine,
                     palette = palette, offer = showOffer,
                     onAcceptOffer = { dismissOffer(); onCapabilities() },
@@ -1081,7 +1136,7 @@ fun KnockHeroScreen(
                     }, contentAlignment = Alignment.Center) { HomeFigmaIcon("hero-confirm", null, size = 18.dp) }
             }
         }
-        if (error != null && !greetingInterrupted) {
+        if (!accepted && error != null && !greetingInterrupted) {
             Text(
                 error,
                 color = KnockInk,
@@ -1115,7 +1170,10 @@ fun KnockHeroScreen(
         ) {
             HomeSettingsMenu(
                 onClose = { closeHomeSettings() },
-                onHeroes = { closeHomeSettings { pickerSelectedId = mascotId; heroPickerExpanded = true } },
+                onHeroes = { closeHomeSettings {
+                    if (onCharacterSettings != null) onCharacterSettings()
+                    else { pickerSelectedId = mascotId; heroPickerExpanded = true }
+                } },
                 onAnimations = { closeHomeSettings { onAnimations(mascotId) } },
                 onOverlay = { closeHomeSettings(onOverlaySettings) },
                 onBehavior = { closeHomeSettings(onBehavior) },

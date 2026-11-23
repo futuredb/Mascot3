@@ -12,7 +12,8 @@ const glitchParam=name=>{const match=new RegExp(`[?&]${name}=([^&]*)`).exec(glit
 const safeGlitchColor=value=>/^#[0-9a-f]{6}$/i.test(value||'')?value:'#AAA0FF';
 const finiteChatCapture=glitchParam('finite')==='1';
 const glitchPalette={warm:safeGlitchColor(glitchParam('warm')||'#FF806B'),cool:safeGlitchColor(glitchParam('cool')||'#AAA0FF')};
-const liveTransition=createPortraitTransition(frame,frameCtx,{palette:glitchPalette});
+let glitchEnabled=false;
+const liveTransition=createPortraitTransition(frame,frameCtx,{palette:glitchPalette,enabled:()=>glitchEnabled});
 let promptTransitionPending=false, promptFrameReady=false;
 const sample=document.createElement('canvas');sample.width=96;sample.height=54;
 const sampleCtx=sample.getContext('2d',{willReadFrequently:true});
@@ -69,7 +70,7 @@ function draw(source){
  }
 }
 function stopReplay(){replayGeneration++;replayVideo.pause();replayVideo.removeAttribute('src');replayVideo.load();if(replayUrl)URL.revokeObjectURL(replayUrl);replayUrl=null}
-function playReplay(blob){if(!blob?.size)return false;stopReplay();const n=replayGeneration;const transition=createReplayTransition(frame,frameCtx,undefined,glitchPalette);replayUrl=URL.createObjectURL(blob);replayVideo.src=replayUrl;replayVideo.loop=true;replayVideo.muted=true;function next(now,meta){if(n!==replayGeneration||liveVisible)return;try{if(displayVisible){measureFrames('replay',now,meta);transition.render(replayVideo,now,meta.mediaTime,draw)}}catch{}replayVideo.requestVideoFrameCallback(next)}replayVideo.requestVideoFrameCallback(next);replayVideo.play().catch(()=>tell('error','Не удалось повторить сохранённый фрагмент.'));return true}
+function playReplay(blob){if(!blob?.size)return false;stopReplay();const n=replayGeneration;const transition=createReplayTransition(frame,frameCtx,undefined,glitchPalette,()=>glitchEnabled);replayUrl=URL.createObjectURL(blob);replayVideo.src=replayUrl;replayVideo.loop=true;replayVideo.muted=true;function next(now,meta){if(n!==replayGeneration||liveVisible)return;try{if(displayVisible){measureFrames('replay',now,meta);transition.render(replayVideo,now,meta.mediaTime,draw)}}catch{}replayVideo.requestVideoFrameCallback(next)}replayVideo.requestVideoFrameCallback(next);replayVideo.play().catch(()=>tell('error','Не удалось повторить сохранённый фрагмент.'));return true}
 // The WebRTC connection and recording stay active behind the home screen;
 // avoid uploading a full video frame to an invisible canvas on every frame.
 window.setMascotVisibility=(visible)=>{
@@ -82,6 +83,13 @@ window.setMascotVisibility=(visible)=>{
 // One recorder per complete response: it starts just before the new prompt and
 // stays open until the next prompt or the stream stops. A MediaRecorder result
 // is an independent playable WebM, not a concatenation of file fragments.
+window.setMascotGlitchEnabled=(enabled)=>{
+ glitchEnabled=Boolean(enabled);
+ if(!glitchEnabled){
+  liveTransition.cancel();
+  if(displayVisible)window.setMascotVisibility(true);
+ }
+};
 function saveIdle(blob){if(!window.MascotBridge?.saveIdleClip)return;const reader=new FileReader();reader.onload=()=>{try{if(window.MascotBridge.saveIdleClip(String(reader.result).split(',')[1]))tell('idle_saved')}catch{}};reader.readAsDataURL(blob)}
 function startRecorder(track,id,context=''){if(finiteChatCapture&&!context.trim())return;if(!globalThis.MediaRecorder||!track||id!==generation)return;let parts=[];const epoch=++recorderEpoch,saveAsIdle=prewarmActive,version=actionVersion;try{const type=['video/webm;codecs=vp8','video/webm','video/mp4'].find(t=>MediaRecorder.isTypeSupported(t));const rec=new MediaRecorder(new MediaStream([track]),{...(type?{mimeType:type}:{}),videoBitsPerSecond:2000000});const archive=context.trim()?createClipArchive(window.MascotBridge,context,rec.mimeType||type||'',()=>tell('archive-error','Не удалось сохранить реакцию в библиотеку.')):null;latestClip=null;clipRecorder=rec;rec.ondataavailable=e=>{if(e.data.size){parts.push(e.data);archive?.append(e.data)}};rec.onstop=()=>{if(epoch===recorderEpoch&&parts.length){const blob=new Blob(parts,{type:rec.mimeType||'video/webm'});if(blob.size){latestClip=blob;if(saveAsIdle&&saveIdleOnStop)saveIdle(blob)}}void archive?.finish()};rec.start(1000);clearTimeout(recorderTimer);if(!saveAsIdle){recorderTimer=setTimeout(()=>{void (async()=>{await finishRecorder();if(id===generation&&model&&version===actionVersion&&latestClip)await pauseForReplay(model,id,version)})()},finiteChatCapture?8_000:LOOP_CAPTURE_MS)}else{clearTimeout(prewarmTimer);prewarmTimer=setTimeout(()=>void stop('',true,true),6000)}}catch{clipRecorder=null;if(context.trim())tell('archive-error','Не удалось записать реакцию для библиотеки.')}}
 function finishRecorder(save=true){clearTimeout(recorderTimer);recorderTimer=null;if(!save)recorderEpoch++;const rec=clipRecorder;clipRecorder=null;if(!rec||rec.state!=='recording')return Promise.resolve();return new Promise(resolve=>{let done=false;const finish=()=>{if(!done){done=true;resolve()}};const original=rec.onstop;rec.onstop=e=>{original?.call(rec,e);finish()};try{rec.stop()}catch{finish()}setTimeout(finish,3000)})}

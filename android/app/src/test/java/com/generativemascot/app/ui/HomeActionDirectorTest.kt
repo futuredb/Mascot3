@@ -8,14 +8,17 @@ import org.junit.Test
 
 class HomeActionDirectorTest {
     @Test
-    fun `home pool uses every authored action except baseline and deliberate sleep`() {
+    fun `home pool keeps context specific clips out of tap gestures`() {
         val pool = mainScreenActionPool(HeroLocalStore.VIDEO_ACTIONS.toSet())
 
-        assertEquals(HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size - 2, pool.size)
+        assertEquals(HeroLocalStore.LIBRARY_VIDEO_ACTIONS.size - 5, pool.size)
         assertFalse("welcome" in pool)
         assertFalse("idle" in pool)
         assertFalse("sleeping" in pool)
         assertFalse("sleep_loop" in pool)
+        assertFalse("typing_reaction" in pool)
+        assertFalse("bored" in pool)
+        assertFalse("sleepy" in pool)
         assertTrue("resting" in pool)
         assertTrue("thinking" in pool)
         assertTrue("signature_move" in pool)

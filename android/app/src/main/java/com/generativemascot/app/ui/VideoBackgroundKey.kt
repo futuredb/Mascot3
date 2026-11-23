@@ -33,14 +33,20 @@ internal fun keyedPixel(color: Int, keyColor: Int): Int {
     }
     val r=Color.red(color)/255f;val g=Color.green(color)/255f;val b=Color.blue(color)/255f
     val greenKey=Color.green(keyColor)>=90 && Color.green(keyColor)>=Color.red(keyColor)+45 && Color.green(keyColor)>=Color.blue(keyColor)+35
-    val matte=if(greenKey) 1f-smooth(.07f,.22f,g-maxOf(r,b)) else {
+    val turquoiseProtection=(1f-smooth(.55f,.70f,r/maxOf(g,.001f)))*smooth(.75f,.85f,b/maxOf(g,.001f))
+    val greenHue=1f-turquoiseProtection
+    val greenMatte=1f-smooth(.035f,.18f,g-maxOf(r,b))
+    var matte=if(greenKey) 1f-(1f-greenMatte)*greenHue else {
         val dr=r-Color.red(keyColor)/255f;val dg=g-Color.green(keyColor)/255f;val db=b-Color.blue(keyColor)/255f
         smooth(.1f,.42f,sqrt(dr*dr+dg*dg+db*db))
     }
+    if(greenKey)matte=smooth(.50f,1f,matte*matte)
     val alpha=(Color.alpha(color)*matte).roundToInt()
     if(alpha==0)return Color.TRANSPARENT
-    val edge=if(greenKey) 1f-smooth(.70f,.98f,matte) else 0f
-    val cleanG=g+(minOf(g,maxOf(r,b)+.045f)-g)*edge
+    val dominance=g-maxOf(r,b)
+    val spill=if(greenKey)greenHue*smooth(.015f,.12f,dominance) else 0f
+    val edge=if(greenKey)maxOf(1f-smooth(.90f,.995f,matte),spill) else 0f
+    val cleanG=g+(minOf(g,maxOf(r,b)+.025f)-g)*edge
     return Color.argb(alpha,Color.red(color),(cleanG*255f).roundToInt().coerceIn(0,255),Color.blue(color))
 }
 
@@ -91,7 +97,10 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
             setFloatUniform("greenHigh", tuning.high)
             setFloatUniform("greenAdaptive", if (tuning.adaptive) 1f else 0f)
         }
-        override fun configure(inputWidth: Int,inputHeight: Int)=Size(inputWidth,inputHeight)
+        override fun configure(inputWidth: Int,inputHeight: Int):Size {
+            program.setFloatsUniform("texelSize",floatArrayOf(1f/inputWidth.coerceAtLeast(1),1f/inputHeight.coerceAtLeast(1)))
+            return Size(inputWidth,inputHeight)
+        }
         override fun drawFrame(inputTexId: Int,presentationTimeUs: Long) {
             try {
                 program.use();program.setSamplerTexIdUniform("image",inputTexId,0)
@@ -124,6 +133,7 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
         private const val FRAGMENT="""
             precision highp float; uniform sampler2D image; uniform vec3 keyColor;
             uniform float greenKey; uniform float correctBt601; uniform float greenLow; uniform float greenHigh; uniform float greenAdaptive; varying vec2 uv;
+            uniform vec2 texelSize;
             uniform sampler2D normalMap; uniform vec4 normalRect;
             uniform vec2 lightTilt; uniform float normalActive;
             float surfaceLighting(vec3 rgb) {
@@ -151,18 +161,69 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
                 float u=(rgb.b-y)/1.8556;float v=(rgb.r-y)/1.5748;
                 return clamp(vec3(y+1.402*v,y-0.344136*u-0.714136*v,y+1.772*u),0.0,1.0);
             }
+            vec3 sourceRgbAt(vec2 point) {
+                vec3 sampled=texture2D(image,point).rgb;
+                return mix(sampled,restore601(sampled),correctBt601);
+            }
+            float plateMatteAt(vec2 point,vec3 key) {
+                vec3 sampled=sourceRgbAt(point);
+                float y=dot(sampled,vec3(0.2126,0.7152,0.0722));
+                float keyY=dot(key,vec3(0.2126,0.7152,0.0722));
+                vec2 chroma=vec2((sampled.b-y)/1.8556,(sampled.r-y)/1.5748);
+                vec2 keyChroma=vec2((key.b-keyY)/1.8556,(key.r-keyY)/1.5748);
+                return smoothstep(0.015,0.45,distance(chroma,keyChroma));
+            }
             void main(){
                 vec4 source=texture2D(image,uv);
                 vec3 rgb=mix(source.rgb,restore601(source.rgb),correctBt601);
                 vec3 key=mix(keyColor,restore601(keyColor),correctBt601);
                 float generic=smoothstep(0.10,0.42,distance(rgb,key));
-                float green=1.0-smoothstep(0.07,0.22,rgb.g-max(rgb.r,rgb.b));
-                float greenHue=1.0-smoothstep(0.65,0.72,rgb.b/max(rgb.g,0.001));
+                float green=1.0-smoothstep(0.035,0.18,rgb.g-max(rgb.r,rgb.b));
+                float turquoiseProtection=(1.0-smoothstep(0.55,0.70,rgb.r/max(rgb.g,0.001)))
+                    *smoothstep(0.75,0.85,rgb.b/max(rgb.g,0.001));
+                float greenHue=1.0-turquoiseProtection;
+                green=mix(1.0,green,greenHue);
                 float adaptiveGreen=1.0-smoothstep(greenLow,greenHigh,rgb.g-max(rgb.r,rgb.b));
                 green=mix(green,adaptiveGreen,greenAdaptive*greenHue);
-                float matte=mix(generic,green,greenKey);float alpha=source.a*matte;
-                float edge=greenKey*(1.0-smoothstep(0.70,0.98,matte));
-                rgb.g=mix(rgb.g,min(rgb.g,max(rgb.r,rgb.b)+0.045),edge);
+                float sourceY=dot(rgb,vec3(0.2126,0.7152,0.0722));
+                float keyY=dot(key,vec3(0.2126,0.7152,0.0722));
+                vec2 sourceChroma=vec2((rgb.b-sourceY)/1.8556,(rgb.r-sourceY)/1.5748);
+                vec2 keyChroma=vec2((key.b-keyY)/1.8556,(key.r-keyY)/1.5748);
+                float plateAlpha=smoothstep(0.015,0.45,distance(sourceChroma,keyChroma));
+                green=mix(green,min(green,plateAlpha),greenAdaptive*greenHue);
+                float matte=mix(generic,green,greenKey);
+                matte=mix(matte,smoothstep(0.50,1.0,matte*matte),greenKey);
+                float alpha=source.a*matte;
+                float spill=greenKey*greenHue*smoothstep(0.005,0.08,rgb.g-max(rgb.r,rgb.b));
+                rgb.g=mix(rgb.g,min(rgb.g,max(rgb.r,rgb.b)),spill);
+                vec2 edgeStep=texelSize*6.0;
+                float leftMatte=plateMatteAt(uv-vec2(edgeStep.x,0.0),key);
+                float rightMatte=plateMatteAt(uv+vec2(edgeStep.x,0.0),key);
+                float upMatte=plateMatteAt(uv-vec2(0.0,edgeStep.y),key);
+                float downMatte=plateMatteAt(uv+vec2(0.0,edgeStep.y),key);
+                float horizontal=leftMatte-rightMatte;
+                float vertical=upMatte-downMatte;
+                float diagonalDown=plateMatteAt(uv-edgeStep,key)-plateMatteAt(uv+edgeStep,key);
+                float diagonalUp=plateMatteAt(uv+vec2(-edgeStep.x,edgeStep.y),key)
+                    -plateMatteAt(uv+vec2(edgeStep.x,-edgeStep.y),key);
+                float edgeGradient=abs(horizontal);
+                vec2 interiorPoint=uv+vec2(horizontal>0.0?-edgeStep.x:edgeStep.x,0.0);
+                if(abs(vertical)>edgeGradient){
+                    edgeGradient=abs(vertical);
+                    interiorPoint=uv+vec2(0.0,vertical>0.0?-edgeStep.y:edgeStep.y);
+                }
+                if(abs(diagonalDown)>edgeGradient){
+                    edgeGradient=abs(diagonalDown);
+                    interiorPoint=uv+(diagonalDown>0.0?-edgeStep:edgeStep);
+                }
+                if(abs(diagonalUp)>edgeGradient){
+                    edgeGradient=abs(diagonalUp);
+                    interiorPoint=uv+(diagonalUp>0.0?vec2(-edgeStep.x,edgeStep.y):vec2(edgeStep.x,-edgeStep.y));
+                }
+                float edgeRecovery=greenKey*greenAdaptive
+                    *smoothstep(0.30,0.80,edgeGradient)*smoothstep(0.72,0.98,plateAlpha);
+                rgb=mix(rgb,sourceRgbAt(interiorPoint),edgeRecovery);
+                alpha*=1.0-edgeRecovery;
                 gl_FragColor=vec4(clamp(rgb*surfaceLighting(rgb),0.0,1.0)*alpha,alpha);
             }
         """

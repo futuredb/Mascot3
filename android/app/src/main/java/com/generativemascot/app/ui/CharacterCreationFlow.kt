@@ -47,12 +47,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.generativemascot.app.R
 import com.generativemascot.app.data.CharacterCreationChoice
+import com.generativemascot.app.data.CharacterCommunication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private enum class CreationPage { Overview, Type, Appearance, Personality }
+private enum class CreationPage { Overview, Type, Appearance, Personality, Communication }
 private val types = listOf("person", "creature", "animal")
 private val typeNames = listOf("Человек", "Существо", "Животное")
 private val typeArt = listOf(R.drawable.type_person_figma, R.drawable.type_creature_figma, R.drawable.type_animal_figma)
@@ -114,6 +115,12 @@ internal fun CharacterCreationFlow(
         val count = (1..2).random()
         mutableIntStateOf(personality.indices.shuffled().take(count).sumOf { 1 shl it })
     }
+    val communicationVariationSeed by rememberSaveable { mutableIntStateOf(kotlin.random.Random.nextInt()) }
+    var communicationWasEdited by rememberSaveable { mutableStateOf(false) }
+    var communication by rememberSaveable(stateSaver = communicationSaver) {
+        mutableStateOf(CharacterCommunication.fromPersonality(presetDescription(personality, traits), communicationVariationSeed))
+    }
+    var communicationBeforeEdit by rememberSaveable(stateSaver = communicationSaver) { mutableStateOf(CharacterCommunication()) }
     var appearanceText by rememberSaveable { mutableStateOf("") }
     var personalityText by rememberSaveable { mutableStateOf("") }
     var overviewDraft by rememberSaveable(stateSaver = creationDraftSaver) { mutableStateOf<CreationDraft?>(null) }
@@ -151,6 +158,7 @@ internal fun CharacterCreationFlow(
                 traits = 0
                 appearanceText = ""
                 personalityText = ""
+                if (!communicationWasEdited) communication = CharacterCommunication()
             }
         }
         if (to == CreationPage.Overview) overviewDraft = null
@@ -159,6 +167,7 @@ internal fun CharacterCreationFlow(
         page = to
     }
     fun back() {
+        if (page == CreationPage.Communication) communication = communicationBeforeEdit
         if (editing) {
             editing = false
             return
@@ -170,16 +179,25 @@ internal fun CharacterCreationFlow(
                 traits = it.traits
                 appearanceText = it.appearanceText
                 personalityText = it.personalityText
+                if (!communicationWasEdited) communication = CharacterCommunication.fromPersonality(
+                    listOf(presetDescription(personality, traits), personalityText.trim()).filter(String::isNotBlank).joinToString(". "),
+                    communicationVariationSeed,
+                )
             }
             navigate(CreationPage.Overview)
         } else {
-            navigate(if (page == CreationPage.Appearance) CreationPage.Type else CreationPage.Appearance)
+            navigate(when (page) {
+                CreationPage.Appearance -> CreationPage.Type
+                CreationPage.Communication -> CreationPage.Personality
+                else -> CreationPage.Appearance
+            })
         }
     }
     fun finish() {
         if (creationInProgress || referenceLoading) return
         val choice = CharacterCreationChoice(
             type = types[type], style = "neutral", referencePath = referencePath,
+            communication = communication,
             appearancePrompt = listOf(presetDescription(appearance, looks), appearanceText.trim()).filter { it.isNotBlank() }.joinToString(". "),
             personalityPrompt = listOf(presetDescription(personality, traits), personalityText.trim()).filter { it.isNotBlank() }.joinToString(". "),
         )
@@ -191,6 +209,16 @@ internal fun CharacterCreationFlow(
         CharacterTypeScreen(type, referencePath, { showReferenceNotice = true }, { referencePath = null }, ::back) {
             type = it
             navigate(if (guided) CreationPage.Appearance else CreationPage.Overview)
+        }
+        return
+    }
+
+    if (page == CreationPage.Communication) {
+        CreationCommunicationPage(
+            if (type == 1) R.drawable.creation_communication_creature else typeArt[type],
+            communication, { communication = it; communicationWasEdited = true }, ::back,
+        ) {
+            navigate(CreationPage.Overview)
         }
         return
     }
@@ -272,21 +300,29 @@ internal fun CharacterCreationFlow(
                 guided = false
                 navigate(CreationPage.Personality)
             }
-            Box(slot(42, 356, 133, 134).offset(y = sy * (motion * 8)).clip(RoundedCornerShape(42.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+            Box(slot(42, 356, 133, 134).offset(y = sy * (motion * 8)).clip(RoundedCornerShape(42.dp))
+                .background(Color.White).mascotClickable(onClickLabel = "Стиль общения") {
+                    guided = false
+                    communicationBeforeEdit = communication
+                    navigate(CreationPage.Communication)
+                }, contentAlignment = Alignment.Center) {
                 Row(Modifier.align(Alignment.TopCenter).padding(top = 21.dp), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     for (index in 1..4) HomeFigmaIcon("creation-quote-$index", null, size = 5.dp)
                 }
-                Text(listOf("Говорит\nкоротко и по\nделу", "Много\nматерится", "Говорит\nс юмором\nи просто")[type],
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp), textAlign = TextAlign.Center,
-                    color = Color.Black, fontFamily = SbSansDisplayMedium, fontSize = 13.sp, lineHeight = 17.sp)
+                Text("Стиль\nобщения", Modifier.align(Alignment.BottomCenter).padding(bottom = 29.dp),
+                    textAlign = TextAlign.Center, color = Color.Black, fontFamily = SbSansDisplayMedium, fontSize = 13.sp)
             }
             HomeFigmaIcon("creation-quote-tail", null,
                 Modifier.offset(sx * 146, sy * 391.5f).graphicsLayer { scaleY = -1f }, size = 36.dp)
-            Box(slot(146, 329, 205, 86).clip(RoundedCornerShape(20.dp)).background(Color.White).padding(16.dp), contentAlignment = Alignment.CenterStart) {
-                Text(listOf("Так, без паники. Разложим этот бардак по полочкам. Что горит?",
-                    "Блядь, без паники. Разгребём этот ёбаный бардак. Что горит?",
-                    "Без паники! Бардак — это пазл. Соберём. Что горит первым?")[type],
-                    fontFamily = regular, fontSize = 13.sp, lineHeight = 16.sp, color = Color.Black)
+            Box(slot(146, 329, 205, 86).clip(RoundedCornerShape(20.dp)).background(Color.White)
+                .mascotClickable(onClickLabel = "Настроить стиль общения") {
+                    guided = false
+                    communicationBeforeEdit = communication
+                    navigate(CreationPage.Communication)
+                }.padding(16.dp), contentAlignment = Alignment.CenterStart) {
+                Text(communication.notes.ifBlank { communication.summary() }.ifBlank { "Как с тобой общаться" },
+                    fontFamily = regular, fontSize = 13.sp, lineHeight = 16.sp, color = Color.Black,
+                    maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
             CreationPill("СОЗДАТЬ", slot(136, 721, 122, 50), !creationInProgress && !referenceLoading, ::finish)
             Box(slot(75, 781, 243, 48).mascotClickable(onClickLabel = "Настроить по-своему") {
@@ -312,7 +348,15 @@ internal fun CharacterCreationFlow(
                 if (editing) {
                     val focus = remember { FocusRequester() }
                     LaunchedEffect(Unit) { focus.requestFocus() }
-                    BasicTextField(custom, { if (it.length <= 500) { if (isAppearance) appearanceText = it else personalityText = it } },
+                    BasicTextField(custom, { value -> if (value.length <= 500) {
+                        if (isAppearance) appearanceText = value else {
+                            personalityText = value
+                            if (!communicationWasEdited) communication = CharacterCommunication.fromPersonality(
+                                listOf(presetDescription(personality, traits), value.trim()).filter(String::isNotBlank).joinToString(". "),
+                                communicationVariationSeed,
+                            )
+                        }
+                    } },
                         Modifier.fillMaxWidth().focusRequester(focus), textStyle = headingStyle,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { editing = false }), maxLines = 2)
@@ -330,7 +374,13 @@ internal fun CharacterCreationFlow(
                 Box(slot(56 + index % 3 * 100, 519 + index / 3 * 100, 80, 80).clip(CircleShape)
                     .semantics { this.selected = selected }
                     .mascotClickable(enabled = selected || !full, onClickLabel = preset.label) {
-                        if (isAppearance) looks = mask xor bit else traits = mask xor bit
+                        if (isAppearance) looks = mask xor bit else {
+                            traits = mask xor bit
+                            if (!communicationWasEdited) communication = CharacterCommunication.fromPersonality(
+                                listOf(presetDescription(personality, traits), personalityText.trim()).filter(String::isNotBlank).joinToString(". "),
+                                communicationVariationSeed,
+                            )
+                        }
                     }, contentAlignment = Alignment.Center) {
                     Box(Modifier.fillMaxSize().alpha(if (full && !selected) .18f else 1f)) {
                         PresetArt(preset, index.takeIf { isAppearance })
@@ -343,8 +393,7 @@ internal fun CharacterCreationFlow(
             }
             val label = when {
                 !guided -> "СОХРАНИТЬ"
-                isAppearance -> "ДАЛЕЕ"
-                else -> "СОЗДАТЬ"
+                else -> "ДАЛЕЕ"
             }
             val width = when (label) { "ДАЛЕЕ" -> 105; "СОХРАНИТЬ" -> 144; else -> 122 }
             val x = (393 - width - 58) / 2
@@ -356,7 +405,10 @@ internal fun CharacterCreationFlow(
                 when {
                     !guided -> navigate(CreationPage.Overview)
                     isAppearance -> navigate(CreationPage.Personality)
-                    else -> finish()
+                    else -> {
+                        communicationBeforeEdit = communication
+                        navigate(CreationPage.Communication)
+                    }
                 }
             }
         }

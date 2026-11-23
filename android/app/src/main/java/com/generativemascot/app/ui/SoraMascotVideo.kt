@@ -51,7 +51,6 @@ import kotlinx.coroutines.Job
 
 private const val CROSSFADE_MS = 360L
 private const val PREPARE_BEFORE_END_MS = 500L
-private const val TRANSITION_BEFORE_END_MS = 220L
 // Closed sleep clips have matching endpoints: swap on the last frame, not
 // hundreds of milliseconds early. At 24 fps this covers one frame interval.
 private const val CLOSED_LOOP_SWAP_BEFORE_END_MS = 40L
@@ -79,6 +78,16 @@ private const val BACKGROUND_KEY_SHADER = """
     uniform float greenHigh;
     uniform float greenAdaptive;
 
+    float plateMatteAt(float2 coordinate) {
+        float3 rgb = float3(content.eval(coordinate).rgb);
+        float3 key = float3(keyColor.rgb);
+        float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+        float keyY = dot(key, float3(0.2126, 0.7152, 0.0722));
+        float2 chroma = float2((rgb.b - y) / 1.8556, (rgb.r - y) / 1.5748);
+        float2 keyChroma = float2((key.b - keyY) / 1.8556, (key.r - keyY) / 1.5748);
+        return smoothstep(0.015, 0.45, distance(chroma, keyChroma));
+    }
+
     half4 main(float2 coordinate) {
         half4 color = content.eval(coordinate);
         float distanceFromBackground = distance(float3(color.rgb), float3(keyColor.rgb));
@@ -89,19 +98,74 @@ private const val BACKGROUND_KEY_SHADER = """
         // as a visible rectangle.
         float greenDominance = float(color.g) - max(float(color.r), float(color.b));
         float chromaAlpha = 1.0 - smoothstep(0.07, 0.22, greenDominance);
-        float greenHue = 1.0 - smoothstep(0.65, 0.72, float(color.b) / max(float(color.g), 0.001));
+        // A blue/green ratio alone misclassifies the olive compression fringe
+        // as turquoise and protects it from despill. True turquoise also has a
+        // low red/green ratio; require both signals before preserving it.
+        float turquoiseProtection =
+            (1.0 - smoothstep(0.55, 0.70, float(color.r) / max(float(color.g), 0.001))) *
+            smoothstep(0.75, 0.85, float(color.b) / max(float(color.g), 0.001));
+        float greenHue = 1.0 - turquoiseProtection;
         float adaptiveAlpha = 1.0 - smoothstep(greenLow, greenHigh, greenDominance);
         chromaAlpha = mix(chromaAlpha, adaptiveAlpha, greenAdaptive * greenHue);
+        // Chroma distance catches yellow/olive edge mixtures whose green
+        // channel is no longer dominant. The canonical-subject check enables
+        // this only when the character itself has no green material.
+        float sourceY = dot(float3(color.rgb), float3(0.2126, 0.7152, 0.0722));
+        float keyY = dot(float3(keyColor.rgb), float3(0.2126, 0.7152, 0.0722));
+        float2 sourceChroma = float2(
+            (float(color.b) - sourceY) / 1.8556,
+            (float(color.r) - sourceY) / 1.5748
+        );
+        float2 keyChroma = float2(
+            (float(keyColor.b) - keyY) / 1.8556,
+            (float(keyColor.r) - keyY) / 1.5748
+        );
+        float plateAlpha = smoothstep(0.015, 0.45, distance(sourceChroma, keyChroma));
+        chromaAlpha = mix(chromaAlpha, min(chromaAlpha, plateAlpha), greenAdaptive * greenHue);
         float matteAlpha = mix(genericAlpha, chromaAlpha, greenKey);
+        matteAlpha = mix(matteAlpha, smoothstep(0.50, 1.0, matteAlpha * matteAlpha), greenKey);
         float alpha = float(color.a) * matteAlpha;
 
-        // Video compression mixes green into antialiased silhouette pixels.
-        // Despill only the semi-transparent chroma edge, leaving the opaque
-        // character palette untouched.
-        float edge = greenKey * (1.0 - smoothstep(0.70, 0.98, matteAlpha));
-        float neutralGreen = min(float(color.g), max(float(color.r), float(color.b)) + 0.045);
+        // Despill only changes colour; the tighter adaptive matte above is
+        // driven by chroma, never by neighbour erosion, so neutral fine detail
+        // remains intact.
         float3 cleanRgb = float3(color.rgb);
-        cleanRgb.g = mix(float(color.g), neutralGreen, edge);
+        float spill = greenKey * greenHue * smoothstep(0.005, 0.08, greenDominance);
+        cleanRgb.g = mix(cleanRgb.g, min(cleanRgb.g, max(cleanRgb.r, cleanRgb.b)), spill);
+        // Opaque spill cannot be removed by alpha keying. Detect a true
+        // silhouette edge by requiring background on one side and confident
+        // foreground on the opposite side, then extend the interior colour.
+        // A thin prop has background on both sides and therefore no gradient.
+        float edgeStep = 6.0;
+        float leftMatte = plateMatteAt(coordinate - float2(edgeStep, 0.0));
+        float rightMatte = plateMatteAt(coordinate + float2(edgeStep, 0.0));
+        float upMatte = plateMatteAt(coordinate - float2(0.0, edgeStep));
+        float downMatte = plateMatteAt(coordinate + float2(0.0, edgeStep));
+        float horizontal = leftMatte - rightMatte;
+        float vertical = upMatte - downMatte;
+        float diagonalDown = plateMatteAt(coordinate - float2(edgeStep, edgeStep)) -
+            plateMatteAt(coordinate + float2(edgeStep, edgeStep));
+        float diagonalUp = plateMatteAt(coordinate + float2(-edgeStep, edgeStep)) -
+            plateMatteAt(coordinate + float2(edgeStep, -edgeStep));
+        float2 interiorPoint = coordinate;
+        float edgeGradient = abs(horizontal);
+        interiorPoint += float2(horizontal > 0.0 ? -edgeStep : edgeStep, 0.0);
+        if (abs(vertical) > edgeGradient) {
+            edgeGradient = abs(vertical);
+            interiorPoint = coordinate + float2(0.0, vertical > 0.0 ? -edgeStep : edgeStep);
+        }
+        if (abs(diagonalDown) > edgeGradient) {
+            edgeGradient = abs(diagonalDown);
+            interiorPoint = coordinate + (diagonalDown > 0.0 ? float2(-edgeStep, -edgeStep) : float2(edgeStep, edgeStep));
+        }
+        if (abs(diagonalUp) > edgeGradient) {
+            edgeGradient = abs(diagonalUp);
+            interiorPoint = coordinate + (diagonalUp > 0.0 ? float2(-edgeStep, edgeStep) : float2(edgeStep, -edgeStep));
+        }
+        float edgeRecovery = greenKey * greenAdaptive *
+            smoothstep(0.30, 0.80, edgeGradient) * smoothstep(0.72, 0.98, plateAlpha);
+        cleanRgb = mix(cleanRgb, float3(content.eval(interiorPoint).rgb), edgeRecovery);
+        alpha *= 1.0 - edgeRecovery;
         // Preserve transparency already present in ImageView padding. Without
         // this multiplication transparent black pixels become opaque black
         // bars while the neutral transition frame is visible.
@@ -141,13 +205,15 @@ fun SoraMascotVideo(
     switchActionsPromptly: Boolean = false,
     independentMatteActions: Set<String> = emptySet(),
     playOnceActions: Set<String> = emptySet(),
-    interruptIdleForAction: String? = null,
+    interruptOneShotForAction: String? = null,
+    onTypingCutReady: (suspend () -> Unit)? = null,
     showNeutralOnStartup: Boolean = false,
     preloadIdleReaction: String? = null,
 ) {
     val playbackAllowed = playbackEnabled && rememberAppResumed()
     if (videoUrls.isEmpty()) {
-        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier, lighting, fullClip, onAnimationVisible, onPlaybackError, playbackAllowed, onFirstFrame)
+        if (videoUrl != null) LegacyPerformanceVideo(videoUrl, action, interaction, modifier, lighting, fullClip, onAnimationVisible,
+            onPlaybackError, playbackAllowed, onFirstFrame, onOneShotFinished?.takeIf { fullClip && action in playOnceActions })
         return
     }
 
@@ -218,7 +284,8 @@ fun SoraMascotVideo(
     val startupErrorCallback by rememberUpdatedState(onPlaybackError)
     val finishedCallback by rememberUpdatedState(onOneShotFinished)
     val oneShotActions by rememberUpdatedState(playOnceActions)
-    val immediateIdleAction by rememberUpdatedState(interruptIdleForAction)
+    val oneShotInterrupt by rememberUpdatedState(interruptOneShotForAction)
+    val beforeTypingCut by rememberUpdatedState(onTypingCutReady)
     val idleReactionToPreload by rememberUpdatedState(preloadIdleReaction)
     val playbackAllowedState by rememberUpdatedState(playbackAllowed)
     val firstFrameRendered = remember(normalizedUrls) { BooleanArray(2) }
@@ -355,7 +422,10 @@ fun SoraMascotVideo(
             }.also { videoKeys[url] = it }
             val lightPack=if(lighting!=null)loadVideoLighting(context,url) else null
             val binding=lightPack?.let { VideoLightingBinding(it,requireNotNull(lighting)) }
-            val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl.takeUnless { actionName in independentMatteActions }) }
+            // Independent action keys still belong to the same character and
+            // can safely use its base image to decide whether a stronger green
+            // matte would erase real costume colours.
+            val tuning = matteTunings[url] ?: withContext(Dispatchers.IO) { detectAdaptiveGreenMatte(url, neutralFrameUrl) }
                 .also { matteTunings[url] = it }
             if (actionName == "sleep_loop" && !derivedSleepLoop && url !in closedSleepSeams) {
                 closedSleepSeams[url] = withContext(Dispatchers.IO) {
@@ -428,7 +498,8 @@ fun SoraMascotVideo(
                 continue
             }
             if (pausedForVisibility) { players[activeIndex].play(); pausedForVisibility = false }
-            if (requestSerial != consumedSerial) {
+            val newRequest = requestSerial != consumedSerial
+            if (newRequest) {
                 consumedSerial = requestSerial
                 queuedAction = requestedAction
                 Log.i("MascotPlayback", "consume action=$queuedAction current=$currentAction serial=$consumedSerial")
@@ -436,6 +507,14 @@ fun SoraMascotVideo(
 
             val active = players[activeIndex]
             val inactiveIndex = 1 - activeIndex
+            if (newRequest && queuedAction == currentAction && currentAction == oneShotInterrupt) {
+                beforeTypingCut?.invoke()
+                active.seekTo(0)
+                active.play()
+                queuedAction = null
+                oneShotBoundaryReportedAt = null
+                visibleCallback?.invoke(currentAction)
+            }
             // Direct-key packs contain the paid catalog clips. In
             // that mode `sleeping` itself is the closed breathing loop, so keep
             // repeating it until the user interacts instead of buying an
@@ -446,6 +525,15 @@ fun SoraMascotVideo(
                 "sleeping"
             } else {
                 requestedAction
+            }
+
+            val typingInterrupt = desiredNext != currentAction && desiredNext == oneShotInterrupt
+            // Prompt-mode idle clips normally repeat in ExoPlayer. Once a
+            // regular reaction is queued, let the current pass reach its real
+            // final frame instead of cutting it mid-gesture. Typing is the one
+            // intentional immediate interruption.
+            if (desiredNext != currentAction && !typingInterrupt) {
+                active.repeatMode = Player.REPEAT_MODE_OFF
             }
 
             val sleepAnchor = minOf(
@@ -577,7 +665,7 @@ fun SoraMascotVideo(
                 // Fall through to the normal transition and crossfade directly
                 // from the closed sleep loop to the requested action.
             }
-            if (currentAction in oneShotActions) {
+            if (currentAction in oneShotActions && (desiredNext == currentAction || desiredNext != oneShotInterrupt)) {
                 if (active.playbackState != Player.STATE_ENDED) {
                     delay(16)
                     continue
@@ -625,11 +713,9 @@ fun SoraMascotVideo(
             } else if (desiredNext == currentAction) {
                 CROSSFADE_MS
             } else {
-                TRANSITION_BEFORE_END_MS
+                0L
             }
-            val actionChanged = desiredNext != currentAction &&
-                (switchActionsPromptly || currentAction == idleAction && desiredNext == immediateIdleAction)
-            val atBoundary = actionChanged || remaining <= boundaryWindow || active.playbackState == Player.STATE_ENDED
+            val atBoundary = typingInterrupt || remaining <= boundaryWindow || active.playbackState == Player.STATE_ENDED
             if (atBoundary) {
                 // Report the actual first clip boundary rather than relying on the
                 // resolver's one-second safety timer. Do not begin a second greeting
@@ -684,15 +770,14 @@ fun SoraMascotVideo(
                         delay(CROSSFADE_MS / steps)
                     }
                     anchor.alpha = 0f
-                } else if (verifiedRepeat) {
-                    // The new generation passed an exact-frame seam check.
-                    // A crossfade here would overlap different motion phases
-                    // and introduce ghosting into an already closed cycle.
+                } else if (verifiedRepeat || desiredNext == oneShotInterrupt) {
+                    // Keep exact loops and typing cuts free of overlapping poses.
                     if (!waitForFirstFrame(inactiveIndex)) {
                         incoming.pause(); preparedAction = null; queuedAction = null
                         active.seekTo(0); active.play(); delay(250); continue
                     }
                     if (!isActive) break
+                    if (desiredNext == oneShotInterrupt) beforeTypingCut?.invoke()
                     active.pause()
                     outgoingView.alpha = 0f
                     incomingView.alpha = 1f
@@ -867,6 +952,7 @@ private fun LegacyPerformanceVideo(
     onPlaybackError: (() -> Unit)?,
     playbackAllowed: Boolean,
     onFirstFrame: (() -> Unit)?,
+    onOneShotFinished: ((String) -> Unit)?,
 ) {
     val context = LocalContext.current
     val uri = remember(videoUrl) { mediaUri(videoUrl) }
@@ -881,6 +967,8 @@ private fun LegacyPerformanceVideo(
     val visibleCallback by rememberUpdatedState(onAnimationVisible)
     val firstFrameCallback by rememberUpdatedState(onFirstFrame)
     val errorCallback by rememberUpdatedState(onPlaybackError)
+    val finishedCallback by rememberUpdatedState(onOneShotFinished)
+    val clipAction by rememberUpdatedState(action)
     val player = remember(videoUrl) {
         createMascotVideoPlayer(context).apply {
             volume = 0f
@@ -888,6 +976,7 @@ private fun LegacyPerformanceVideo(
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) readySerial += 1
+                    if (fullClip && playbackState == Player.STATE_ENDED) finishedCallback?.invoke(clipAction.orEmpty())
                 }
                 override fun onRenderedFirstFrame() {
                     firstFrameCallback?.invoke()
@@ -963,7 +1052,7 @@ private fun LegacyPerformanceVideo(
         if (!playbackAllowed) { player.pause(); return@LaunchedEffect }
         if (player.playbackState != Player.STATE_READY) return@LaunchedEffect
         if (fullClip) {
-            player.repeatMode = Player.REPEAT_MODE_ONE
+            player.repeatMode = if (onOneShotFinished == null) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             player.play()
             return@LaunchedEffect
         }

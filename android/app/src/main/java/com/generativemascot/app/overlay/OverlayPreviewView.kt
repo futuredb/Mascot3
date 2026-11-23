@@ -10,7 +10,7 @@ internal class OverlayPreviewView(context: Context, private val artwork: Overlay
     private val card = OverlayHintView(context, {}, {}, { setCollapsed(true) }).apply {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
-    private val compact = OverlayCompactView(context, artwork) { setCollapsed(false) }.apply { visibility = GONE }
+    private val compact = OverlayCompactView(context) { setCollapsed(false) }.apply { visibility = GONE }
     private var collapsed = false
     private var pinching = false
     private val pinch = OverlayPinchGesture(context.overlayDp(2).toFloat(),

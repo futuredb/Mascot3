@@ -5,6 +5,7 @@ data class CharacterCreationChoice(
     val type: String, val style: String,
     val positionX: Float? = null, val positionY: Float? = null, val referencePath: String? = null,
     val appearancePrompt: String = "", val personalityPrompt: String = "",
+    val communication: CharacterCommunication? = null,
 ) {
     init {
         require(type in setOf("person", "creature", "animal"))

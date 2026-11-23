@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -26,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.generativemascot.app.overlay.OverlayPermissionIntro
 import com.generativemascot.app.overlay.OverlayPermissionsDialog
 import androidx.compose.ui.Alignment
@@ -42,6 +44,12 @@ import com.generativemascot.app.ui.AppViewModel
 import com.generativemascot.app.ui.AnimationLibraryScreen
 import com.generativemascot.app.ui.PersonalityGenerationScene
 import com.generativemascot.app.ui.CharacterCreationFlow
+import com.generativemascot.app.ui.CHAT_MOOD_PREFERENCES
+import com.generativemascot.app.ui.communicationLockExpiry
+import com.generativemascot.app.ui.defaultCommunicationProfile
+import com.generativemascot.app.ui.keepMoodLockedLevels
+import com.generativemascot.app.ui.CharacterCommunicationSettings
+import com.generativemascot.app.data.CharacterCommunication
 import com.generativemascot.app.ui.KnockHeroScreen
 import com.generativemascot.app.ui.MascotLaunchScreen
 import com.generativemascot.app.ui.MascotConfirmationSheet
@@ -118,6 +126,12 @@ class MainActivity : ComponentActivity() {
                 fun requestDeleteHero(id: String?) {
                     if (id != null) { vm.clearDeleteHeroError(); deleteHeroId = id }
                 }
+                var showCharacterSettings by rememberSaveable { mutableStateOf(false) }
+                val characterSettingsState = if (showCharacterSettings) rememberSaveableStateHolder() else null
+                val characterStripState = if (showCharacterSettings) rememberLazyListState(
+                    initialFirstVisibleItemIndex = liveState.heroLibrary
+                        .indexOfFirst { it.id == liveState.mascot?.id }.coerceAtLeast(0),
+                ) else null
                 var showCharacterType by rememberSaveable { mutableStateOf(false) }
                 LaunchedEffect(pendingOverlayChat, liveState) {
                     val id = pendingOverlayChat ?: return@LaunchedEffect
@@ -127,6 +141,7 @@ class MainActivity : ComponentActivity() {
                         OverlayChatNavigation.OPEN -> {
                             if (liveState.route !in setOf("knock", "onboarding", "create", "progress", "meet", "hero")) vm.backToHero()
                             showCharacterType = false
+                            showCharacterSettings = false
                             showChat = true
                             pendingOverlayChat = null
                         }
@@ -166,14 +181,17 @@ class MainActivity : ComponentActivity() {
                                 generating = state.creating,
                                 previewUrl = mascot?.previewUrl,
                                 heroName = mascot?.name,
-                                nameDraft = state.name,
                                 error = state.error,
                                 acceptEnabled = !state.busy && !state.creating && mascot?.status == "AWAITING_ACCEPTANCE",
                                 onGenerate = vm::createHero,
-                                onRegenerate = vm::replaceHero,
-                                onAccept = vm::accept,
-                                onNameChange = vm::onName,
-                                onSaveName = vm::saveNameInPlace,
+                                communication = mascot?.id?.let { HeroLocalStore.current?.communication(it) }
+                                    ?: CharacterCommunication(),
+                                onRegenerate = { if (vm.updateDraftCommunication(it)) vm.replaceHero() },
+                                onAccept = { if (vm.updateDraftCommunication(it)) vm.accept() },
+                                onSaveName = { name ->
+                                    vm.onName(name)
+                                    vm.saveNameInPlace()
+                                },
                                 onCancel = vm::cancelHeroCreation,
                                 onBackground = { vm.deferHeroCreation { moveTaskToBack(true) } },
                             ) else GenerationScene(
@@ -193,6 +211,12 @@ class MainActivity : ComponentActivity() {
                             )
                         } else {
                         Box(Modifier.fillMaxSize()) {
+                        val openAnimations: (String?) -> Unit = { selectedId ->
+                            if (state.backgroundCreation && state.creating) Toast.makeText(this@MainActivity, "Дождитесь завершения создания персонажа", Toast.LENGTH_SHORT).show()
+                            else if (selectedId != null && selectedId != mascot?.id && (state.creating || state.packBusy))
+                                Toast.makeText(this@MainActivity, "Дождитесь завершения создания анимаций", Toast.LENGTH_SHORT).show()
+                            else vm.openAnimationLibraryForHero(selectedId)
+                        }
                         KnockHeroScreen(
                             generating = state.creating,
                             previewUrl = if (mascot?.status == "READY") {
@@ -238,16 +262,12 @@ class MainActivity : ComponentActivity() {
                                 else if (state.backgroundCreation) Toast.makeText(this@MainActivity, "Сначала откройте нового персонажа", Toast.LENGTH_SHORT).show()
                                 else showCharacterType = true
                             },
-                            onAnimations = { selectedId ->
-                                if (state.backgroundCreation && state.creating) Toast.makeText(this@MainActivity, "Дождитесь завершения создания персонажа", Toast.LENGTH_SHORT).show()
-                                else if (selectedId != null && selectedId != mascot?.id && (state.creating || state.packBusy))
-                                    Toast.makeText(this@MainActivity, "Дождитесь завершения создания анимаций", Toast.LENGTH_SHORT).show()
-                                else vm.openAnimationLibraryForHero(selectedId)
-                            },
+                            onAnimations = openAnimations,
                             onChat = { showChat = true },
                             onCapabilities = { openChatCapabilities = true; showChat = true },
                             onBehavior = { openChatBehavior = true; showChat = true },
-                            screenActive = !showChat && !showCharacterType,
+                            onCharacterSettings = { showCharacterSettings = true },
+                            screenActive = !showChat && !showCharacterType && !showCharacterSettings,
                             onGenerate = vm::replaceHero,
                             onPoll = vm::pollProgress,
                             onRefresh = vm::refreshQuietly,
@@ -283,6 +303,44 @@ class MainActivity : ComponentActivity() {
                                 state.pendingCreationError != null -> "Не удалось создать · открыть"
                                 else -> "Персонаж готов · открыть"
                             }, fontSize = 12.sp, color = Color.White)
+                        }
+                        if (characterSettingsState != null && characterStripState != null && mascot != null) characterSettingsState.SaveableStateProvider(mascot.id) {
+                            val store = (application as MascotApp).heroStore
+                            val openNewHero = {
+                                if (state.greetingPending || state.backgroundCreation) {
+                                    Toast.makeText(this@MainActivity, vm.heroCreationFailureMessage(), Toast.LENGTH_SHORT).show()
+                                } else {
+                                    showCharacterSettings = false
+                                    showCharacterType = true
+                                }
+                            }
+                            Box(Modifier.fillMaxSize().zIndex(1f)) {
+                                CharacterCommunicationSettings(
+                                    heroId = mascot.id,
+                                    name = mascot.name ?: "Маскот",
+                                    portrait = state.context?.stillUrl ?: mascot.previewUrl,
+                                    initial = store.communication(mascot.id),
+                                    heroes = state.heroLibrary,
+                                    stripState = characterStripState,
+                                    onClose = { showCharacterSettings = false },
+                                    onSave = { profile ->
+                                        runCatching {
+                                            val mood = getSharedPreferences(CHAT_MOOD_PREFERENCES, MODE_PRIVATE)
+                                            val effectiveProfile = if (mood.communicationLockExpiry(mascot.id) > 0) {
+                                                profile.keepMoodLockedLevels(store.communication(mascot.id)
+                                                    ?: defaultCommunicationProfile(this@MainActivity, mascot.id))
+                                            } else profile
+                                            store.saveCommunication(mascot.id, effectiveProfile)
+                                        }.isSuccess.also { saved ->
+                                            if (saved) showCharacterSettings = false
+                                        }
+                                    },
+                                    onRename = { vm.renameHero(mascot.id, it) },
+                                    onOpenAnimations = { openAnimations(mascot.id) },
+                                    onNew = openNewHero,
+                                    onSelect = vm::selectLibraryHero,
+                                )
+                            }
                         }
                         if (showCharacterType) Box(Modifier.fillMaxSize().zIndex(2f)) {
                             CharacterCreationFlow(onClose = { if (!vm.state.value.creating) showCharacterType = false }, onFinish = { choice ->
@@ -322,8 +380,10 @@ class MainActivity : ComponentActivity() {
                         onBack = vm::closeAnimationLibrary,
                         onRefresh = vm::refreshAnimationLibrary,
                         onComplete = vm::completeAnimations,
-                        onCompleteChat = vm::completeChatAnimations,
+                        onGenerateChatPack = vm::generateAllChatAnimations,
                         onGenerateAction = vm::generateSingleAnimation,
+                        onRepairAction = vm::repairRejectedAnimation,
+                        repairingAction = state.repairingAnimation,
                         greetingRequiresResume = state.greetingPending && !state.creating && !state.busy,
                         onResumeGreeting = vm::accept,
                     )

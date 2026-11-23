@@ -210,14 +210,19 @@ class MascotOverlayService : Service() {
                     contentDescription = "Плавающий герой. Касания проходят к приложению под ним."
                     setOnLongClickListener {
                         if (!hasMessage) return@setOnLongClickListener true
-                        bubbleVisible = !bubbleVisible
-                        prefs.edit().putBoolean("bubble_visible", bubbleVisible).apply()
-                        updateBubble(); true
+                        setReplyVisible(!bubbleVisible)
+                        true
                     }
                     installDrag(this)
                 }
                 hero?.setStreaming(id, prefs.getBoolean("stream_enabled", false))
-                compact = OverlayCompactView(this@MascotOverlayService, requireNotNull(decoded)) { setCollapsed(false) }
+                compact = OverlayCompactView(this@MascotOverlayService) {
+                    when {
+                        !hasMessage -> compact?.performLongClick()
+                        collapsed -> setCollapsed(false)
+                        else -> setReplyVisible(true)
+                    }
+                }
                     .also { control ->
                         control.setHasMessage(hasMessage)
                         control.setOnLongClickListener {
@@ -274,11 +279,7 @@ class MascotOverlayService : Service() {
                         showCurrentReply()
                         updateBubble()
                     }
-                }, onHide = {
-                    bubbleVisible = false
-                    prefs.edit().putBoolean("bubble_visible", false).apply()
-                    updateBubble()
-                }, onCollapse = { setCollapsed(true) }, onChat = {
+                }, onHide = { setReplyVisible(false) }, onCollapse = { setCollapsed(true) }, onChat = {
                     startActivity(com.generativemascot.app.MainActivity.overlayChatIntent(this@MascotOverlayService, id))
                 }).apply { installDrag(this); installOverlayTouchRegion(this) { touchRegion() } }
                 showCurrentReply()
@@ -461,6 +462,12 @@ class MascotOverlayService : Service() {
         bubble?.setMessage(chatReplies.getOrNull(hintIndex).orEmpty(), hintIndex < chatReplies.lastIndex)
     }
 
+    private fun setReplyVisible(visible: Boolean) {
+        bubbleVisible = visible
+        prefs.edit().putBoolean("bubble_visible", visible).apply()
+        updateBubble()
+    }
+
     private fun setCollapsed(value: Boolean) {
         if (value == collapsed || destroyed || stopping) return
         collapsed = value
@@ -562,9 +569,10 @@ class MascotOverlayService : Service() {
     }
 
     private fun updateBubble(motionOnly: Boolean = false) {
-        updateCompact()
+        val controls = overlayControls(heroAdded, collapsed, bubbleVisible, hasMessage)
+        updateCompact(controls == OverlayControls.COMPACT)
         val card = bubble ?: return
-        if (!hasMessage || collapsed || !bubbleVisible || !heroAdded) {
+        if (controls != OverlayControls.REPLY) {
             removeBubble(); updateGestureWindow(); return
         }
         try {
@@ -595,8 +603,8 @@ class MascotOverlayService : Service() {
         } catch (_: Exception) { fail("Не удалось показать подсказку. Включите героя снова.") }
     }
 
-    private fun updateCompact() {
-        if (!collapsed || !heroAdded) {
+    private fun updateCompact(show: Boolean) {
+        if (!show) {
             if (compactAdded) compact?.let { windows.removeViewImmediate(it) }
             compactAdded = false
             return

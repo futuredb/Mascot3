@@ -90,7 +90,7 @@ test("Mascot 3 Mini profile plans all 17 enabled animations below the unchanged 
     "--all-enabled",
     "--batch-dir=mascot3-mini-full-v43",
     "--video-model=bytedance/seedance-2.0-mini",
-    "--resolution=720p",
+    "--resolution=1080p",
     "--price-per-second-usd=0.076125",
     "--max-cost-usd=9",
   ));

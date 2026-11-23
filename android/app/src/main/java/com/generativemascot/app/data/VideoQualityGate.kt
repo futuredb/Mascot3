@@ -87,6 +87,36 @@ internal object VideoQualityGate {
         }
     }
 
+    fun repairWindows(file: File, durationMs: Long, expectedSeconds: Int, matte: Int): List<LongRange> {
+        val retriever = MediaMetadataRetriever()
+        val frames = mutableMapOf<Int, Bitmap>()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            val count = if (Build.VERSION.SDK_INT >= 28) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull()
+            } else null
+            val frameCount = count?.takeIf { it > 8 } ?: (durationMs * .024).roundToInt()
+            if (durationMs <= 0 || frameCount < 9) return emptyList()
+            val frameMs = durationMs.toDouble() / frameCount
+            val maxTrim = ((durationMs - expectedSeconds * 1000L + 780L).coerceIn(0, 780) / frameMs).toInt()
+            val stride = (65 / frameMs).roundToInt().coerceAtLeast(1)
+            val offsets = (0..maxTrim step stride).toList()
+            return offsets.flatMap { start ->
+                offsets.mapNotNull { tail ->
+                    (start to tail).takeIf { start + tail in 1..maxTrim }
+                }
+            }.sortedBy { (start, tail) -> start + tail }.asSequence().mapNotNull { (start, tail) ->
+                val end = frameCount - 1 - tail
+                val seam = inspectSeam(retriever, durationMs, frameCount, start, end, matte, frames)
+                if (loopSeamIssue(seam) != null) null
+                else (start * frameMs).toLong()..((end + 1) * frameMs).toLong()
+            }.take(3).toList()
+        } finally {
+            frames.values.forEach(Bitmap::recycle)
+            retriever.release()
+        }
+    }
+
     private fun inspectSeam(
         retriever: MediaMetadataRetriever,
         durationMs: Long,
@@ -94,9 +124,10 @@ internal object VideoQualityGate {
         firstIndex: Int,
         lastIndex: Int,
         matte: Int,
+        sharedFrames: MutableMap<Int, Bitmap>? = null,
     ): VideoLoopSeam? {
         if (frameCount < 8 || firstIndex < 0 || lastIndex >= frameCount || lastIndex - firstIndex < 6) return null
-        val frames = mutableMapOf<Int, Bitmap>()
+        val frames = sharedFrames ?: mutableMapOf()
         fun get(index: Int): Bitmap? {
             frames[index]?.let { return it }
             val source = if (Build.VERSION.SDK_INT >= 28) {
@@ -146,7 +177,7 @@ internal object VideoQualityGate {
         } catch (_: Exception) {
             null
         } finally {
-            frames.values.forEach { if (!it.isRecycled) it.recycle() }
+            if (sharedFrames == null) frames.values.forEach { if (!it.isRecycled) it.recycle() }
         }
     }
 

@@ -100,12 +100,29 @@ class HeroLocalStore(context: Context) {
             .putString("$mascotId:reference", choice.referencePath)
             .putString("$mascotId:appearancePrompt", choice.appearancePrompt)
             .putString("$mascotId:personalityPrompt", choice.personalityPrompt)
+        choice.communication?.let {
+            editor.putString("$mascotId:communication", kotlinx.serialization.json.Json.encodeToString(CharacterCommunication.serializer(), it))
+        }
         if (choice.positionX != null && choice.positionY != null) {
             editor.putFloat("$mascotId:x", choice.positionX).putFloat("$mascotId:y", choice.positionY)
         } else {
             editor.remove("$mascotId:x").remove("$mascotId:y")
         }
         check(editor.commit())
+    }
+
+    internal fun saveCommunication(mascotId: String, profile: CharacterCommunication) {
+        val encoded = kotlinx.serialization.json.Json.encodeToString(CharacterCommunication.serializer(), profile)
+        check(appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
+            .putString("$mascotId:communication", encoded).commit())
+    }
+
+    internal fun communication(mascotId: String): CharacterCommunication? {
+        val saved = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE)
+            .getString("$mascotId:communication", null) ?: return null
+        return runCatching {
+            kotlinx.serialization.json.Json.decodeFromString(CharacterCommunication.serializer(), saved)
+        }.getOrNull()
     }
 
     fun characterChoice(mascotId: String): CharacterCreationChoice? {
@@ -118,6 +135,7 @@ class HeroLocalStore(context: Context) {
             type, style, x, y, prefs.getString("$mascotId:reference", null),
             prefs.getString("$mascotId:appearancePrompt", "").orEmpty(),
             prefs.getString("$mascotId:personalityPrompt", "").orEmpty(),
+            communication(mascotId),
         ) }.getOrNull()
     }
 
@@ -355,6 +373,26 @@ class HeroLocalStore(context: Context) {
             ?.takeUnless { it.hardPass }
     }.getOrNull()
 
+    internal suspend fun repairVideoLoop(source: File, qa: VideoClipQa, expectedSeconds: Int) =
+        VideoLoopRepair.repair(appContext, source, qa, expectedSeconds)
+
+    internal suspend fun repairRejectedVideo(mascotId: String, action: String): Boolean = withContext(Dispatchers.IO) {
+        if (actionVideoFile(mascotId, action) != null) return@withContext true
+        val qa = rejectedVideoQa(mascotId, action) ?: return@withContext false
+        val normalized = normalizeVideoAction(action)
+        val folder = File(root, "$mascotId/videos/rejected")
+        val source = folder.listFiles().orEmpty().filter {
+            it.isFile && it.name.startsWith("$normalized-") && it.extension == "mp4" && it.length() > 1024
+        }.maxByOrNull(File::lastModified) ?: return@withContext false
+        val repaired = repairVideoLoop(source, qa, videoDurationSeconds(normalized)) ?: return@withContext false
+        val cost = File(folder, "${source.nameWithoutExtension}.cost-usd.txt")
+            .takeIf(File::isFile)?.readText()?.trim()?.toDoubleOrNull()
+        saveActionVideo(mascotId, normalized, repaired.bytes, cost)
+        saveVideoQa(mascotId, normalized, repaired.qa)
+        saveVideoPackManifest(mascotId)
+        true
+    }
+
     suspend fun quarantineActionVideo(
         mascotId: String,
         action: String,
@@ -474,7 +512,7 @@ class HeroLocalStore(context: Context) {
             val directory = File(root, mascotId)
             check(!directory.exists() || directory.deleteRecursively()) { "Не удалось удалить файлы персонажа" }
             val choices = appContext.getSharedPreferences("hero_character_choices", Context.MODE_PRIVATE).edit()
-            listOf("type", "style", "reference", "x", "y").forEach { choices.remove("$mascotId:$it") }
+            listOf("type", "style", "reference", "x", "y", "appearancePrompt", "personalityPrompt", "communication").forEach { choices.remove("$mascotId:$it") }
             choices.apply()
             appContext.getSharedPreferences("mascot_chat_history", Context.MODE_PRIVATE).edit().remove(mascotId).apply()
         }

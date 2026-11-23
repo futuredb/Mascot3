@@ -40,6 +40,7 @@ internal class HeliosPlayerController {
     private var pendingReaction: String? = null
     private var pendingReply: String? = null
     private var portraitVisible = false
+    private var glitchEnabled = false
     fun invalidate() {
         generation++
         pendingReaction = null
@@ -49,6 +50,7 @@ internal class HeliosPlayerController {
         if (view !== target) return
         ready = true
         target.evaluateJavascript("window.setMascotVisibility?.($portraitVisible)", null)
+        target.evaluateJavascript("window.setMascotGlitchEnabled?.($glitchEnabled)", null)
         pendingReaction?.let { target.evaluateJavascript(it, null) }
         pendingReply?.let { target.evaluateJavascript(it, null) }
         pendingReaction = null
@@ -79,6 +81,11 @@ internal class HeliosPlayerController {
         portraitVisible = visible
         if (ready) view?.evaluateJavascript("window.setMascotVisibility?.($visible)", null)
     }
+    fun setGlitchEnabled(enabled: Boolean) {
+        if (glitchEnabled == enabled) return
+        glitchEnabled = enabled
+        if (ready) view?.evaluateJavascript("window.setMascotGlitchEnabled?.($enabled)", null)
+    }
     fun stop() { invalidate(); view?.evaluateJavascript("window.stopMascot?.()", null) }
     fun shutdown() { invalidate(); view?.evaluateJavascript("window.closeMascot?.()", null) }
 }
@@ -88,6 +95,7 @@ internal fun HeliosPlayer(
     controller: HeliosPlayerController,
     mascotId: String,
     glitchPalette: CharacterGlitchPalette,
+    glitchEnabled: Boolean,
     onEvent: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -109,7 +117,7 @@ internal fun HeliosPlayer(
             }
         }
     }
-    AndroidView(modifier = modifier, factory = { context ->
+    AndroidView(modifier = modifier, update = { controller.setGlitchEnabled(glitchEnabled) }, factory = { context ->
         WebView(context).apply {
             val managedView = this
             val heroHash = MessageDigest.getInstance("SHA-256").digest(mascotId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

@@ -15667,7 +15667,7 @@ function createGlitchRenderer(palette = {}) {
   };
 }
 function createPortraitTransition(canvas, context, { duration = CHAT_GLITCH_DURATION, onTransition = () => {
-}, effect: fixedEffect, palette } = {}) {
+}, effect: fixedEffect, palette, enabled = () => true } = {}) {
   const renderer = createGlitchRenderer(palette);
   let pending = false, started = null, effect = null;
   const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -15680,6 +15680,12 @@ function createPortraitTransition(canvas, context, { duration = CHAT_GLITCH_DURA
       started = null;
     },
     render(source, now, draw2) {
+      if (!enabled()) {
+        pending = false;
+        started = null;
+        draw2(source);
+        return;
+      }
       if (pending) {
         renderer.capturePrevious(canvas);
         pending = false;
@@ -15700,8 +15706,8 @@ function createPortraitTransition(canvas, context, { duration = CHAT_GLITCH_DURA
 }
 
 // src/replay-transition.js
-function createReplayTransition(canvas, context, duration = CHAT_GLITCH_DURATION, palette) {
-  const transition = createPortraitTransition(canvas, context, { duration, palette });
+function createReplayTransition(canvas, context, duration = CHAT_GLITCH_DURATION, palette, enabled) {
+  const transition = createPortraitTransition(canvas, context, { duration, palette, enabled });
   let lastMediaTime = null;
   return { render(source, now, mediaTime, draw2) {
     if (lastMediaTime === null || Number.isFinite(mediaTime) && mediaTime + 0.15 < lastMediaTime) transition.begin();
@@ -18348,7 +18354,8 @@ var glitchParam = (name) => {
 var safeGlitchColor = (value) => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#AAA0FF";
 var finiteChatCapture = glitchParam("finite") === "1";
 var glitchPalette = { warm: safeGlitchColor(glitchParam("warm") || "#FF806B"), cool: safeGlitchColor(glitchParam("cool") || "#AAA0FF") };
-var liveTransition = createPortraitTransition(frame, frameCtx, { palette: glitchPalette });
+var glitchEnabled = false;
+var liveTransition = createPortraitTransition(frame, frameCtx, { palette: glitchPalette, enabled: () => glitchEnabled });
 var promptTransitionPending = false;
 var promptFrameReady = false;
 var sample = document.createElement("canvas");
@@ -18478,7 +18485,7 @@ function playReplay(blob) {
   if (!blob?.size) return false;
   stopReplay();
   const n = replayGeneration;
-  const transition = createReplayTransition(frame, frameCtx, void 0, glitchPalette);
+  const transition = createReplayTransition(frame, frameCtx, void 0, glitchPalette, () => glitchEnabled);
   replayUrl = URL.createObjectURL(blob);
   replayVideo.src = replayUrl;
   replayVideo.loop = true;
@@ -18503,6 +18510,13 @@ window.setMascotVisibility = (visible) => {
   if (displayVisible) {
     if (pausedForReplay && replayUrl) draw(replayVideo);
     else if (liveVisible) draw(liveVideo);
+  }
+};
+window.setMascotGlitchEnabled = (enabled) => {
+  glitchEnabled = Boolean(enabled);
+  if (!glitchEnabled) {
+    liveTransition.cancel();
+    if (displayVisible) window.setMascotVisibility(true);
   }
 };
 function saveIdle(blob) {

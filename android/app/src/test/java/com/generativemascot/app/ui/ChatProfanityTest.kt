@@ -1,6 +1,9 @@
 package com.generativemascot.app.ui
 
 import android.content.Context
+import com.generativemascot.app.data.CharacterCommunication
+import com.generativemascot.app.data.CommunicationTrait
+import com.generativemascot.app.data.HeroLocalStore
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -19,6 +22,74 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = android.app.Application::class)
 class ChatProfanityTest {
+    @Test fun currentHeroProfileReachesEveryChatRequestWithoutReopeningTheConversation() = runBlocking {
+        val store = HeroLocalStore(RuntimeEnvironment.getApplication())
+        val prompts = mutableListOf<String>()
+        val initial = CharacterCommunication(notes = "Говори как детектив")
+            .withLevel(CommunicationTrait.BREVITY, 100)
+            .withLevel(CommunicationTrait.COMPLEXITY, 0)
+            .withLevel(CommunicationTrait.HUMOR, 0)
+            .withLevel(CommunicationTrait.PROFANITY, 50)
+            .withLevel(CommunicationTrait.DIRECTNESS, 100)
+            .withLevel(CommunicationTrait.LOYALTY, 0)
+        store.saveCommunication("rex", initial)
+        val chat = DirectMascotChat("Рэкс", apiKey = "offline", requestClient = offline(prompts),
+            communication = { store.communication("rex") })
+        assertEquals("Понятно, продолжим.", chat.send("Что думаешь?").getString("reply"))
+        for (trait in CommunicationTrait.entries) {
+            assertTrue(prompts.last().contains("${trait.title} (${initial[trait]}/100)"))
+        }
+        assertTrue(prompts.last().contains(initial.notes))
+        assertNull(store.communication("una"))
+
+        store.saveCommunication("rex", initial.withLevel(CommunicationTrait.PROFANITY, 100))
+        assertTrue(chat.send("А теперь?").getString("reply").startsWith("Бля,"))
+        store.saveCommunication("rex", initial.withLevel(CommunicationTrait.PROFANITY, 0))
+        assertEquals("Понятно, продолжим.", chat.send("Продолжай").getString("reply"))
+        assertTrue(prompts.last().contains("Мат (0/100)"))
+    }
+
+    @Test fun insultLocksOnlyProfanityAndLoyaltyForThatHeroUntilExpiryOrApology() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val moods = context.getSharedPreferences(CHAT_MOOD_PREFERENCES, Context.MODE_PRIVATE)
+        val prompts = mutableListOf<String>()
+        val changes = mutableListOf<Boolean>()
+        val insult = DirectMascotChat("Рэкс", apiKey = "offline", requestClient = offline(prompts, moodChange = "insult"),
+            moodPreferences = moods, moodKey = "rex")
+        insult.send("Ты ужасный помощник")
+
+        val expires = moods.communicationLockExpiry("rex")
+        assertTrue(expires > System.currentTimeMillis())
+        assertEquals(expires, moods.communicationLockExpiry("rex", expires - 1))
+        assertEquals(0L, moods.communicationLockExpiry("rex", expires))
+        assertEquals("00:00:01", communicationLockCountdown(expires, expires - 1))
+        assertNull(communicationLockCountdown(expires, expires))
+        assertEquals(0L, moods.communicationLockExpiry("una"))
+
+        val saved = CharacterCommunication().withLevel(CommunicationTrait.PROFANITY, 0)
+        val draft = saved.withLevel(CommunicationTrait.PROFANITY, 100).withLevel(CommunicationTrait.LOYALTY, 0)
+            .withLevel(CommunicationTrait.HUMOR, 0)
+        val merged = draft.keepMoodLockedLevels(saved)
+        assertEquals(0, merged[CommunicationTrait.PROFANITY])
+        assertEquals(50, merged[CommunicationTrait.LOYALTY])
+        assertEquals(0, merged[CommunicationTrait.HUMOR])
+
+        val chat = DirectMascotChat("Рэкс", apiKey = "offline", requestClient = offline(prompts),
+            moodPreferences = moods, moodKey = "rex", communication = { saved }, onProfanityModeChanged = { changes.add(it) })
+        assertFalse(chat.setProfanityEnabled(true))
+        chat.send("Включи мат")
+        assertTrue(prompts.last().contains("Мат (0/100)"))
+        assertTrue(prompts.last().contains("уровень мата временно заблокирован"))
+        assertTrue(changes.isEmpty())
+
+        val apology = DirectMascotChat("Рэкс", apiKey = "offline", requestClient = offline(prompts, moodChange = "apology"),
+            moodPreferences = moods, moodKey = "rex")
+        apology.send("Прости")
+        assertEquals(0L, moods.communicationLockExpiry("rex"))
+        assertTrue(chat.setProfanityEnabled(true))
+        assertEquals(listOf(true), changes)
+    }
+
     @Test fun recognizesRequestsWithoutRequiringUserToSwear() {
         listOf("Включи мат", "Общайся со мной с матом", "Давай с матом", "Матерись свободно",
             "Хочу, чтобы ты матерился", "Давай материться", "Можно теперь общаться с матом?",
@@ -110,7 +181,7 @@ class ChatProfanityTest {
         assertTrue(prompts.last().contains("Режим общения с матом ВЫКЛЮЧЕН"))
     }
 
-    @Test fun characterMoodSurvivesRecreationAndStaysSeparateFromTheLocalReaction() = runBlocking {
+    @Test fun characterMoodSurvivesRecreationAndSelectsACompatibleLocalReaction() = runBlocking {
         val context = RuntimeEnvironment.getApplication() as Context
         val moods = context.getSharedPreferences("character_mood_test", Context.MODE_PRIVATE)
         moods.edit().clear().commit()
@@ -125,7 +196,7 @@ class ChatProfanityTest {
         assertEquals("angry", angryReply.getString("local_reaction"))
         val neutralReply = chat("green").send("Сколько будет два плюс два?", availableReactions = setOf("angry"))
         assertTrue(prompts.last().contains("Настроение к собеседнику: hurt"))
-        assertFalse(neutralReply.has("local_reaction"))
+        assertEquals("angry", neutralReply.getString("local_reaction"))
 
         chat("emor").send("Привет")
         assertTrue(prompts.last().contains("Настроение к собеседнику: neutral"))

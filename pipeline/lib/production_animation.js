@@ -41,7 +41,7 @@ async function runProductionAnimation({ root, env, characterDir, animationId, op
   const animationDir = path.join(characterDir, "animation", options["animation-output"] || animationId, "loop");
   const payloadSummary = {
     contract: "pet_generation_v2.bookended_animation.v1", animation_id: animationId, model: setup.model,
-    duration: setup.catalogEntry.duration_seconds, resolution: options.resolution || env.PET_V2_VIDEO_RESOLUTION || "720p", template: setup.catalogEntry.template, prompt: setup.prompt,
+    duration: setup.catalogEntry.duration_seconds, resolution: options.resolution || env.PET_V2_VIDEO_RESOLUTION || "1080p", template: setup.catalogEntry.template, prompt: setup.prompt,
     catalog_version: setup.catalog.version, catalog_entry_hash: hash(JSON.stringify({ prefix: setup.catalog.prefix, template: setup.catalogEntry.template, suffix: setup.catalog.suffix, duration_seconds: setup.catalogEntry.duration_seconds })),
     source_hash: setup.catalogEntry.source_hash, anchor: setup.anchor,
     frame_slots: [{ source: setup.anchor, frame_type: "first_frame" }, { source: setup.anchor, frame_type: "last_frame" }],

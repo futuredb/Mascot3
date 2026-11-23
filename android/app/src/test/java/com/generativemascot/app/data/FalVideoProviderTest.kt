@@ -29,7 +29,7 @@ class FalVideoProviderTest {
             val body = JSONObject(buffer.readUtf8())
             assertEquals(body.getString("image_url"), body.getString("end_image_url"))
             assertEquals(6, body.getInt("duration"))
-            assertEquals("768P", body.getString("resolution"))
+            assertEquals("1080P", body.getString("resolution"))
             assertEquals("disabled", body.getString("prompt_expansion_mode"))
             response(request, """{"request_id":"abc-123"}""")
         }.build()

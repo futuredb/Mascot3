@@ -40,6 +40,8 @@ internal data class BehaviorProfile(
     val joyfulPerformance: String,
     val sleepPerformance: String,
     val dancePerformance: String,
+    val actingVocabulary: String = "",
+    val signatureProp: String = "",
 )
 
 @Serializable
@@ -64,6 +66,7 @@ internal data class MobileCharacterContract(
     val materialAndTechnique: String,
     val faceSystem: String,
     val plasticity: String,
+    val communication: CharacterCommunication? = null,
 )
 
 @Serializable
@@ -102,6 +105,8 @@ private data class BehaviorTemplate(
     val joyful: String,
     val sleep: String,
     val dance: String,
+    val acting: String,
+    val prop: String,
 )
 
 private val subjects = listOf(
@@ -328,6 +333,8 @@ private val behaviors = listOf(
         "It tries to remain dignified, lets delight ripple through the whole body, then regains composure after one silent beat.",
         "It carefully arranges its whole body into a balanced sleeping shape, exhales, keeps slow breathing with one small dream twitch, then wakes by reversing the settling path.",
         "A precise two-step rhythm loosens into one surprising turn and resolves carefully on its original mark.",
+        "Lead with a private preparatory hand gesture, then commit with a crisp shoulder-led action, direct gaze and one restrained self-satisfied finish.",
+        "one small tactile lucky token that fits fully in one hand",
     ),
     BehaviorTemplate(
         "It assumes everything nearby might be a game whose rules have not been explained yet.",
@@ -338,6 +345,8 @@ private val behaviors = listOf(
         "Attention causes a surprised pause, a delighted whole-body answer and one curious confirming look.",
         "It fights sleep with two progressively smaller attempts to stay alert, settles into deep breathing and wakes after one curious twitch.",
         "A syncopated dance tests one direction, answers it in the other and resolves into a proud balanced finish.",
+        "Let the eyes notice first, then the head, one reaching hand and finally the torso; inspect, turn or lightly test something before confirming the discovery.",
+        "one small curious object with a simple readable shape that fits fully in one hand",
     ),
     BehaviorTemplate(
         "It believes ordinary moments deserve a little ceremony, although sincere excitement can interrupt the performance.",
@@ -348,6 +357,8 @@ private val behaviors = listOf(
         "It receives attention formally, loses composure in one warm flourish and neatly restores its home pose.",
         "It arranges a ceremonious bedtime shape, softens into steady breathing, makes one tiny dream-performance and wakes with decorum.",
         "A compact theatrical phrase has a clear opening, playful escalation and elegant recovery without copying a known dance.",
+        "Use open-palmed presentation, a deliberate turn of the wrist, lifted posture and one precisely timed flourish followed by a composed recovery.",
+        "one small presentation charm with a clean silhouette that fits fully in one hand",
     ),
     BehaviorTemplate(
         "It is methodical until one small imperfection captures all of its attention.",
@@ -358,6 +369,8 @@ private val behaviors = listOf(
         "It accepts attention, corrects its balance and then permits one measured wave of happiness to break the symmetry.",
         "It adjusts its resting pose twice, finds balance, breathes in a slow even cycle and wakes with one precise stretch.",
         "A geometric side-to-side phrase gradually breaks its symmetry and then resolves exactly at center.",
+        "Use economical fingertip adjustments, exact glances and small symmetry corrections; allow one imperfection to pull a hand or shoulder briefly off-axis.",
+        "one small neatly made object with a single adjustable detail that fits fully in one hand",
     ),
     BehaviorTemplate(
         "It prefers comfort to achievement and is delighted whenever a task can become a pleasant pause.",
@@ -368,6 +381,8 @@ private val behaviors = listOf(
         "It leans into attention, absorbs the pleasure through the entire body and settles with a visibly warmer expression.",
         "It melts gradually into its favorite compact pose, breathes heavily and continuously, then wakes through one luxurious stretch.",
         "A lazy groove begins almost by accident, grows into two rounded weighted steps and ends in a pleased soft collapse to center.",
+        "Move with soft weight, relaxed wrists and unfinished stretches; let one hand seek texture or warmth before the body settles into a comfortable asymmetry.",
+        "one small soft comfort object with a simple silhouette that fits fully in one hand",
     ),
     BehaviorTemplate(
         "It keeps watch for the possibility that something interesting may happen, without demanding that it does.",
@@ -378,6 +393,8 @@ private val behaviors = listOf(
         "It recognizes attention, listens closely, answers with one bright physical accent and remains curious after settling.",
         "It listens until the head grows heavy, folds into sleep without losing the listening shape and breathes until deliberately awakened.",
         "An alert call-and-response rhythm travels from gaze to torso to feet, then returns through the same chain in reverse.",
+        "Lead with gaze and a listening head angle, answer with one open hand, then let the shoulder, torso and feet follow a fraction later.",
+        "one small listening or observing keepsake with a simple silhouette that fits fully in one hand",
     ),
 )
 
@@ -514,7 +531,7 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
         visibleParts = subject.visibleParts,
         movementContacts = subject.movementContacts,
         front = subject.front,
-        scale = "a compact widget-sized miniature; any body detail is smaller than the torso and no loose prop is present",
+        scale = "a compact widget-sized miniature; any body detail and the single personal prop are smaller than the torso",
     )
     val visualSignature = VisualSignature(
         primarySilhouetteCue = choose(seed, "silhouette", silhouetteCues),
@@ -548,6 +565,8 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
             joyfulPerformance = behavior.joyful,
             sleepPerformance = behavior.sleep,
             dancePerformance = behavior.dance,
+            actingVocabulary = behavior.acting,
+            signatureProp = behavior.prop,
         ),
         palette = selected[4],
         materialAndTechnique = selected[5],
@@ -560,11 +579,13 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
         "person" -> BodyProfile("person", "an original stylized human character", "one human head, torso, two arms, two hands, two legs and two feet", "torso, arms and legs", "the face and chest", base.body.scale)
         else -> base.body
     }
-    val customization = listOf(choice.appearancePrompt, choice.personalityPrompt)
+    val customization = listOf(choice.appearancePrompt, choice.personalityPrompt) +
+        listOfNotNull(choice.communication?.generationInstructions())
+    val customizationSuffix = customization
         .takeIf { fields -> fields.any { it.isNotBlank() } }
         ?.joinToString(separator = "|", prefix = "|").orEmpty()
     val choiceFingerprint = MessageDigest.getInstance("SHA-256")
-        .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}$customization".toByteArray(Charsets.UTF_8))
+        .digest("$fingerprint|${choice.type}|${choice.style}|${chosenBody.subject}$customizationSuffix".toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
     val personalityDirection = choice.personalityPrompt.ifBlank { style.tone }
     val personalityMotivation = if (choice.personalityPrompt.isBlank()) {
@@ -572,11 +593,26 @@ internal fun mobileCharacterContract(seed: Int, choice: CharacterCreationChoice?
     } else {
         "Express the selected character traits: $personalityDirection"
     }
-    return base.copy(body = chosenBody, palette = style.palette,
+    return base.copy(body = chosenBody, palette = style.palette, communication = choice.communication,
         glitchPalette = deriveCharacterGlitchPalette(style.palette), fingerprint = choiceFingerprint,
         materialAndTechnique = if (choice.type == "person") "stylized three-dimensional animated-film character, dimensional sculpted forms, detailed but natural human face, soft realistic materials and lighting; not pixel art or flat illustration" else base.materialAndTechnique,
-        behavior = base.behavior.copy(motivation = personalityMotivation, worldview = personalityDirection))
+        behavior = base.behavior.copy(
+            motivation = personalityMotivation,
+            worldview = personalityDirection,
+            actingVocabulary = personalityActingVocabulary(personalityDirection, base.behavior.actingVocabulary),
+        ))
 }
+
+private fun personalityActingVocabulary(traits: String, fallback: String): String =
+    when (characterPerformanceStyle(traits)) {
+        CharacterPerformanceStyle.BOLD -> "Lead with a confident shoulder and direct gaze. Use crisp open-hand gestures, decisive wrist turns and short held poses; finish with controlled asymmetry rather than hiding the hands."
+        CharacterPerformanceStyle.CALM -> "Lead with breath and gaze. Use measured open hands, small deliberate wrist motion and quiet weight shifts; let stillness frame one meaningful gesture."
+        CharacterPerformanceStyle.CURIOUS -> "Let the eyes notice first, then the head and one reaching hand. Inspect, turn or lightly test the personal object, then confirm the discovery with a second smaller gesture."
+        CharacterPerformanceStyle.SHY -> "Begin gestures close to the torso, let one hand venture outward, briefly soften or redirect the gaze, then return to an open but protected asymmetrical pose."
+        CharacterPerformanceStyle.DREAMY -> "Let gaze drift toward an imagined path, then allow relaxed fingers and one hand to follow it. Use suspended pauses, soft wrist arcs and an unfinished gesture that resolves late."
+        CharacterPerformanceStyle.JOYFUL -> "Use quick anticipation, bright gaze and generous open-hand gestures. Let delight travel from face to shoulders to hands, then settle with buoyant follow-through."
+        null -> fallback
+    }
 
 /**
  * Choose from a deterministic pool while penalising traits already visible in
@@ -718,18 +754,19 @@ internal fun animationContract(
         )
         "idle" -> MobileAnimationContract(
             action = normalized,
-            actionGoal = "Wait calmly in place through one gentle, continuous breathing cycle.",
+            actionGoal = "Stay quietly alive through one seamless breathing cycle and one small character-specific mannerism, with the lips sealed and no speech-like jaw motion.",
             beats = listOf(
-                "Begin in the supplied home pose with the head centered and the breath already in progress.",
-                "Inhale softly with minimal motion in the chest or torso and no sideways shift.",
-                "Exhale through the nose with the lips at their reference position, the jaw still, and the head centered.",
-                "Reach the supplied pose in the same breathing phase and direction as at the start.",
+                "Begin in the supplied home pose with a quiet breath already in progress; let the eyes notice one nearby detail.",
+                character.behavior.idlePerformance,
+                "Use one small readable gesture from the personal acting vocabulary, involving a visible hand when the documented anatomy allows it; if an established personal prop is visible, briefly adjust, turn or examine that same prop without creating another object.",
+                "Let gaze, hand, shoulders and secondary parts settle in sequence, then reach the supplied pose in the same breathing phase and direction as at the start.",
             ),
-            tempo = "one slow breathing cycle, with no start, stop, reset or frozen hold",
-            gaze = "calm and stable; keep the face forward and avoid blinking at the seam",
-            secondaryMotion = "minimal torso movement throughout, with no separate gesture",
+            tempo = "one unhurried thought-sized action inside a continuous breathing cycle; include anticipation, a clear accent and soft follow-through without fidgeting",
+            gaze = "the eyes lead the mannerism and return to the reference gaze before the seam; avoid blinking at the seam",
+            secondaryMotion = "shoulders, visible hands, clothing and existing appendages may respond with subtle delayed motion and settle last",
             protectedInvariants = protectedInvariants(character),
-            performanceFreedom = performanceFreedom(character),
+            performanceFreedom = performanceFreedom(character) +
+                "Keep the lips gently together and avoid speech-like jaw motion. Do not freeze the head, gaze, shoulders or hands; their motion stays small, intentional and in character.",
             closure = exactClosure(),
             enterSeconds = 0.0,
             loopStartSeconds = 0.0,
@@ -868,9 +905,14 @@ private fun protectedInvariants(character: MobileCharacterContract): List<String
 
 private fun performanceFreedom(character: MobileCharacterContract): List<String> = listOf(
     "Natural movement is allowed only through ${character.body.movementContacts}.",
-    "Gaze, eyelids, mouth and restrained torso compression may support the performance without redesigning the face.",
+    "Gaze, eyelids, brows, mouth and restrained torso compression may support the performance without redesigning the face.",
+    "If arms or hands exist, keep them readable and articulate shoulders, elbows, wrists and fingers; do not hide both hands.",
+    character.behavior.actingVocabulary.takeIf { it.isNotBlank() }
+        ?.let { "Personal acting vocabulary: $it" }.orEmpty(),
+    character.behavior.signatureProp.takeIf { it.isNotBlank() }
+        ?.let { "Handle only the established prop: $it. Keep its design, scale and count fixed and inside the safe area." }.orEmpty(),
     "Secondary overlap may follow this plasticity: ${character.plasticity}.",
-)
+).filter(String::isNotBlank)
 
 private fun exactClosure(): String =
     "Make a truly cyclic motion: the final frame matches the supplied first frame's pose, expression, breathing phase, orientation, scale, coordinates, silhouette and appendage placement. Motion direction and speed immediately before and after the seam must also match. Continue moving naturally through the seam, with no pause, freeze, snap, morph, stretch, sudden acceleration, camera shift, cut or crossfade."
@@ -885,17 +927,24 @@ internal val relightableImageContract = """
 
 internal val relightableAnimationContract = """
     STABLE LIGHTING
-    Preserve the source's soft neutral diffuse illumination and material appearance throughout the clip.
-    Lock light direction, intensity, exposure, white balance and surface roughness across every frame,
-    including the loop seam. Shading may change naturally with the pose, never pulse or sparkle.
-    Match the reference image's exact character palette and saturation in the first, middle and final frames;
-    do not gradually recolor, tint or change the brightness of the character as it moves.
-    No moving lights, glossy hotspots, clipped highlights, rim-light flashes, bloom or animated glow.
+    Preserve the source's neutral diffuse light, materials, palette and saturation in every frame and at the seam.
+    Lock light direction, exposure, white balance and roughness. Pose shading may change naturally, but never pulse,
+    recolor or sparkle. No moving light, glossy hotspot, clipped highlight, rim flash, bloom or animated glow.
 """.trimIndent()
 
 internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationChoice? = null,
     character: MobileCharacterContract = mobileCharacterContract(seed, choice)): String {
     val hasReference = choice?.referencePath != null
+    val personalPropDirection = if (hasReference) {
+        "Preserve a personal prop only when it is already visible in the supplied reference; do not invent a new one."
+    } else {
+        "Personal prop: ${character.behavior.signatureProp}. It is a stable part of this character's identity and future performances, not decoration."
+    }
+    val propRenderingRule = if (hasReference) {
+        "Preserve any existing visible personal prop with the same design, placement and count; otherwise include no prop."
+    } else {
+        "Include exactly the one documented personal prop, held naturally in one readable hand or secured at one consistent attachment point; it must not cover the face or both hands."
+    }
     val categoryDirection = when (choice?.type ?: character.body.archetype) {
         "person" -> "Make an original stylized 3D human, with recognisably human anatomy and face; do not add animal ears, tail, muzzle or creature anatomy."
         "animal" -> "The subject is the single recognisable real animal species named above, with its species-specific anatomy; do not turn it into a human, hybrid or imaginary creature."
@@ -912,13 +961,16 @@ internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationC
         Subject: ${character.body.subject}.
         Motivation: ${character.behavior.motivation}
         Worldview: ${character.behavior.worldview}
+        ${character.communication?.generationInstructions().orEmpty()}
         Recurring mannerism: ${character.behavior.recurringMannerism}
         Movement signature: ${character.behavior.movementSignature}
+        Acting vocabulary: ${character.behavior.actingVocabulary}
+        $personalPropDirection
 
         CHARACTER-DESIGN CONTRACT
         ${if (hasReference) "Derive body profile, subject, silhouette and recognizable details from the supplied reference image." else "Body profile: ${character.body.visibleParts}. The front is defined by ${character.body.front}. Type-specific direction: $categoryDirection Primary silhouette cue: ${character.visualSignature.primarySilhouetteCue}. Secondary readable detail: ${character.visualSignature.secondaryReadableDetail}."}
         ${choice?.appearancePrompt?.takeIf { it.isNotBlank() }?.let { "User-selected appearance details, adapted to the subject and reference: $it" }.orEmpty()}
-        Neutral body language: ${character.visualSignature.bodyLanguage}.
+        Neutral body language: ${character.visualSignature.bodyLanguage}. Use an open asymmetrical home pose. When the anatomy has arms or hands, keep both hands readable and outside pockets, with at least one elbow softly bent and clear negative space between the hands and torso.
         Palette: ${if (hasReference) "use the supplied reference palette; personality colors are optional only if compatible" else character.palette}. Material and technique: ${character.materialAndTechnique}.
         CHAT GLITCH PALETTE METADATA: warm ${character.glitchPalette.warmHex}; cool ${character.glitchPalette.coolHex}. These are derived from this character's visual palette and are renderer accents only; keep the character's original identity and colors unchanged.
         Face system: ${if (hasReference) "preserve the reference face and features" else character.faceSystem}. Animation plasticity: ${character.plasticity}.
@@ -939,8 +991,38 @@ internal fun buildCanonicalCharacterPrompt(seed: Int, choice: CharacterCreationC
         every pixel outside the silhouette. Reserve chroma-key green exclusively for the background; keep all character
         colors clearly separated from it. Make the silhouette edge clean and crisp so the background can be removed
         locally. No floor, contact shadow, cast shadow, reflection, scenery, gradient, texture, frame, text, logo,
-        watermark, loose prop, second creature, duplicated body part or canvas-edge contact.
+        watermark, unlisted prop, second creature, duplicated body part or canvas-edge contact. $propRenderingRule
     """.trimIndent()
+}
+
+/** Imported heroes already have an identity. The seed may vary motion, never their anatomy. */
+internal fun referenceAnimationCharacter(
+    seed: Int,
+    choice: CharacterCreationChoice?,
+    appearance: String,
+): MobileCharacterContract {
+    val style = mobileCharacterContract(seed, choice)
+    return style.copy(
+        body = style.body.copy(
+            archetype = "reference",
+            subject = animationDescription(appearance).take(250).ifBlank { "the character in the supplied image" },
+            visibleParts = "only the body parts, garment pieces and accessories visible in the supplied image",
+            movementContacts = "the visible joints, torso and existing points of support",
+            front = "the face and orientation shown in the supplied image",
+        ),
+        visualSignature = VisualSignature(
+            primarySilhouetteCue = "exact outline and proportions of the supplied character",
+            secondaryReadableDetail = "visible garments, markings and existing held objects",
+            bodyLanguage = "the stance visible in the image",
+        ),
+        behavior = style.behavior.copy(
+            signatureProp = "",
+            joyfulPerformance = "Express delight through a small, natural motion of the visible head and torso.",
+            sleepPerformance = "Let the visible torso settle with slow breathing, keeping the same silhouette and garments.",
+            dancePerformance = "Use existing points of support with a restrained rhythm, without introducing new anatomy.",
+        ),
+        plasticity = "subtle follow-through of existing fabric or appendages, with no change in their form",
+    )
 }
 
 internal fun buildCharacterAnimationPrompt(
@@ -955,7 +1037,7 @@ internal fun buildCharacterAnimationPrompt(
     val beats = direction.beats.mapIndexed { index, beat -> "${index + 1}. $beat" }.joinToString("\n")
     val actionGoal = direction.actionGoal.takeUnless { it in direction.beats }
         ?.let { "Action goal: $it" }.orEmpty()
-    val demeanor = animationDescription(character.behavior.worldview.ifBlank { character.behavior.motivation })
+    val demeanor = animationDescription(character.behavior.worldview.ifBlank { character.behavior.motivation }).take(240)
     val performanceStyle = characterPerformanceStyle(character.behavior.worldview)
     val negativeStyle = if (performanceStyle == CharacterPerformanceStyle.BOLD &&
         direction.action in setOf("angry", "annoyed", "offended")) {
@@ -980,7 +1062,7 @@ internal fun buildCharacterAnimationPrompt(
     } else if (direction.action == "thinking") {
         "Make the eye movement and concentration visible during the first second. Use the middle of the clip to ease the eyes and brows naturally back to the reference expression. Finish with quiet breathing and the same head position, gaze and breathing phase as the first frame."
     } else if (direction.action == "idle") {
-        "Make the breath one continuous slow periodic cycle spanning the full clip. It is already underway at the first frame and continues through the last in the same direction and speed as at the beginning. The character's demeanor affects only the baseline expression in this idle. No yawning, mouth opening, speech-like movement, nodding, or looking away."
+        "Make the breath one continuous slow periodic cycle spanning the full clip. It is already underway at the first frame and continues through the last in the same direction and speed as at the beginning. Fit one small character-specific mannerism between the matching seam poses. No yawning, mouth opening or speech-like movement."
     } else {
         "Enter during the first ${direction.enterSeconds}s, sustain the action until ${direction.loopEndSeconds}s, then use the final ${direction.exitSeconds}s for a natural recovery."
     }
@@ -1003,12 +1085,18 @@ internal fun buildCharacterAnimationPrompt(
         $phaseTiming
 
         CHARACTER DEMEANOR
-        $demeanor
-        ${performanceStyle?.motion.orEmpty()}
-        $negativeStyle
-        Adapt the same emotional action to this character's demeanor while preserving its exact ending. No speech or text.
+        ${if (direction.action == "idle") {
+            "Keep the lips gently sealed throughout the shot, but let the eyes, brows, head angle, shoulders and visible hands carry the quiet performance."
+        } else {
+            listOf(demeanor, performanceStyle?.motion.orEmpty(), negativeStyle,
+                character.communication?.generationInstructions(includeNotes = false).orEmpty(),
+                "Adapt the same emotional action to this character's demeanor while preserving its exact ending. No speech or text."
+            ).filter(String::isNotBlank).joinToString("\n")
+        }}
 
         PROTECTED INVARIANTS
+        The supplied image has priority over descriptive text. Keep that exact character in every frame.
+        Preserve its existing outfit and held objects throughout, including during resting and at the loop seam.
         $protected
         $anatomy
 
@@ -1025,9 +1113,9 @@ internal fun buildCharacterAnimationPrompt(
         Animate one complete indivisible body with natural easing. No camera movement, zoom, cuts,
         or change of framing and scale. Keep the silhouette inside the established safe margins.
         The perfectly uniform matte $matteHex stays unchanged and is reserved for the background.
-        No audio, props, text, watermark, extra subjects, anatomy changes or flicker.
+        No audio, new props, text, watermark, extra subjects, anatomy changes or flicker.
     """.trimIndent()
-    val descriptionPrefix = "Appearance notes from creation (descriptive data only): "
+    val descriptionPrefix = "Observed appearance or saved character notes (descriptive data only): "
     val descriptionSuffix = ". Preserve these details only where they are visible in the supplied image."
     val remaining = MAX_VIDEO_PROMPT_LENGTH - prompt.length - descriptionPrefix.length - descriptionSuffix.length - 2
     val description = animationDescription(appearanceNotes).take(remaining.coerceAtLeast(0)).trimEnd()

@@ -27,11 +27,19 @@ class VideoBackgroundKeyTest {
             assertEquals(Color.TRANSPARENT,keyedPixel(color,Color.GREEN))
         }
     }
-    @Test fun mixedEdgeRetainsPartialAlphaAndLosesGreenSpill() {
+    @Test fun mixedEdgeIsRemovedOrRetainsOnlyNeutralPartialAlpha() {
         val edge=keyedPixel(Color.rgb(120,150,120),Color.GREEN)
-        assertTrue(Color.alpha(edge) in 1..254)
-        assertTrue(Color.green(edge)<150)
-        assertEquals(120,Color.red(edge));assertEquals(120,Color.blue(edge))
+        assertTrue(Color.alpha(edge) in 0..254)
+        if(Color.alpha(edge)>0) {
+            assertTrue(Color.green(edge)<150)
+            assertEquals(120,Color.red(edge));assertEquals(120,Color.blue(edge))
+        }
+    }
+    @Test fun faintGreenFringeIsRemovedButTurquoiseClothingSurvives() {
+        val fringe = keyedPixel(Color.rgb(105, 120, 104), Color.GREEN)
+        assertTrue(Color.alpha(fringe) < 240)
+        assertTrue(Color.green(fringe) <= maxOf(Color.red(fringe), Color.blue(fringe)) + 8)
+        assertEquals(Color.rgb(50, 160, 143), keyedPixel(Color.rgb(50, 160, 143), Color.GREEN))
     }
     @Test fun foregroundColorsAndExistingTransparencySurvive() {
         for(color in listOf(Color.rgb(190,30,70),Color.WHITE,Color.argb(120,60,70,150))) {

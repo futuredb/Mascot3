@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CharacterCreationChoiceTest {
+    @Test fun communicationProfileReachesImageAndVideoPromptsWhilePreservingTheIdle() {
+        val profile = CharacterCommunication(notes = "Разговаривай как детектив")
+            .withLevel(CommunicationTrait.BREVITY, 100).withLevel(CommunicationTrait.HUMOR, 0)
+        val choice = CharacterCreationChoice("creature", "neutral", communication = profile)
+        val character = mobileCharacterContract(71, choice)
+        val image = buildCanonicalCharacterPrompt(71, choice, character)
+        assertTrue(image.contains("Краткость 100/100"))
+        assertTrue(image.contains("Юмор 0/100"))
+        assertTrue(image.contains(profile.notes))
+        assertEquals(profile, kotlinx.serialization.json.Json.decodeFromString(
+            MobileCharacterContract.serializer(), character.toPersistedJson(),
+        ).communication)
+        for (action in HeroLocalStore.LIBRARY_VIDEO_ACTIONS) {
+            val video = buildCharacterAnimationPrompt(action, seed = 71, character = character)
+            assertEquals(action != "idle", video.contains("Краткость 100/100"))
+            validateResolvedVideoPrompt(video, "#00FF00")
+        }
+    }
+
     @Test fun creationTraitsDriveEachChatReactionPrompt() {
         val profiles = mapOf(
             "Спокойный и уравновешенный" to CharacterPerformanceStyle.CALM,
@@ -22,7 +41,10 @@ class CharacterCreationChoiceTest {
             for (action in chatReactionActions) {
                 val prompt = buildCharacterAnimationPrompt(action, seed = 71, character = contract,
                     appearanceNotes = choice.appearancePrompt)
-                assertTrue(prompt.contains(style.motion))
+                if (action == "idle") {
+                    assertTrue(prompt.contains("lips gently sealed"))
+                    assertFalse(prompt.contains(style.motion))
+                } else assertTrue(prompt.contains(style.motion))
                 assertTrue(prompt.contains("Потёртая куртка"))
                 assertTrue(prompt.contains("only where they are visible in the supplied image"))
                 assertEquals(style == CharacterPerformanceStyle.BOLD && action == "angry", prompt.contains("middle-finger"))

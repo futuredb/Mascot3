@@ -18,7 +18,14 @@ class AdaptiveGreenMatteTest {
     @Test fun shadedGreenBorderWithBlueSubjectUsesAdaptiveKey() {
         val tuning = chooseGreenMatteTuning(shadedGreen, blueSubject)
         assertTrue(tuning.adaptive)
-        assertTrue(tuning.high in .10f.. .14f)
+        assertTrue(tuning.high in .075f.. .105f)
+    }
+
+    @Test fun brightGreenBorderWithoutGreenSubjectUsesTightEdgeKey() {
+        val tuning = chooseGreenMatteTuning(List(72) { Color.GREEN }, blueSubject)
+        assertTrue(tuning.adaptive)
+        assertTrue(tuning.low <= .035f)
+        assertTrue(tuning.high <= .18f)
     }
 
     @Test fun greenSubjectKeepsConservativeKey() {

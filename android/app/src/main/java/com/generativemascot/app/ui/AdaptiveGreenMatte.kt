@@ -8,7 +8,7 @@ import android.util.LruCache
 import java.io.File
 
 /** Optional correction for clips where the model shaded a green backdrop. */
-data class GreenMatteTuning(val low: Float = .07f, val high: Float = .22f, val adaptive: Boolean = false)
+data class GreenMatteTuning(val low: Float = .035f, val high: Float = .18f, val adaptive: Boolean = false)
 
 internal fun chooseGreenMatteTuning(border: List<Int>, subject: List<Int>): GreenMatteTuning {
     if (border.size < 36 || subject.size < 50) return GreenMatteTuning()
@@ -22,8 +22,12 @@ internal fun chooseGreenMatteTuning(border: List<Int>, subject: List<Int>): Gree
     if (border.count(::greenLike).toFloat() / border.size < .90f) return GreenMatteTuning()
     val dominance = border.map { (Color.green(it) - maxOf(Color.red(it), Color.blue(it))) / 255f }.sorted()
     val tenth = dominance[(dominance.size * .10f).toInt().coerceAtMost(dominance.lastIndex)]
-    if (tenth < .11f || tenth >= .23f) return GreenMatteTuning()
-    return GreenMatteTuning(low = .04f, high = (tenth - .01f).coerceIn(.10f, .14f), adaptive = true)
+    if (tenth < .11f) return GreenMatteTuning()
+    // A clean, bright green plate still produces low-saturation green edge
+    // mixtures after video compression. When the canonical subject contains
+    // no green material, use a tighter chroma ramp for those edge pixels too.
+    if (tenth >= .23f) return GreenMatteTuning(adaptive = true)
+    return GreenMatteTuning(low = .015f, high = (tenth - .025f).coerceIn(.075f, .105f), adaptive = true)
 }
 
 private data class MatteSource(val path: String, val length: Long, val modifiedAt: Long)

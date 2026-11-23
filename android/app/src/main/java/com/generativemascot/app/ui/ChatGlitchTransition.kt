@@ -55,6 +55,7 @@ internal fun rememberChatGlitchTransition(
     targetHelios: Boolean,
     visible: Boolean,
     palette: CharacterGlitchPalette,
+    typingCue: Boolean = false,
 ): ChatGlitchState {
     val state = remember(key) {
         ChatGlitchState(false).apply {
@@ -63,17 +64,19 @@ internal fun rememberChatGlitchTransition(
         }
     }
     var next by remember(key) { mutableIntStateOf(0) }
-    LaunchedEffect(key, targetHelios, visible) {
+    LaunchedEffect(key, targetHelios, visible, typingCue) {
         if (!visible || state.displayedHelios == targetHelios) {
             state.displayedHelios = targetHelios
             state.progress.snapTo(1f)
         } else {
-            state.effect = ChatGlitchEffect.entries[next++ % ChatGlitchEffect.entries.size]
+            state.effect = if (typingCue) ChatGlitchEffect.Slices
+                else ChatGlitchEffect.entries[next++ % ChatGlitchEffect.entries.size]
+            val halfDuration = if (typingCue) 140 else 210
             state.progress.snapTo(0f)
-            state.progress.animateTo(.5f, tween(210, easing = LinearEasing))
+            state.progress.animateTo(.5f, tween(halfDuration, easing = LinearEasing))
             // Replace sources only while the figure is fully dissolved.
             state.displayedHelios = targetHelios
-            state.progress.animateTo(1f, tween(210, easing = LinearEasing))
+            state.progress.animateTo(1f, tween(halfDuration, easing = LinearEasing))
         }
     }
     return state
@@ -85,6 +88,7 @@ internal fun ChatGlitchOverlay(
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     softenEdges: Boolean = false,
+    typingCue: Boolean = false,
 ) {
     val loadingProgress by rememberInfiniteTransition(label = "helios-loading-glitch").animateFloat(
         initialValue = .18f,
@@ -114,7 +118,12 @@ internal fun ChatGlitchOverlay(
             drawRect(color.copy(alpha = alpha.coerceIn(0f, 1f)), Offset(x * unitX, y * unitY), Size(w * unitX, h * unitY))
         }
         when (state.effect) {
-            ChatGlitchEffect.Slices -> for (y in 0..255 step 14) {
+            ChatGlitchEffect.Slices -> if (typingCue) {
+                for (y in 56..200 step 24) {
+                    val color = if ((y / 24) % 2 == 0) warm else cool
+                    rect(color, wave * .55f, 50 + noise(y + tick) * 92, y.toFloat(), 24 + noise(y) * 39, 3f)
+                }
+            } else for (y in 0..255 step 14) {
                 val color = if (y % 28 == 0) warm else cool
                 rect(color, cover * .2f, 0f, y.toFloat(), 256f, 14f)
                 rect(color, wave * .48f, 12 + noise(y + tick) * 140, y.toFloat(), 25 + noise(y) * 50, 2f)

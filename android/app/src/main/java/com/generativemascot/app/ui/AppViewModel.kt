@@ -25,7 +25,6 @@ import com.generativemascot.app.data.OpenRouterKeyVerifier
 import com.generativemascot.app.data.OpenRouterSettingsStore
 import com.generativemascot.app.data.planAnimationBatch
 import com.generativemascot.app.data.ANIMATION_BATCH_ORDER
-import com.generativemascot.app.data.chatReactionActions
 import com.generativemascot.app.data.validateAnimationBatch
 import com.generativemascot.app.data.AcceptanceGreetingStore
 import com.generativemascot.app.data.AcceptanceGreetingRequest
@@ -93,6 +92,7 @@ data class AppUiState(
     val context: ContextDto? = null,
     val busy: Boolean = false,
     val packBusy: Boolean = false,
+    val repairingAnimation: String? = null,
     val packMessage: String? = null,
     val animationBatchActions: List<String> = emptyList(),
     val animationBatchId: String? = null,
@@ -432,6 +432,18 @@ class AppViewModel(
         _state.update { it.copy(route = "create", mascot = null, context = null, error = null, name = "", newCreationFlow = choice != null) }
         if (choice != null) summonHero()
         return true
+    }
+
+    internal fun updateDraftCommunication(profile: com.generativemascot.app.data.CharacterCommunication): Boolean {
+        val current = _state.value
+        val id = current.mascot?.id ?: return false
+        if (!current.newCreationFlow || current.mascot.status != "AWAITING_ACCEPTANCE" || current.busy || current.creating) return false
+        return runCatching {
+            heroStore.saveCommunication(id, profile)
+            creationChoice = (creationChoice ?: heroStore.characterChoice(id))?.copy(communication = profile)
+        }.isSuccess.also { saved ->
+            if (!saved) _state.update { it.copy(error = "Не удалось сохранить стиль общения") }
+        }
     }
 
     fun heroCreationFailureMessage(): String = when {
@@ -1003,18 +1015,63 @@ class AppViewModel(
         refreshAnimationLibrary()
     }
 
-    fun completeAnimations(requestedCount: Int) = startAnimationBatch(requestedCount, chatOnly = false)
+    fun completeAnimations(requestedCount: Int) = startAnimationBatch(requestedCount)
 
-    fun completeChatAnimations(requestedCount: Int) = startAnimationBatch(requestedCount, chatOnly = true)
+    fun generateAllChatAnimations() {
+        val mascot = _state.value.mascot ?: return
+        val actions = com.generativemascot.app.data.chatReactionActions.distinct()
+        val ready = heroStore.actionVideoUrls(mascot.id).keys
+        if (actions.all(ready::contains)) {
+            refreshAnimationLibrary()
+            return
+        }
+        startAnimationBatch(actions.size, eligibleActions = actions)
+    }
 
     fun generateSingleAnimation(action: String) {
         if (action in HeroLocalStore.LIBRARY_VIDEO_ACTIONS) {
-            startAnimationBatch(1, chatOnly = false, selectedAction = action)
+            startAnimationBatch(1, selectedAction = action)
         }
     }
 
-    private fun startAnimationBatch(requestedCount: Int, chatOnly: Boolean, selectedAction: String? = null) {
-        if ((chatOnly || selectedAction != null) && !directMode()) return
+    fun repairRejectedAnimation(action: String) {
+        val current = _state.value
+        val id = current.mascot?.id ?: return
+        if (current.packBusy || current.creating || current.greetingPending ||
+            current.deletingHeroId != null || action !in HeroLocalStore.LIBRARY_VIDEO_ACTIONS) return
+        _state.update { it.copy(packBusy = true, repairingAnimation = action, packMessage = null, error = null) }
+        viewModelScope.launch {
+            try {
+                val repaired = heroStore.repairRejectedVideo(id, action)
+                _state.update {
+                    if (it.mascot?.id != id) it.copy(packBusy = false, repairingAnimation = null, packMessage = null)
+                    else it.copy(
+                        packBusy = false,
+                        repairingAnimation = null,
+                        packMessage = if (repaired) "Ролик восстановлен" else null,
+                        error = if (repaired) null else "Не удалось найти плавный стык в сохранённом ролике.",
+                        mascot = if (repaired) it.mascot?.let { hero ->
+                            hero.copy(stages = hero.stages + ("animations" to "partial"))
+                        } else it.mascot,
+                    )
+                }
+                if (repaired && _state.value.mascot?.id == id) publishAnimationLibrary(id)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _state.update {
+                    it.copy(packBusy = false, repairingAnimation = null, error = "Не удалось сохранить исправленный ролик.")
+                }
+            }
+        }
+    }
+
+    private fun startAnimationBatch(
+        requestedCount: Int,
+        selectedAction: String? = null,
+        eligibleActions: List<String>? = null,
+    ) {
+        if (selectedAction != null && !directMode()) return
         val mascot = _state.value.mascot ?: return
         val animationStage = mascot.stages["animations"]
         if (
@@ -1031,9 +1088,8 @@ class AppViewModel(
                     heroStore.openRouterVideoJobId(mascot.id, it) != null
                 }.toSet(),
                 requestedCount,
-                eligibleActions = when {
+                eligibleActions = eligibleActions ?: when {
                     selectedAction != null -> listOf(selectedAction)
-                    chatOnly -> chatReactionActions
                     directMode() -> ANIMATION_BATCH_ORDER
                     else -> HeroLocalStore.LEGACY_LIBRARY_VIDEO_ACTIONS
                 },

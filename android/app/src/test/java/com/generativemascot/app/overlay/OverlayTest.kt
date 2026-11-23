@@ -139,7 +139,7 @@ class OverlayTest {
         assertEquals(p.x, actual.x + hero.left)
         assertEquals(p.y, actual.y + hero.top)
         assertTrue(host.crop.contains(350, 225, 650, 825))
-        val compact = OverlayCompactView(context, art) {}
+        val compact = OverlayCompactView(context) {}
         assertTrue(compact.childCount >= 1) // drag handle and optional badge
         bitmap.recycle()
     }
@@ -1883,7 +1883,7 @@ class OverlayTest {
         backgroundCanvas.save(); backgroundCanvas.translate(cardPos.x.toFloat(), cardPos.y.toFloat())
         card.draw(backgroundCanvas); backgroundCanvas.restore()
         File(output, "$name-background.png").outputStream().use { backdrop.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        val compact = OverlayCompactView(context, art) {}
+        val compact = OverlayCompactView(context) {}
         compact.measure(View.MeasureSpec.makeMeasureSpec(48, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(48, View.MeasureSpec.EXACTLY))
         compact.layout(0, 0, 48, 48)

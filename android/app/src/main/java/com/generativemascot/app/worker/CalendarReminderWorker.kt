@@ -21,6 +21,8 @@ import com.generativemascot.app.MainActivity
 import com.generativemascot.app.MascotApp
 import com.generativemascot.app.R
 
+internal const val CALENDAR_REMINDER_PREFERENCES = "mascot_calendar_reminders"
+
 internal fun configureCalendarReminders(context: Context, enabled: Boolean, mode: String) {
     // The offline flow preview uses a plain Application with background work disabled.
     if (context.applicationContext !is MascotApp) return
@@ -40,13 +42,14 @@ class CalendarReminderWorker(context: Context, params: WorkerParameters) : Corou
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED ||
             (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)) return Result.success()
         val heroId = app.session.acceptedMascotId() ?: app.session.mascotId() ?: return Result.success()
+        val seen = context.getSharedPreferences(CALENDAR_REMINDER_PREFERENCES, Context.MODE_PRIVATE)
+        if (!seen.getBoolean("$heroId:push", true)) return Result.success()
         val mode = context.getSharedPreferences("mascot_chat_interaction", Context.MODE_PRIVATE).getString(heroId, "request_guidance")
         if (mode != "proactive_guidance" && mode != "proactive_solutions") return Result.success()
         val now = System.currentTimeMillis()
         val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
             ContentUris.appendId(it, now); ContentUris.appendId(it, now + 30 * 60_000L)
         }.build()
-        val seen = context.getSharedPreferences("mascot_calendar_reminders", Context.MODE_PRIVATE)
         val manager = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel("mascot_calendar", "Напоминания персонажа", NotificationManager.IMPORTANCE_DEFAULT))
         val pending = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)

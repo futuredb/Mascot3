@@ -232,7 +232,7 @@ return {
 
 // Captures the actual displayed frame before drawing the next decoded source.
 // Waiting for the incoming frame never consumes the transition or shows black.
-export function createPortraitTransition(canvas, context, {duration=CHAT_GLITCH_DURATION, onTransition=()=>{}, effect:fixedEffect, palette}={}) {
+export function createPortraitTransition(canvas, context, {duration=CHAT_GLITCH_DURATION, onTransition=()=>{}, effect:fixedEffect, palette, enabled=()=>true}={}) {
   const renderer = createGlitchRenderer(palette);
   let pending=false, started=null, effect=null;
   const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
@@ -240,6 +240,12 @@ export function createPortraitTransition(canvas, context, {duration=CHAT_GLITCH_
     begin() { pending=true; },
     cancel() { pending=false; started=null; },
     render(source, now, draw) {
+      if (!enabled()) {
+        pending = false;
+        started = null;
+        draw(source);
+        return;
+      }
       if (pending) {
         renderer.capturePrevious(canvas);
         pending=false;

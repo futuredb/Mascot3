@@ -218,7 +218,7 @@ internal fun overlayCardBackground(context: Context, radius: Int) = GradientDraw
 ).apply { cornerRadius = context.overlayDp(radius).toFloat() }
 
 /** Collapsed overlay control. */
-internal class OverlayCompactView(context: Context, artwork: OverlayArtwork, onExpand: () -> Unit) : FrameLayout(context) {
+internal class OverlayCompactView(context: Context, onExpand: () -> Unit) : FrameLayout(context) {
     private val badge = android.widget.ImageView(context).apply {
         setImageResource(com.generativemascot.app.R.drawable.overlay_status)
         elevation = context.overlayDp(6).toFloat()
@@ -227,7 +227,7 @@ internal class OverlayCompactView(context: Context, artwork: OverlayArtwork, onE
     fun setHasMessage(value: Boolean) { badge.visibility = if (value) VISIBLE else GONE }
     init {
         clipChildren = false
-        contentDescription = "Переместить персонажа; удерживайте для возврата домой"
+        contentDescription = "Меню персонажа. Удерживайте, чтобы открыть действия"
         isClickable = true; isFocusable = true
         addView(android.widget.ImageView(context).apply {
             setImageResource(com.generativemascot.app.R.drawable.overlay_handle)

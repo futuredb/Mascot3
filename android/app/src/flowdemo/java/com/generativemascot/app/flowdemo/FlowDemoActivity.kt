@@ -152,8 +152,9 @@ private fun DemoFlow(sample: Sample, startStage: String? = null) {
     Box(Modifier.fillMaxSize()) {
         when {
             stage == "waiting" -> PersonalityGenerationScene(
-                generating = true, previewUrl = null, heroName = null, nameDraft = "", error = null,
-                acceptEnabled = false, onGenerate = {}, onRegenerate = {}, onAccept = {}, onNameChange = {},
+                generating = true, previewUrl = null, heroName = null, error = null,
+                acceptEnabled = false, onGenerate = {}, communication = com.generativemascot.app.data.CharacterCommunication(),
+                onRegenerate = {}, onAccept = {},
                 onSaveName = {}, onCancel = {}, onBackground = { waitingInBackground = true; stage = "home" },
             )
             stage == "deleted" -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

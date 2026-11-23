@@ -45,6 +45,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -113,18 +115,19 @@ internal fun HomeHeading(name: String, modifier: Modifier = Modifier) {
 
 @Composable
 internal fun HomeNameEditor(value: TextFieldValue, onChange: (TextFieldValue) -> Unit,
-    onSave: () -> Unit, focusRequester: FocusRequester, modifier: Modifier = Modifier) {
+    onSave: () -> Unit, focusRequester: FocusRequester, modifier: Modifier = Modifier, color: Color = Color.White) {
     BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
         val displayed = value.text.map { it.uppercaseChar() }.joinToString("")
         val fontSize = homeHeadingFontSize(displayed, constraints.maxWidth)
         BasicTextField(
             value = value,
             onValueChange = { if (it.text.length <= 50 && '\n' !in it.text) onChange(it) },
-            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                .semantics { contentDescription = "Имя персонажа" },
             singleLine = true,
-            textStyle = TextStyle(color = Color.White, fontFamily = SbSansDisplayExtendedSemibold,
+            textStyle = TextStyle(color = color, fontFamily = SbSansDisplayExtendedSemibold,
                 fontWeight = FontWeight.SemiBold, fontSize = fontSize, textAlign = TextAlign.Center),
-            cursorBrush = SolidColor(Color.White),
+            cursorBrush = SolidColor(color),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { onSave() }),
             visualTransformation = VisualTransformation { input ->

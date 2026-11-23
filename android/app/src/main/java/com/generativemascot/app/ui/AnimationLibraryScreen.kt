@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +38,7 @@ import com.generativemascot.app.R
 import com.generativemascot.app.data.HeroLocalStore
 import com.generativemascot.app.data.ChatAnimationClip
 import com.generativemascot.app.data.GenerationRoute
+import com.generativemascot.app.data.chatReactionActions
 import com.generativemascot.app.data.defaultAnimationBatchSize
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -87,8 +89,10 @@ fun AnimationLibraryScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onComplete: (Int) -> Unit,
-    onCompleteChat: ((Int) -> Unit)? = null,
+    onGenerateChatPack: (() -> Unit)? = null,
     onGenerateAction: ((String) -> Unit)? = null,
+    onRepairAction: ((String) -> Unit)? = null,
+    repairingAction: String? = null,
     greetingRequiresResume: Boolean = false,
     onResumeGreeting: () -> Unit = {},
 ) {
@@ -96,7 +100,7 @@ fun AnimationLibraryScreen(
         heroHeadingName(mascotId?.let { HeroLocalStore.current?.mascotName(it) }, heroName)
     }
     var confirmPack by remember { mutableStateOf(false) }
-    var confirmChatPack by remember(mascotId) { mutableStateOf(false) }
+    var confirmChatPack by remember { mutableStateOf(false) }
     var confirmAction by remember(mascotId) { mutableStateOf<String?>(null) }
     var selectedAction by remember { mutableStateOf<String?>(null) }
     var chatClips by remember(mascotId) { mutableStateOf(emptyList<ChatAnimationClip>()) }
@@ -115,15 +119,21 @@ fun AnimationLibraryScreen(
     LaunchedEffect(Unit) { onRefresh() }
     val progress = animationPackProgress(videoUrls)
     val playableActions = animationPlayableActions(videoUrls, animations, !legacyVideoUrl.isNullOrBlank())
-    val previewItems = remember(playableActions, videoUrls, animations, legacyVideoUrl, chatClips) {
-        ANIMATION_STATE_KEYS.filter { it in playableActions }.map { action ->
-            AnimationPreviewItem(action, stateTitle(action), action, videoUrls[action], animations[action].orEmpty(), false)
+    val galleryActions = remember(videoUrls, animations, legacyVideoUrl) {
+        galleryAnimationActions(videoUrls, animations, legacyVideoUrl)
+    }
+    val previewItems = remember(galleryActions, playableActions, videoUrls, animations, legacyVideoUrl, chatClips) {
+        galleryActions.filter { it in playableActions }.map { action ->
+            val frames = animations[action].orEmpty()
+            val video = videoUrls[action] ?: legacyVideoUrl?.takeIf {
+                action in LEGACY_PERFORMANCE_ACTIONS && frames.size <= 1
+            }
+            AnimationPreviewItem(action, stateTitle(action), action, video, frames, false)
         } + chatClips.map { clip ->
             AnimationPreviewItem("chat:${clip.id}", clip.title, "idle", clip.videoUrl, emptyList(), true)
         }
     }
     val readyCount = progress.readyCount
-    val remainingChatActions = com.generativemascot.app.data.chatReactionActions.count { it !in progress.readyActions }
     var selectedCount by rememberSaveable(mascotId) {
         mutableIntStateOf(defaultAnimationBatchSize(progress.remainingCount))
     }
@@ -134,7 +144,19 @@ fun AnimationLibraryScreen(
     val inProgress = !packReady && (packBusy || packStatus == "running")
     val syncing = !packReady && packStatus == "ready"
     val sequential = generationRoute == GenerationRoute.OPENROUTER_DIRECT
-    val selectedBatch = batchActions.ifEmpty { if (inProgress || syncing) ANIMATION_STATE_KEYS else emptyList() }
+    val selectedBatch = repairingAction?.let(::listOf) ?: batchActions.ifEmpty { if (inProgress || syncing) ANIMATION_STATE_KEYS else emptyList() }
+    val canOfferIndividualGeneration = mascotId != null && onGenerateAction != null && sequential
+    val missingChatActions = remember(progress.readyActions) {
+        chatReactionActions.distinct().filterNot(progress.readyActions::contains)
+    }
+    val canGenerateChatPack = mascotId != null && onGenerateChatPack != null && sequential &&
+        missingChatActions.isNotEmpty() && !inProgress && !syncing && !greetingRequiresResume
+    val canStartIndividualGeneration = canOfferIndividualGeneration && !packReady && !inProgress &&
+        !syncing && !greetingRequiresResume
+    val visibleActions = galleryActions.filter { action ->
+        action in playableActions || action in selectedBatch ||
+            (canOfferIndividualGeneration && action !in progress.readyActions)
+    }
     val batchReadyCount = selectedBatch.count { it in progress.readyActions }
     val batchComplete = selectedBatch.isNotEmpty() && batchReadyCount == selectedBatch.size && !inProgress && !syncing
     val activeAction = progress.activeAction(inProgress, sequential, selectedBatch)
@@ -187,7 +209,11 @@ fun AnimationLibraryScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 AnimationLibraryTopBar(displayName, onBack = onBack, onDelete = onDelete, canDelete = mascotId != null)
-                if (showStatusBanner) {
+                if (repairingAction != null) {
+                    Text("Проверяем стык сохранённого ролика «${stateTitle(repairingAction)}»…",
+                        color = FigmaInk, fontSize = 13.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
+                } else if (showStatusBanner) {
                     Spacer(Modifier.height(16.dp))
                     Box(Modifier.padding(horizontal = 24.dp)) {
                     AnimationPackStatus(
@@ -242,13 +268,12 @@ fun AnimationLibraryScreen(
                             Text("ЭМОЦИИ", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
                         }
                     }
-                    items(ANIMATION_STATE_KEYS, key = { it }) { stateKey ->
+                    items(visibleActions, key = { it }) { stateKey ->
                         val frames = animations[stateKey].orEmpty()
-                        val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS }
+                        val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS && frames.size <= 1 }
                         val cardStatus = progress.cardStatus(stateKey, inProgress, syncing, interrupted, sequential, selectedBatch)
                         val available = stateKey in playableActions
-                        val canGenerate = onGenerateAction != null && sequential && !inProgress &&
-                            !syncing && !greetingRequiresResume && stateKey !in progress.readyActions
+                        val canGenerate = canStartIndividualGeneration && stateKey !in progress.readyActions
                         Column(
                             modifier = Modifier.fillMaxWidth()
                                 .mascotClickable(
@@ -267,9 +292,10 @@ fun AnimationLibraryScreen(
                                 ActionThumbnail(video, frames.getOrNull(frames.size / 2) ?: baseStill,
                                     stateTitle(stateKey), Modifier.fillMaxSize().padding(8.dp)
                                         .alpha(if (available) 1f else if (cardStatus == AnimationCardStatus.WORKING) .65f else .35f))
-                                if (available) {
+                                if (available || canGenerate) {
                                     Icon(
-                                        Icons.Rounded.PlayArrow, null, tint = FigmaInk.copy(alpha = .70f),
+                                        if (available) Icons.Rounded.PlayArrow else Icons.Rounded.Add,
+                                        null, tint = FigmaInk.copy(alpha = .70f),
                                         modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
                                             .size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp),
                                     )
@@ -298,7 +324,11 @@ fun AnimationLibraryScreen(
                 }
                 if (!packReady && mascotId != null) {
                     if (inProgress || syncing) {
-                        Text(if (syncing) "Сохраняем анимации" else "Создаём анимации",
+                        Text(when {
+                            repairingAction != null -> "Восстанавливаем анимацию"
+                            syncing -> "Сохраняем анимации"
+                            else -> "Создаём анимации"
+                        },
                             color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(8.dp))
                     }
@@ -317,6 +347,7 @@ fun AnimationLibraryScreen(
                         Text(
                             when {
                                 greetingRequiresResume -> "Продолжить приветствие"
+                                repairingAction != null -> "Восстанавливаем анимацию"
                                 inProgress -> "Создаём анимации"
                                 syncing -> "Сохраняем анимации"
                                 interrupted -> "Продолжить"
@@ -325,9 +356,22 @@ fun AnimationLibraryScreen(
                             fontFamily = SbSansDisplayBold, fontWeight = FontWeight.Bold, fontSize = 13.4.sp,
                         )
                     }
-                    if (onCompleteChat != null && sequential && !greetingRequiresResume && remainingChatActions > 0) {
-                        TextButton(onClick = { confirmChatPack = true }, enabled = !inProgress && !syncing) {
-                            Text("Реакции для чата · $remainingChatActions")
+                    if (onGenerateChatPack != null && sequential) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = { confirmChatPack = true },
+                            enabled = canGenerateChatPack,
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            modifier = Modifier.widthIn(max = 320.dp).height(48.dp),
+                        ) {
+                            Text(
+                                if (missingChatActions.isEmpty()) "ЧАТ-АНИМАЦИИ ГОТОВЫ"
+                                else "СОЗДАТЬ ВСЕ ДЛЯ ЧАТА · ${missingChatActions.size}",
+                                fontFamily = SbSansDisplayBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.5.sp,
+                            )
                         }
                     }
                     Spacer(Modifier.height(24.dp))
@@ -335,33 +379,58 @@ fun AnimationLibraryScreen(
             }
         }
     }
-    confirmAction?.let { action ->
-        AlertDialog(
-            onDismissRequest = { confirmAction = null },
-            title = { Text(stateTitle(action)) },
-            text = { Text("Создать один ролик? Генерация платная. Если задание уже сохранено, приложение продолжит его.") },
-            dismissButton = { TextButton(onClick = { confirmAction = null }) { Text("Отмена") } },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmAction = null
-                    onGenerateAction?.invoke(action)
-                }, enabled = !inProgress && !syncing) { Text("Создать · 1") }
+    if (confirmChatPack && missingChatActions.isNotEmpty()) {
+        MascotConfirmationSheet(
+            title = "Все анимации для чата",
+            message = "Создать ${missingChatActions.size} недостающих реакций? Генерация платная. " +
+                "Готовые ролики будут пропущены, а сохранённые задания продолжатся без повторной отправки.",
+            confirmLabel = "Создать · ${missingChatActions.size}",
+            enabled = canGenerateChatPack,
+            onDismiss = { confirmChatPack = false },
+            onConfirm = {
+                confirmChatPack = false
+                onGenerateChatPack?.invoke()
             },
         )
     }
-    if (onCompleteChat != null && confirmChatPack && remainingChatActions > 0) {
-        AlertDialog(
-            onDismissRequest = { confirmChatPack = false },
-            title = { Text("Реакции для чата") },
-            text = { Text("Будет создано до $remainingChatActions недостающих роликов. Генерация платная. Готовые ролики сохранятся, а существующие задания продолжатся.") },
-            dismissButton = { TextButton(onClick = { confirmChatPack = false }) { Text("Отмена") } },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmChatPack = false
-                    onCompleteChat(remainingChatActions)
-                }, enabled = !inProgress && !syncing) { Text("Создать · $remainingChatActions") }
-            },
-        )
+    confirmAction?.let { action ->
+        val repairable = onRepairAction != null && mascotId?.let { id ->
+            HeroLocalStore.current?.rejectedVideoQa(id, action)?.let(
+                com.generativemascot.app.data.VideoLoopRepair::canRepair,
+            )
+        } == true
+        if (repairable) {
+            AlertDialog(
+                onDismissRequest = { confirmAction = null },
+                title = { Text(stateTitle(action)) },
+                text = { Text("Попробовать восстановить плавный стык сохранённого ролика? Восстановление выполняется на телефоне. Создание нового ролика платное.") },
+                dismissButton = { TextButton(onClick = { confirmAction = null }) { Text("Отмена") } },
+                confirmButton = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        TextButton(onClick = {
+                            confirmAction = null
+                            onRepairAction?.invoke(action)
+                        }, enabled = canStartIndividualGeneration) { Text("Восстановить") }
+                        TextButton(onClick = {
+                            confirmAction = null
+                            onGenerateAction?.invoke(action)
+                        }, enabled = canStartIndividualGeneration) { Text("Создать заново · 1") }
+                    }
+                },
+            )
+        } else {
+            MascotConfirmationSheet(
+                title = stateTitle(action),
+                message = "Создать один ролик? Генерация платная. Если задание уже сохранено, приложение продолжит его.",
+                confirmLabel = "Создать · 1",
+                enabled = canStartIndividualGeneration && action !in progress.readyActions,
+                onDismiss = { confirmAction = null },
+                onConfirm = {
+                    confirmAction = null
+                    onGenerateAction?.invoke(action)
+                },
+            )
+        }
     }
     if (confirmPack && progress.remainingCount > 0) {
         AlertDialog(

@@ -63,7 +63,7 @@ const runtimeEnv = {
 const PROFILE = Object.freeze({
   id: "pet_generation_v2.5_mini_full17",
   videoModel: "bytedance/seedance-2.0-mini",
-  videoResolution: "720p",
+  videoResolution: "1080p",
   pipelineAnimations: ENABLED_ANIMATION_IDS,
   uiStates: LIBRARY_UI_STATES,
   totalVideoSeconds: ENABLED_ANIMATION_ENTRIES.reduce((total, entry) => total + entry.duration_seconds, 0),

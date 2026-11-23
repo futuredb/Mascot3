@@ -47,6 +47,10 @@ class OnDeviceMascotGenerator(
         .callTimeout(6, TimeUnit.MINUTES)
         .retryOnConnectionFailure(false)
         .build()
+    private val imageClient = client.newBuilder()
+        .readTimeout(8, TimeUnit.MINUTES)
+        .callTimeout(8, TimeUnit.MINUTES)
+        .build()
     private val falVideo = rawFalKey?.takeIf { it.isNotBlank() }
         ?.let { FalVideoProvider(client, it) }
 
@@ -162,7 +166,10 @@ class OnDeviceMascotGenerator(
         // Reuse the actual character created by the art director. Rebuilding
         // from the seed alone loses the user's human/animal/creature choice.
         val choice = store.characterChoice(mascotId)
-        val character = savedCharacter ?: mobileCharacterContract(creativeSeed, choice)
+        val referenceAppearance = CharacterAppearance.read(base).orEmpty()
+        val character = (savedCharacter ?: referenceAnimationCharacter(creativeSeed, choice, referenceAppearance)).let {
+            it.copy(communication = store.communication(mascotId) ?: it.communication)
+        }
         // The anchor belongs to the character, including before the first
         // core animation is ready or when resuming a partial paid batch.
         val existingNeutral = store.neutralVideoFrameFile(mascotId)
@@ -200,14 +207,15 @@ class OnDeviceMascotGenerator(
                 val durationSeconds = videoDurationSeconds(action)
                 val matteHex = colorHex(actionReference.matteColor)
                 val prompt = if (falVideo != null && existingJobId == null && action == "greeting") {
-                    buildFalGreetingPrompt(matteHex, "${character.behavior.motivation} ${character.behavior.worldview}")
+                    buildFalGreetingPrompt(matteHex, listOf(character.behavior.motivation, character.behavior.worldview,
+                        character.communication?.generationInstructions().orEmpty()).joinToString(" "))
                 } else buildCharacterAnimationPrompt(
                     action = action,
                     seed = creativeSeed,
                     durationSeconds = durationSeconds,
                     matteHex = matteHex,
                     character = character,
-                    appearanceNotes = choice?.appearancePrompt.orEmpty(),
+                    appearanceNotes = referenceAppearance.ifBlank { choice?.appearancePrompt.orEmpty() },
                 )
                 validateResolvedVideoPrompt(prompt, matteHex)
                 if (existingJobId == null) {
@@ -240,8 +248,8 @@ class OnDeviceMascotGenerator(
                     java.io.File.createTempFile("video-qa-$action-", ".mp4", base.parentFile)
                         .also { it.writeBytes(video) }
                 }
-                val qa = try {
-                    withContext(Dispatchers.IO) {
+                val (qa, playableVideo) = try {
+                    val inspected = withContext(Dispatchers.IO) {
                         VideoQualityGate.inspect(
                             file = inspectionFile,
                             action = action,
@@ -250,6 +258,8 @@ class OnDeviceMascotGenerator(
                             enforceLoop = enforceLoop,
                         )
                     }
+                    val repaired = store.repairVideoLoop(inspectionFile, inspected, durationSeconds)
+                    (repaired?.qa ?: inspected) to (repaired?.bytes ?: video)
                 } finally {
                     inspectionFile.delete()
                 }
@@ -263,7 +273,7 @@ class OnDeviceMascotGenerator(
                             ". Повторный платный запрос не запускался; новый можно подтвердить только вручную.",
                     )
                 }
-                store.saveActionVideo(mascotId, action, video, cost)
+                store.saveActionVideo(mascotId, action, playableVideo, cost)
                 store.clearOpenRouterVideoJobId(mascotId, action)
                 completedActions += 1
                 onProgress(completedActions, batchActions.size)
@@ -592,11 +602,20 @@ class OnDeviceMascotGenerator(
     }
 
     private suspend fun executeImageRequest(request: Request): ByteArray = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw apiError(response.code, raw)
+        val raw = try {
+            imageClient.newCall(request).execute().use { response ->
+                val content = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw apiError(response.code, content)
+                content
             }
+        } catch (timeout: java.io.InterruptedIOException) {
+            if (timeout !is java.net.SocketTimeoutException && timeout.message != "timeout") throw timeout
+            throw IOException(
+                "OpenRouter не успел ответить. Результат запроса неизвестен, повтор автоматически не отправлен.",
+                timeout,
+            )
+        }
+        run {
             val image = runCatching {
                 JSONObject(raw).getJSONArray("data").getJSONObject(0)
             }.getOrElse { throw IOException("OpenRouter не вернул изображение", it) }
@@ -732,9 +751,9 @@ internal fun buildOpenRouterActionPrompt(
 private const val IMAGE_MODEL = "openai/gpt-image-2"
 private const val VIDEO_MODEL = "bytedance/seedance-2.0-mini"
 private const val OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-private const val VIDEO_RESOLUTION = "720p"
-private const val VIDEO_WIDTH = 720
-private const val VIDEO_HEIGHT = 720
+private const val VIDEO_RESOLUTION = "1080p"
+private const val VIDEO_WIDTH = 1080
+private const val VIDEO_HEIGHT = 1080
 private const val VIDEO_MATTE_COLOR = -0xFF0100 // ARGB #FF00FF00
 private const val VIDEO_POLL_MS = 8_000L
 private const val VIDEO_TIMEOUT_MS = 30 * 60_000L
