@@ -14,8 +14,8 @@ internal class OverlayPreviewView(context: Context, private val artwork: Overlay
     private var collapsed = false
     private var pinching = false
     private val pinch = OverlayPinchGesture(context.overlayDp(2).toFloat(),
-        onBegin = { _, _ -> true },
-        onScale = { factor, _, _ -> heroScale = OverlaySize.constrain(heroScale * factor) },
+        onBegin = { true },
+        onScale = { factor -> heroScale = OverlaySize.constrain(heroScale * factor) },
         onEnd = { OverlaySize.save(context, heroScale) })
     var heroScale = 1f
         set(value) { if (field != value) { field = value; requestLayout() } }

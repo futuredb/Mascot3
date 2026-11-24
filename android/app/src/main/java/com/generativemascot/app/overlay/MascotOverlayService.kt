@@ -15,6 +15,8 @@ import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.PixelFormat
+import android.graphics.PointF
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -90,6 +92,7 @@ class MascotOverlayService : Service() {
     private var bubbleAdded = false
     private var compactAdded = false
     private var heroWindow: OverlayHeroWindow? = null
+    private var resizeOwner: View? = null
     private var stateJob: Job? = null
     private var gestureWindow: OverlayGestureWindow? = null
     private var pendingLongPress: Runnable? = null
@@ -105,6 +108,11 @@ class MascotOverlayService : Service() {
         override fun doFrame(frameTimeNanos: Long) {
             if (!motionRunning) return
             if (!heroAdded || !ValueAnimator.areAnimatorsEnabled()) { stopMotion(); return }
+            if (resizeOwner != null) {
+                previousFrame = frameTimeNanos
+                choreographer.postFrameCallback(this)
+                return
+            }
             val sample = phoneMotion.sample
             if (movement.observe(sample)) hero?.react()
             if (previousFrame > 0) {
@@ -498,6 +506,7 @@ class MascotOverlayService : Service() {
             detachWindows()
             return
         }
+        if (resizeOwner != null && heroAdded) return
         try {
             val view = hero ?: return
             val p = heroParams ?: return
@@ -641,56 +650,83 @@ class MascotOverlayService : Service() {
         var accepting = false
         var scale = OverlaySize.read(this)
         var scaleDirty = false
-        var anchorX = .5f; var anchorY = .5f
+        var resizeOrigin: Pair<OverlayArea, PointF>? = null
         var resizeScheduled = false
-        val resizeFrame = android.view.Choreographer.FrameCallback {
+        fun boundsAt(targetScale: Float): Rect {
+            val (area, center) = checkNotNull(resizeOrigin)
+            val size = OverlaySize.dimensions(targetScale, resources.displayMetrics.density, area, artwork)
+            val target = heroPlacement(size.width, size.height, area).centeredOn(center)
+            return Rect(target.x, target.y, target.x + size.width, target.y + size.height)
+        }
+        val resizeFrame = Choreographer.FrameCallback {
             resizeScheduled = false
-            if (!destroyed && !stopping && heroAdded) showIfUnlocked()
+            val host = heroWindow
+            val p = heroParams
+            if (!destroyed && !stopping && heroAdded && resizeOwner === view && host != null && p != null) {
+                try {
+                    if (!host.isResizing) {
+                        val viewport = host.beginResize(p, boundsAt(OverlaySize.MIN), boundsAt(OverlaySize.MAX))
+                        windows.updateViewLayout(host, viewport)
+                    }
+                    host.previewResize(boundsAt(scale))
+                } catch (_: Exception) {
+                    fail("Android закрыл плавающее окно. Включите героя снова в приложении.")
+                }
+            }
         }
         val slop = ViewConfiguration.get(this).scaledTouchSlop
-        fun persistSize() {
-            if (!scaleDirty) return
+        fun finishResize(updateWindows: Boolean) {
+            if (resizeOwner !== view) return
+            if (resizeScheduled) choreographer.removeFrameCallback(resizeFrame)
+            resizeScheduled = false
+            val p = heroParams
+            if (scaleDirty && p != null) {
+                // Commit the final gesture sample even if it arrived between display frames.
+                val target = boundsAt(scale)
+                p.width = target.width()
+                p.height = target.height()
+                position = OverlayPoint(target.left, target.top)
+                OverlaySize.save(this, scale)
+                savePosition()
+            }
             scaleDirty = false
-            OverlaySize.save(this, scale)
-            savePosition()
+            resizeOrigin = null
+            resizeOwner = null
+            if (updateWindows && heroAdded) showIfUnlocked()
         }
         val detector = if (compactMode) null else OverlayPinchGesture(overlayDp(8).toFloat(),
-                onBegin = begin@ { focusX, focusY ->
+                onBegin = begin@ {
                     val p = heroParams ?: return@begin false
                     if (!accepting || !heroAdded) return@begin false
+                    // Replacing a finger continues the same resize and keeps its viewport.
+                    if (resizeOwner != null) return@begin resizeOwner === view
                     cancelLongPress()
                     multiTouch = true
                     scale = OverlaySize.read(this@MascotOverlayService)
-                    // Use the actual event window origin, not a pending layout update.
-                    anchorX = (focusX - position.x) / p.width
-                    anchorY = (focusY - position.y) / p.height
+                    // The reply card can be far from the body and its window moves
+                    // during resize. Keep the gesture anchored to the visible hero.
+                    val area = usableArea()
+                    resizeOrigin = area to heroPlacement(p.width, p.height, area).bodyCenter(position)
+                    resizeOwner = view
                     true
                 },
-                onScale = update@ { factor, focusX, focusY ->
-                    val p = heroParams ?: return@update
-                    if (!accepting || !heroAdded) return@update
+                onScale = update@ { factor ->
+                    if (!accepting || resizeOwner !== view) return@update
                     if (!factor.isFinite() || factor <= 0f) return@update
-                    scale = OverlaySize.constrain(scale * factor)
-                    val area = usableArea()
-                    val size = OverlaySize.dimensions(scale, resources.displayMetrics.density, area, artwork)
-                    val target = heroPlacement(size.width, size.height, area).clamp(
-                        (focusX - anchorX * size.width).roundToInt(),
-                        (focusY - anchorY * size.height).roundToInt())
+                    val targetScale = OverlaySize.constrain(scale * factor)
+                    if (targetScale == scale) return@update
+                    scale = targetScale
                     scaleDirty = true
-                    if (p.width != size.width || p.height != size.height || position != target || bubble?.isLayoutRequested == true) {
-                        p.width = size.width; p.height = size.height
-                        position = target
-                        if (!resizeScheduled) {
-                            resizeScheduled = true
-                            android.view.Choreographer.getInstance().postFrameCallback(resizeFrame)
-                        }
+                    if (!resizeScheduled) {
+                        resizeScheduled = true
+                        choreographer.postFrameCallback(resizeFrame)
                     }
                 },
-                onEnd = ::persistSize)
+                onEnd = {})
         cancelTouches += {
             accepting = false
             detector?.cancel()
-            persistSize()
+            finishResize(updateWindows = false)
             multiTouch = false
         }
         val touchListener = View.OnTouchListener { _, event ->
@@ -734,7 +770,7 @@ class MascotOverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     accepting = false
                     cancelLongPress()
-                    persistSize()
+                    finishResize(updateWindows = true)
                     if (!multiTouch && !dragging && !longPressed) view.performClick()
                     else if (dragging) { if (compactMode) saveCompactPosition() else savePosition() }
                     true
@@ -742,7 +778,7 @@ class MascotOverlayService : Service() {
                 MotionEvent.ACTION_CANCEL -> {
                     accepting = false
                     cancelLongPress()
-                    persistSize()
+                    finishResize(updateWindows = true)
                     if (compactMode) saveCompactPosition() else savePosition()
                     true
                 }

@@ -20,6 +20,14 @@ import androidx.media3.effect.GlShaderProgram
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
 
+// A neighboring foreground pixel alone does not imply spill. Require an
+// olive or green tint on the pixel before thinning the silhouette there.
+internal const val GREEN_MATTE_EDGE_TINT_SHADER = """
+    float greenEdgeTint(float red, float green, float blue) {
+        return smoothstep(-0.16, 0.045, green-red)*smoothstep(0.055, 0.19, green-blue);
+    }
+"""
+
 @OptIn(UnstableApi::class)
 internal fun usesUntaggedLegacyMatrix(format: Format): Boolean =
     format.sampleMimeType?.startsWith("video/")==true &&
@@ -136,6 +144,7 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
             uniform vec2 texelSize;
             uniform sampler2D normalMap; uniform vec4 normalRect;
             uniform vec2 lightTilt; uniform float normalActive;
+            $GREEN_MATTE_EDGE_TINT_SHADER
             float surfaceLighting(vec3 rgb) {
                 if(normalActive<0.5 || all(equal(lightTilt,vec2(0.0))))return 1.0;
                 // Video textures use bottom-left GL coordinates; PNG atlas rows
@@ -194,8 +203,15 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
                 float matte=mix(generic,green,greenKey);
                 matte=mix(matte,smoothstep(0.50,1.0,matte*matte),greenKey);
                 float alpha=source.a*matte;
-                float spill=greenKey*greenHue*smoothstep(0.005,0.08,rgb.g-max(rgb.r,rgb.b));
-                rgb.g=mix(rgb.g,min(rgb.g,max(rgb.r,rgb.b)),spill);
+                if(alpha<=0.0){gl_FragColor=vec4(0.0);return;}
+                float adaptive=greenKey*greenAdaptive;
+                float spill=greenKey*greenHue*mix(smoothstep(0.005,0.08,rgb.g-max(rgb.r,rgb.b)),1.0,adaptive);
+                float edgeTint=adaptive*greenHue*greenEdgeTint(rgb.r,rgb.g,rgb.b);
+                if(edgeTint<=0.0 || plateAlpha<=0.72){
+                    rgb.g=mix(rgb.g,min(rgb.g,max(rgb.r,rgb.b)),spill);
+                    gl_FragColor=vec4(clamp(rgb*surfaceLighting(rgb),0.0,1.0)*alpha,alpha);
+                    return;
+                }
                 vec2 edgeStep=texelSize*6.0;
                 float leftMatte=plateMatteAt(uv-vec2(edgeStep.x,0.0),key);
                 float rightMatte=plateMatteAt(uv+vec2(edgeStep.x,0.0),key);
@@ -220,9 +236,10 @@ internal class VideoBackgroundKey(private val keyColor: Int, private val lightin
                     edgeGradient=abs(diagonalUp);
                     interiorPoint=uv+(diagonalUp>0.0?vec2(-edgeStep.x,edgeStep.y):vec2(edgeStep.x,-edgeStep.y));
                 }
-                float edgeRecovery=greenKey*greenAdaptive
+                float edgeRecovery=edgeTint
                     *smoothstep(0.30,0.80,edgeGradient)*smoothstep(0.72,0.98,plateAlpha);
                 rgb=mix(rgb,sourceRgbAt(interiorPoint),edgeRecovery);
+                rgb.g=mix(rgb.g,min(rgb.g,max(rgb.r,rgb.b)),spill);
                 alpha*=1.0-edgeRecovery;
                 gl_FragColor=vec4(clamp(rgb*surfaceLighting(rgb),0.0,1.0)*alpha,alpha);
             }

@@ -62,7 +62,7 @@ class HeroLocalStoreInstrumentedTest {
         val frames = animation.files
 
         assertTrue(frames.size in HeroLocalStore.WIDGET_MIN_FRAME_COUNT..HeroLocalStore.WIDGET_MAX_FRAME_COUNT)
-        assertTrue(animation.frameIntervalMs in 100..250)
+        assertTrue("Frame interval must match a widget layout", animation.frameIntervalMs in WIDGET_SUPPORTED_INTERVALS)
         assertTrue(frames.all { it.isFile && it.length() > 100L })
         val sample = BitmapFactory.decodeFile(frames.first().absolutePath)
         try {

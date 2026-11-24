@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 private val Cream = Color(0xFFFFF6F0)
 private val Ink = Color(0xFF2B2430)
 private val Blush = Color(0xFFF48CA8)
-private val Lilac = Color(0xFF7C5CFF)
+private val ControlContainer = Color(0xFFE3E4E4)
 
 @Composable
 private fun MascotImage(
@@ -168,12 +168,33 @@ private fun MascotImage(
 fun MascotTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = lightColorScheme(
-            primary = Lilac,
+            primary = FigmaInk,
             onPrimary = Color.White,
+            primaryContainer = ControlContainer,
+            onPrimaryContainer = FigmaInk,
+            inversePrimary = Color(0xFFC8C9C9),
+            secondary = Color(0xFF545656),
+            onSecondary = Color.White,
+            secondaryContainer = ControlContainer,
+            onSecondaryContainer = FigmaInk,
+            tertiary = Color(0xFF5E6060),
+            onTertiary = Color.White,
+            tertiaryContainer = ControlContainer,
+            onTertiaryContainer = FigmaInk,
             background = Cream,
             surface = Color.White,
             onBackground = Ink,
             onSurface = Ink,
+            surfaceVariant = ControlContainer,
+            onSurfaceVariant = Color(0xFF525454),
+            surfaceTint = FigmaInk,
+            outline = Color(0xFF737575),
+            outlineVariant = Color(0xFFC7C9C9),
+            surfaceContainerLowest = Color.White,
+            surfaceContainerLow = Color(0xFFF7F7F7),
+            surfaceContainer = Color(0xFFF2F3F3),
+            surfaceContainerHigh = Color(0xFFEDEEEE),
+            surfaceContainerHighest = ControlContainer,
         ),
         content = content,
     )
@@ -196,7 +217,7 @@ fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
         enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(56.dp),
         shape = RoundedCornerShape(28.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Lilac, disabledContainerColor = Lilac.copy(0.4f)),
+        colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
     ) {
         Text(text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
     }
@@ -260,7 +281,7 @@ fun ProgressScreen(status: String, onPoll: () -> Unit = {}) {
     }
     Screen {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(color = Lilac, modifier = Modifier.size(56.dp))
+            CircularProgressIndicator(color = FigmaInk, modifier = Modifier.size(56.dp))
             Spacer(Modifier.height(24.dp))
             Text("Герой собирается", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
@@ -488,9 +509,9 @@ private fun GenerationOption(
         enabled = enabled,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) Lilac else Ink.copy(alpha = .14f)),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) FigmaInk else Ink.copy(alpha = .14f)),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) Lilac.copy(alpha = .10f) else Color.White,
+            containerColor = if (selected) FigmaInk.copy(alpha = .10f) else Color.White,
             contentColor = Ink,
         ),
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
@@ -499,7 +520,7 @@ private fun GenerationOption(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
-                if (selected) Text("✓", color = Lilac, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                if (selected) Text("✓", color = FigmaInk, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(4.dp))
             Text(description, color = Ink.copy(alpha = .62f), fontSize = 14.sp, textAlign = TextAlign.Start)

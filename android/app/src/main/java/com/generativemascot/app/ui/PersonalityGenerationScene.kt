@@ -70,10 +70,15 @@ internal fun PersonalityGenerationScene(
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(reviewScroll)
                     .statusBarsPadding().padding(top = 74.dp, bottom = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text((heroName ?: "Герой").uppercase(), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(brush = Brush.verticalGradient(listOf(FigmaInk, Color(0xffb9baba))),
-                            fontFamily = FontExtended, fontSize = 59.sp, textAlign = TextAlign.Center),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center) {
+                        val heading = (heroName ?: "Герой").uppercase()
+                        Text(heading, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                            style = TextStyle(brush = Brush.verticalGradient(listOf(FigmaInk, Color(0xffb9baba))),
+                                fontFamily = SbSansDisplayExtendedSemibold, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                fontSize = homeHeadingFontSize(heading, constraints.maxWidth, maxSize = 59f),
+                                textAlign = TextAlign.Center))
+                    }
                     MascotSmallCircleAction(Icons.Rounded.Edit, "Изменить имя", {
                         nameDraft = heroNameDraft(heroName.orEmpty())
                         editingName = true

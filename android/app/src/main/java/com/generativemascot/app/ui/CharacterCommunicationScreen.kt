@@ -7,11 +7,6 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +28,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,8 +38,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.res.painterResource
@@ -54,6 +53,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +61,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import com.generativemascot.app.R
 import com.generativemascot.app.data.CharacterCommunication
 import com.generativemascot.app.data.CommunicationTrait
@@ -74,6 +77,15 @@ internal val communicationSaver = Saver<CharacterCommunication, String>(
     restore = { Json.decodeFromString(CharacterCommunication.serializer(), it) },
 )
 
+private val communicationDraftsSaver = mapSaver(
+    save = { drafts: Map<String, CharacterCommunication> ->
+        drafts.mapValues { (_, profile) -> Json.encodeToString(CharacterCommunication.serializer(), profile) }
+    },
+    restore = { drafts ->
+        drafts.mapValues { (_, profile) -> Json.decodeFromString(CharacterCommunication.serializer(), profile as String) }
+    },
+)
+
 internal val characterSettingsBackground = Brush.verticalGradient(
     0f to Color(0xfff2f2f2), .16f to Color(0xffe9eaea), .84f to Color(0xffe9eaea), 1f to Color(0xfff2f2f2),
 )
@@ -81,7 +93,7 @@ internal val characterSettingsBackground = Brush.verticalGradient(
 @Composable
 internal fun CommunicationSliders(
     profile: CharacterCommunication, onChange: (CharacterCommunication) -> Unit, modifier: Modifier = Modifier,
-    rowHeight: Dp = 42.dp, gap: Dp = 12.dp, enabled: Boolean = true, lockCountdown: String? = null,
+    rowHeight: Dp = 48.dp, gap: Dp = 12.dp, enabled: Boolean = true, lockCountdown: String? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
         CommunicationTrait.entries.forEach { trait ->
@@ -143,12 +155,27 @@ private fun CommunicationSlider(
 
 @Composable
 internal fun EditCommunicationNotes(notes: String, onSave: (String) -> Unit, onClose: () -> Unit) {
-    var draft by rememberSaveable { mutableStateOf(notes) }
-    AlertDialog(onDismissRequest = onClose, title = { Text("Стиль общения") },
-        text = { OutlinedTextField(draft, { if (it.length <= 500) draft = it }, label = { Text("Своими словами") },
-            modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 5) },
-        confirmButton = { TextButton(onClick = { onSave(draft.trim()); onClose() }) { Text("Сохранить") } },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } })
+    var draft by rememberSaveable(notes) { mutableStateOf(notes) }
+    MascotModalSheet("Изменить стиль общения", onDismiss = onClose) {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { if (it.length <= 500) draft = it },
+            label = { Text("Своими словами", fontFamily = SbSansTextRegular) },
+            textStyle = TextStyle(fontFamily = SbSansTextRegular, fontSize = 16.sp, lineHeight = 22.sp),
+            shape = RoundedCornerShape(18.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+                focusedBorderColor = FigmaInk, unfocusedBorderColor = Color(0xFFB9BABA),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 5,
+        )
+        Spacer(Modifier.height(20.dp))
+        MascotSheetAction("Сохранить", onClick = { onSave(draft.trim()); onClose() })
+        Spacer(Modifier.height(8.dp))
+        MascotSheetAction("Отмена", onClick = onClose, secondary = true)
+    }
 }
 
 @Composable
@@ -198,29 +225,43 @@ internal fun CreationCommunicationPage(
 }
 
 private val communicationSaveButtonHeight = 50.dp
+private val settingsPortraitWidth = 275.dp
+private val settingsPortraitHeight = 290.dp
+
+private data class CharacterSettingsPreview(val name: String, val portrait: Painter? = null)
 
 @Composable
-internal fun CommunicationSaveButton(onClick: () -> Unit, enabled: Boolean = true) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.height(communicationSaveButtonHeight),
-        colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
-        contentPadding = PaddingValues(horizontal = 28.dp)) {
-        Text("СОХРАНИТЬ", fontFamily = SbSansDisplayBold, fontSize = 14.sp)
+private fun rememberCharacterSettingsPreview(heroId: String, name: String, portrait: String?): CharacterSettingsPreview {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val model = resolveMediaUrl(portrait)
+    val request = remember(context, model, density) {
+        ImageRequest.Builder(context).data(model).size(
+            with(density) { settingsPortraitWidth.roundToPx() },
+            with(density) { settingsPortraitHeight.roundToPx() },
+        ).build()
     }
+    val imageState = rememberAsyncImagePainter(request, contentScale = ContentScale.Fit).state
+    var visible by remember { mutableStateOf(CharacterSettingsPreview(name)) }
+    LaunchedEffect(heroId, name, request, imageState) {
+        when {
+            model == null -> visible = CharacterSettingsPreview(name)
+            imageState is AsyncImagePainter.State.Success && imageState.result.request.data == request.data ->
+                visible = CharacterSettingsPreview(name, imageState.painter)
+            imageState is AsyncImagePainter.State.Error && imageState.result.request.data == request.data ->
+                visible = CharacterSettingsPreview(name)
+        }
+    }
+    return visible
 }
 
 @Composable
-private fun rememberPortraitBob(): Dp {
-    if (Build.VERSION.SDK_INT >= 26 && !android.animation.ValueAnimator.areAnimatorsEnabled()) return 0.dp
-    val motion = rememberInfiniteTransition(label = "Портрет персонажа")
-    val ease = CubicBezierEasing(.42f, 0f, .58f, 1f)
-    val offset by motion.animateFloat(0f, 0f, infiniteRepeatable(keyframes {
-        durationMillis = 4000
-        0f at 0 using ease
-        -5.625f at 1600 using ease
-        0f at 3200
-        0f at 4000
-    }), label = "Движение портрета")
-    return offset.dp
+internal fun CommunicationSaveButton(onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+    Button(onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = communicationSaveButtonHeight),
+        colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
+        contentPadding = PaddingValues(horizontal = 28.dp)) {
+        Text("СОХРАНИТЬ", fontFamily = SbSansDisplayBold, fontSize = 14.sp, textAlign = TextAlign.Center)
+    }
 }
 
 @Composable
@@ -232,7 +273,11 @@ internal fun CharacterCommunicationSettings(
 ) {
     val context = LocalContext.current
     val savedProfile = initial ?: remember(context, heroId) { defaultCommunicationProfile(context, heroId) }
-    var profile by rememberSaveable(stateSaver = communicationSaver) { mutableStateOf(savedProfile) }
+    var drafts by rememberSaveable(stateSaver = communicationDraftsSaver) {
+        mutableStateOf(emptyMap<String, CharacterCommunication>())
+    }
+    val profile = drafts[heroId] ?: savedProfile
+    val updateProfile: (CharacterCommunication) -> Unit = { drafts = drafts + (heroId to it) }
     val lockExpiry = rememberCommunicationLockExpiry(heroId)
     val countdown by produceState<String?>(null, lockExpiry) {
         do {
@@ -242,11 +287,11 @@ internal fun CharacterCommunicationSettings(
             delay(((lockExpiry - now - 1) % 1000) + 1)
         } while (true)
     }
-    LaunchedEffect(lockExpiry, savedProfile) {
-        if (lockExpiry > 0) profile = profile.keepMoodLockedLevels(savedProfile)
+    LaunchedEffect(heroId, lockExpiry, savedProfile) {
+        if (lockExpiry > 0 && heroId in drafts) updateProfile(profile.keepMoodLockedLevels(savedProfile))
     }
-    var editingName by rememberSaveable { mutableStateOf(false) }
-    var nameDraft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var editingName by rememberSaveable(heroId) { mutableStateOf(false) }
+    var nameDraft by rememberSaveable(heroId, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     val keyboard = LocalSoftwareKeyboardController.current
     val scroll = rememberScrollState()
     val confirmName = {
@@ -257,8 +302,10 @@ internal fun CharacterCommunicationSettings(
             keyboard?.hide()
         }
     }
-    var editingNotes by rememberSaveable { mutableStateOf(false) }
-    var error by rememberSaveable { mutableStateOf(false) }
+    var editingNotes by rememberSaveable(heroId) { mutableStateOf(false) }
+    var error by rememberSaveable(heroId) { mutableStateOf(false) }
+    val preview = rememberCharacterSettingsPreview(heroId, name, portrait)
+    val headingHeight = with(LocalDensity.current) { 60.sp.toDp() }
     MascotSystemBars(Color(0xfff2f2f2))
     BackHandler(onBack = onClose)
     val saveButtonPadding = 12.dp
@@ -276,18 +323,32 @@ internal fun CharacterCommunicationSettings(
                 MascotTopAction(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", onClose)
                 MascotTopAction(Icons.Rounded.GridView, "Библиотека анимаций", onOpenAnimations)
             }
-            Text(name.uppercase(), Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                style = TextStyle(brush = Brush.verticalGradient(listOf(FigmaInk, Color(0xffb9baba))),
-                    fontFamily = SbSansDisplayExtendedSemibold, fontSize = 53.sp, textAlign = TextAlign.Center),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            BoxWithConstraints(Modifier.fillMaxWidth().height(headingHeight).padding(horizontal = 20.dp)) {
+                val width = constraints.maxWidth
+                MascotTransition(preview.name.uppercase(), Modifier.fillMaxSize()) { heading ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(heading,
+                            style = TextStyle(brush = Brush.verticalGradient(listOf(FigmaInk, Color(0xffb9baba))),
+                                fontFamily = SbSansDisplayExtendedSemibold, fontWeight = FontWeight.SemiBold,
+                                fontSize = homeHeadingFontSize(heading, width, maxSize = 53f),
+                                textAlign = TextAlign.Center),
+                            maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                    }
+                }
+            }
             MascotSmallCircleAction(Icons.Rounded.Edit, "Изменить имя", {
                 nameDraft = heroNameDraft(name)
                 editingName = true
             }, FigmaInk, Color.White, modifier = Modifier.size(40.dp))
-            val portraitOffset = rememberPortraitBob()
-            AsyncImage(resolveMediaUrl(portrait), name, Modifier.padding(top = 12.dp)
-                .offset(y = portraitOffset).size(275.dp, 290.dp),
-                contentScale = ContentScale.Fit)
+            val portraitOffset = rememberMascotPortraitBob()
+            MascotTransition(preview, Modifier.padding(top = 12.dp)
+                .size(settingsPortraitWidth, settingsPortraitHeight)
+                .graphicsLayer { translationY = portraitOffset.value.dp.toPx() },
+            ) { displayed ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    displayed.portrait?.let { Image(it, displayed.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                }
+            }
             val avatars = remember(heroes, heroId, name, portrait) {
                 if (heroes.any { it.id == heroId }) heroes
                 else listOf(HeroLibraryItem(heroId, name, baseStill = portrait)) + heroes
@@ -309,14 +370,20 @@ internal fun CharacterCommunicationSettings(
                             .then(if (active) Modifier else Modifier.mascotClickable(onClickLabel = label) { onSelect(hero.id) }),
                             contentAlignment = Alignment.Center) {
                             AsyncImage(resolveMediaUrl(if (active) portrait ?: thumbnail else thumbnail), label,
-                                Modifier.size(48.dp).offset(y = if (active) portraitOffset else 0.dp),
+                                Modifier.size(48.dp).graphicsLayer {
+                                    if (active) translationY = portraitOffset.value.dp.toPx() else translationY = 0f
+                                },
                                 contentScale = ContentScale.Fit)
                         }
                     }
                 }
             }
             SettingsCard("Стиль общения", action = { editingNotes = true }) {
-                CommunicationSliders(profile, { profile = it }, lockCountdown = countdown)
+                if (profile.notes.isNotBlank()) {
+                    Text(profile.notes, color = FigmaInk, fontFamily = SbSansTextRegular,
+                        fontSize = 14.sp, lineHeight = 20.sp)
+                }
+                CommunicationSliders(profile, updateProfile, lockCountdown = countdown)
             }
             Spacer(Modifier.height(28.dp))
             CalendarSettingsCards(heroId)
@@ -331,7 +398,7 @@ internal fun CharacterCommunicationSettings(
             })
         }
     }
-    if (editingNotes) EditCommunicationNotes(profile.notes, { profile = profile.copy(notes = it) }, { editingNotes = false })
+    if (editingNotes) EditCommunicationNotes(profile.notes, { updateProfile(profile.copy(notes = it)) }, { editingNotes = false })
 }
 
 @Composable
@@ -393,11 +460,16 @@ internal fun MascotSettingsSwitch(label: String, checked: Boolean, onChange: ((B
     val toggle = if (onChange == null) Modifier else Modifier.toggleable(checked, role = Role.Switch, onValueChange = onChange)
     Box(Modifier.size(46.dp, 24.dp).semantics { contentDescription = label }.then(toggle),
         contentAlignment = Alignment.Center) {
-        Box(Modifier.size(46.dp, 20.dp).clip(CircleShape)
-            .background(if (checked) Color.Black else Color(0xffb3b3b6)).padding(2.dp),
-            contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart) {
-            Box(Modifier.size(28.dp, 16.dp).background(Color.White, CircleShape))
-        }
+        MascotSwitchTrack(checked)
+    }
+}
+
+@Composable
+internal fun MascotSwitchTrack(checked: Boolean) {
+    Box(Modifier.size(46.dp, 20.dp).clip(CircleShape)
+        .background(if (checked) FigmaInk else Color(0xFFB3B3B6)).padding(2.dp),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart) {
+        Box(Modifier.size(28.dp, 16.dp).background(Color.White, CircleShape))
     }
 }
 
@@ -408,8 +480,8 @@ private fun SettingsCard(title: String, action: (() -> Unit)? = null, content: @
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(title, color = FigmaInk, fontFamily = SbSansDisplayMedium, fontSize = 16.sp)
-            if (action != null) IconButton(onClick = action, modifier = Modifier.size(32.dp)) {
+            Text(title, Modifier.weight(1f), color = FigmaInk, fontFamily = SbSansDisplayMedium, fontSize = 16.sp)
+            if (action != null) IconButton(onClick = action, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.Edit, "Добавить описание стиля", Modifier.size(16.dp), tint = FigmaInk)
             }
         }

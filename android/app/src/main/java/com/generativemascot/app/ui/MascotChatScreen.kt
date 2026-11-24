@@ -17,16 +17,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.BasicTextField
@@ -34,7 +32,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -47,6 +44,7 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -55,6 +53,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
@@ -95,12 +97,13 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 @Composable
-fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, animationVideoUrl: String?,
+internal fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, animationVideoUrl: String?,
     animationFrames: List<String>, animationFps: Int,
     animationVideoUrls: Map<String, String>, neutralFrameUrl: String?, active: Boolean = true,
     portraitVisible: Boolean = active,
     openCapabilities: Boolean = false, onCapabilitiesOpened: () -> Unit = {},
-    openBehavior: Boolean = false, onBehaviorOpened: () -> Unit = {}, onBack: () -> Unit) {
+    openBehavior: Boolean = false, onBehaviorOpened: () -> Unit = {},
+    chatOverride: DirectMascotChat? = null, onBack: () -> Unit) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -110,18 +113,18 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     val moodPreferences = remember(context) { context.getSharedPreferences(CHAT_MOOD_PREFERENCES, Context.MODE_PRIVATE) }
     var portraitExpanded by remember(mascotId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var latestMessagesTopPx by remember(mascotId) { mutableFloatStateOf(0f) }
-    var portraitToggleChatAnchor by remember(mascotId) { mutableStateOf<Triple<Int, Int, Float>?>(null) }
-    val setPortraitExpanded: (Boolean) -> Unit = { expanded ->
-        if (expanded != portraitExpanded) {
-            portraitToggleChatAnchor = Triple(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset,
-                latestMessagesTopPx,
-            )
-            portraitExpanded = expanded
+    var followLatest by remember(mascotId) { mutableStateOf(true) }
+    val chatScroll = remember(listState, mascotId) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && consumed.y != 0f) {
+                    followLatest = !listState.canScrollBackward
+                }
+                return Offset.Zero
+            }
         }
     }
+    val setPortraitExpanded: (Boolean) -> Unit = { portraitExpanded = it }
     BackHandler(enabled = portraitExpanded && active) { setPortraitExpanded(false) }
     val streamPreferences = remember { context.getSharedPreferences("mascot_stream", Context.MODE_PRIVATE) }
     var streamEnabled by remember { mutableStateOf(streamPreferences.getBoolean("enabled", true)) }
@@ -152,7 +155,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
             profanityEnabled = it[CommunicationTrait.PROFANITY] > 0
         }
     }
-    val service = remember(mascotId, heroName, openRouterApiKey) {
+    val service = chatOverride ?: remember(mascotId, heroName, openRouterApiKey) {
         val store = HeroLocalStore.current
         val tone = store?.chatCharacterTone(mascotId)
         DirectMascotChat(
@@ -289,33 +292,36 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     )
     val interactionModes = com.generativemascot.app.data.interactionPersonalities
     if (showInteractionSettings) {
-        AlertDialog(onDismissRequest = { showInteractionSettings = false },
-            title = { Text("Как мне отвечать?", fontFamily = SbSansDisplayMedium) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    interactionModes.forEach { mode ->
-                        val title = when (mode.id) {
-                            "request_solutions" -> "Готовлю решения, когда попросите"
-                            "proactive_solutions" -> "На шаг впереди"
-                            "request_guidance" -> "Рядом, когда нужен"
-                            else -> "Замечаю и подсказываю"
-                        }
-                        Row(Modifier.fillMaxWidth().clickable {
-                            interactionId = mode.id
-                            interactionPreferences.edit().putString(mascotId, mode.id).apply()
-                            enableReminders(mode.id)
-                            showInteractionSettings = false
-                        }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = mode.id == interactionId, onClick = null)
-                            Column(Modifier.padding(start = 8.dp)) {
-                                Text(title, fontFamily = SbSansDisplayMedium, fontSize = 16.sp, color = FigmaInk)
-                                Text(mode.description, fontSize = 13.sp, lineHeight = 18.sp, color = FigmaInk.copy(alpha = .7f))
-                            }
+        val dismiss = { showInteractionSettings = false }
+        MascotModalSheet("Как мне отвечать?", onDismiss = dismiss) {
+            Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                interactionModes.forEachIndexed { index, mode ->
+                    val selected = mode.id == interactionId
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(18.dp))
+                            .background(Color.White)
+                            .selectable(selected = selected, role = androidx.compose.ui.semantics.Role.RadioButton) {
+                                interactionId = mode.id
+                                interactionPreferences.edit().putString(mascotId, mode.id).apply()
+                                enableReminders(mode.id)
+                                dismiss()
+                            }.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        RadioButton(selected = selected, onClick = null)
+                        Column {
+                            Text(interactionDisplayTitles[index], fontFamily = SbSansDisplayMedium,
+                                fontSize = 16.sp, color = FigmaInk)
+                            Text(interactionDescriptions[index].replace('\n', ' '), fontFamily = SbSansTextRegular,
+                                fontSize = 13.sp, lineHeight = 18.sp, color = FigmaInk.copy(alpha = .7f))
                         }
                     }
                 }
-            },
-            confirmButton = { TextButton(onClick = { showInteractionSettings = false }) { Text("Закрыть") } })
+            }
+            Spacer(Modifier.height(16.dp))
+            MascotSheetAction("Закрыть", onClick = dismiss, secondary = true)
+        }
     }
     var draft by remember(mascotId) { mutableStateOf("") }
     var typingRevision by remember(mascotId) { mutableIntStateOf(0) }
@@ -345,15 +351,22 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     var busy by remember(mascotId) { mutableStateOf(false) }
     var status by remember(mascotId) { mutableStateOf("") }
+    var pendingReply by remember(mascotId) { mutableStateOf(false) }
     var streamingTarget by remember(mascotId) { mutableStateOf("") }
     var streamingVisible by remember(mascotId) { mutableStateOf("") }
+    fun commitReply(text: String) {
+        Snapshot.withMutableSnapshot {
+            messages.add(ChatMessage(false, text))
+            pendingReply = false
+            streamingTarget = ""
+            streamingVisible = ""
+        }
+        historyStore.write(mascotId, messages)
+    }
     LaunchedEffect(busy, mascotId) {
         while (busy) {
             val target = streamingTarget
-            if (!target.startsWith(streamingVisible)) {
-                streamingVisible = if (streamingVisible.startsWith(target)) target else ""
-            }
-            if (streamingVisible.length < target.length) {
+            if (target.startsWith(streamingVisible) && streamingVisible.length < target.length) {
                 val remaining = target.codePointCount(streamingVisible.length, target.length)
                 val count = (2 + remaining / 45).coerceAtMost(8).coerceAtMost(remaining)
                 val end = target.offsetByCodePoints(streamingVisible.length, count)
@@ -412,7 +425,9 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     }
     val defaultChatAnimationAction = if ("chat_idle" in availableChatActions) "chat_idle"
         else defaultHomeVideoAction(animationVideoUrls.keys)
-    val savedEmotions = availableChatActions.intersect(chatEmotionPrompts.keys + chatMoodReactionActions + "curious")
+    val savedEmotions = availableChatActions.intersect(
+        chatEmotionPrompts.keys + chatMoodReactionActions + setOf("curious", "greeting", "dancing"),
+    )
     val hasThinkingClip = "thinking" in availableChatActions
     val usePreparedChatAnimations = "idle" in animationVideoUrls && (
         "typing_reaction" in availableChatActions ||
@@ -429,10 +444,18 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
         .firstOrNull { it in availableChatActions && it != defaultChatAnimationAction }
     var typingActionSerial by remember(mascotId) { mutableIntStateOf(0) }
     var typingGlitchPlayed by remember(mascotId) { mutableStateOf(false) }
+    LaunchedEffect(busy, streamingTarget.isNotEmpty(), usePreparedChatAnimations, hasThinkingClip) {
+        if (busy && streamingTarget.isEmpty() && usePreparedChatAnimations && hasThinkingClip) {
+            delay(1_100)
+            if (preparedReactionRequestedAt == null && preparedEmotion == null) {
+                preparedReactionRequestedAt = android.os.SystemClock.elapsedRealtime()
+            }
+        }
+    }
     val chatAnimationAction = when {
-        usePreparedChatAnimations && preparedReactionRequestedAt != null -> "thinking"
         typingReactionRequested -> typingReactionAction
         preparedEmotion != null -> preparedEmotion
+        usePreparedChatAnimations && preparedReactionRequestedAt != null -> "thinking"
         usePreparedChatAnimations -> "idle"
         (busy && streamingTarget.isNotEmpty()) || speakingUntil > 0L ->
             listOf("speaking", "watching", "idle").firstOrNull { it in availableChatActions }
@@ -511,14 +534,16 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     LaunchedEffect(helios, drawHelios) {
         helios.setPortraitVisible(drawHelios)
     }
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && !choosingInteraction) listState.scrollToItem(messages.lastIndex)
+    val newestMessageKey = if (pendingReply) messages.size else messages.lastIndex
+    LaunchedEffect(listState, mascotId, choosingInteraction) {
+        if (choosingInteraction) return@LaunchedEffect
+        snapshotFlow { listState.isScrollInProgress to listState.canScrollBackward }.collect { (scrolling, canScrollBackward) ->
+            if (!scrolling && !canScrollBackward) followLatest = true
+        }
     }
-    LaunchedEffect(streamingVisible) {
-        if (streamingVisible.isNotEmpty() && !listState.isScrollInProgress) {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            if (lastVisible >= info.totalItemsCount - 2) listState.scrollToItem(messages.size)
+    LaunchedEffect(newestMessageKey, mascotId, choosingInteraction) {
+        if (newestMessageKey >= 0 && !choosingInteraction && followLatest && !listState.isScrollInProgress) {
+            listState.requestScrollToItem(0)
         }
     }
     var localFrameVisible by remember(mascotId, animationVideoUrl, chatVideoUrls) { mutableStateOf(false) }
@@ -540,25 +565,12 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(chatBackground)
         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
-        .safeDrawingPadding().imePadding()) {
+        .safeDrawingPadding()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-        val figureSize = MascotChatFigureSize.coerceAtMost(maxWidth)
+        val figureSize = MascotChatFigureSize.coerceAtMost(minOf(maxWidth, maxHeight * .58f))
         val portraitSize = lerp(figureSize, MascotChatIdentitySize, expansion)
         val portraitTop = MascotChatIdentityTop * expansion
         val messagesTop = portraitTop + portraitSize
-        val messagesTopPx = with(androidx.compose.ui.platform.LocalDensity.current) { messagesTop.toPx() }
-        SideEffect { latestMessagesTopPx = messagesTopPx }
-        LaunchedEffect(messagesTopPx, portraitToggleChatAnchor) {
-            portraitToggleChatAnchor?.let { (index, offset, initialTopPx) ->
-                // LazyColumn's content padding moves every message while the
-                // portrait changes size. Compensate by the exact padding delta
-                // so the first visible message remains at the same screen Y.
-                val compensatedOffset = (offset + messagesTopPx - initialTopPx)
-                    .toInt().coerceAtLeast(0)
-                listState.scrollToItem(index, compensatedOffset)
-            }
-            if (expansion == 0f || expansion == 1f) portraitToggleChatAnchor = null
-        }
         val portraitModifier = Modifier.align(Alignment.TopStart)
             .offset(x = lerp(MascotChatFigureStart, MascotChatIdentityStart, expansion), y = portraitTop)
             .size(portraitSize)
@@ -785,7 +797,9 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                     top = (messagesTop + 20.dp).coerceAtMost(maxHeight * .37f), bottom = 20.dp))
         } else LazyColumn(
             state = listState,
+            reverseLayout = true,
             modifier = Modifier.fillMaxSize()
+                .nestedScroll(chatScroll)
                 .drawWithContent {
                     drawContent()
                     val fadeHeight = 28.dp.toPx().coerceAtMost(size.height)
@@ -795,61 +809,58 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                     )
                 },
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = messagesTop + 12.dp, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Top),
         ) {
-            if (messages.isEmpty()) item {
+            if (messages.isEmpty() && !pendingReply) item(key = "welcome") {
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("Привет, рад знакомству!", fontFamily = SbSansDisplayMedium, fontSize = 18.sp, color = FigmaInk)
                     Text("$heroName неторопливо осматривается вокруг.", fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
                 }
             }
-            items(messages) { item ->
-                if (item.capabilities) {
+            // The pending reply and the saved reply use the same row and key.
+            items(count = newestMessageKey + 1, key = { index -> newestMessageKey - index }) { index ->
+                val item = messages.getOrNull(newestMessageKey - index)
+                if (item?.capabilities == true) {
                     ChatCapabilitiesCard(calendarEnabled, onCalendarChange = { enabled ->
                         if (enabled) showCalendarConsent = true else { calendarEnabled = false; calendarPreferences.edit().putBoolean("enabled", false).apply() }
                     }, profanityEnabled = profanityEnabled, onProfanityChange = setProfanity)
                 } else {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = if (item.user) Arrangement.End else Arrangement.Start) {
-                    val messageModifier = if (item.user) Modifier.widthIn(max = 280.dp)
-                        .background(Color(0xFFDEDDE1), RoundedCornerShape(20.dp)).padding(horizontal = 15.dp, vertical = 12.dp)
-                    else Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                    Column(messageModifier) {
-                        item.imagePath?.let { path -> AsyncImage(model = java.io.File(path), contentDescription = "Прикреплённое изображение", contentScale = ContentScale.Crop, modifier = Modifier.size(180.dp).clip(RoundedCornerShape(12.dp))) }
-                        if (item.text.isNotBlank()) Text(item.text, fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = (-0.35).sp, color = FigmaInk)
-                        if (!item.user) Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(item.text)); Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show() }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Rounded.ContentCopy, "Скопировать ответ", modifier = Modifier.size(16.dp), tint = FigmaInk.copy(alpha = .45f))
-                            }
-                            IconButton(onClick = {
-                                val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, item.text)
-                                context.startActivity(Intent.createChooser(intent, "Поделиться ответом"))
-                            }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Rounded.Share, "Поделиться ответом", modifier = Modifier.size(16.dp), tint = FigmaInk.copy(alpha = .45f))
+                    val userMessage = item?.user == true
+                    val waiting = item == null && streamingVisible.isEmpty()
+                    val text = item?.text ?: streamingVisible.ifEmpty { "Думает…" }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (userMessage) Arrangement.End else Arrangement.Start) {
+                        val messageModifier = if (userMessage) Modifier.widthIn(max = 280.dp)
+                            .background(Color(0xFFDEDDE1), RoundedCornerShape(20.dp)).padding(horizontal = 15.dp, vertical = 12.dp)
+                        else Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        Column(messageModifier) {
+                            item?.imagePath?.let { path -> AsyncImage(model = java.io.File(path), contentDescription = "Прикреплённое изображение", contentScale = ContentScale.Crop, modifier = Modifier.size(180.dp).clip(RoundedCornerShape(12.dp))) }
+                            if (text.isNotBlank()) Text(text, fontFamily = SbSansTextRegular, fontSize = 14.sp,
+                                lineHeight = 20.sp, letterSpacing = (-0.35).sp,
+                                color = FigmaInk.copy(alpha = if (waiting) .62f else 1f))
+                            if (item == null) Spacer(Modifier.height(36.dp))
+                            else if (!userMessage) Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                IconButton(onClick = { clipboard.setText(AnnotatedString(text)); Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show() }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Rounded.ContentCopy, "Скопировать ответ", modifier = Modifier.size(16.dp), tint = FigmaInk.copy(alpha = .45f))
+                                }
+                                IconButton(onClick = {
+                                    val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                                    context.startActivity(Intent.createChooser(intent, "Поделиться ответом"))
+                                }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Rounded.Share, "Поделиться ответом", modifier = Modifier.size(16.dp), tint = FigmaInk.copy(alpha = .45f))
+                                }
                             }
                         }
                     }
                 }
-                }
-            }
-            if (streamingVisible.isNotEmpty()) item(key = "streaming_reply") {
-                Text(streamingVisible, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    fontFamily = SbSansTextRegular, fontSize = 14.sp, lineHeight = 20.sp,
-                    letterSpacing = (-0.35).sp, color = FigmaInk)
             }
         }
         }
         val visibleStatus = if (keepHeliosWarm && !heliosReplayReady && status.isBlank()) {
             if (heliosVisible) "Записывает анимацию…" else "Готовит анимацию…"
-        } else if (busy && streamingTarget.isEmpty() && (status.isBlank() || status == "Думает")) "Думает" else status
+        } else status.takeUnless { it == "Думает" }.orEmpty()
         if (!choosingInteraction && visibleStatus.isNotBlank()) {
-            val alpha = if (visibleStatus == "Думает") {
-                val transition = rememberInfiniteTransition(label = "thinking")
-                val opacity by transition.animateFloat(.42f, .78f,
-                    animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "thinking opacity")
-                opacity
-            } else .72f
             Text(visibleStatus, fontFamily = SbSansDisplayMedium, fontSize = 12.sp,
-                color = FigmaInk.copy(alpha = alpha), modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                color = FigmaInk.copy(alpha = .72f), modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         }
         pendingImage?.let { path ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -893,11 +904,14 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                 heliosRequestSerial++
                 userTyping = false
                 typingReactionRequested = false
+                followLatest = true
+                listState.requestScrollToItem(0)
                 draft = ""; pendingImage = null; messages.add(ChatMessage(true, text, selectedImage)); historyStore.write(mascotId, messages)
                 if (selectedImage == null && isCalendarConnectionRequest(text)) {
                     messages.add(ChatMessage(false, "", capabilities = true)); historyStore.write(mascotId, messages); return@send
                 }
                 streamingTarget = ""; streamingVisible = ""
+                pendingReply = true
                 if (usePreparedChatAnimations && hasThinkingClip && availableEmotions.isEmpty() && preparedReactionRequestedAt == null) {
                     preparedReactionRequestedAt = android.os.SystemClock.elapsedRealtime()
                 }
@@ -916,17 +930,19 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                                         if (partial.isNotEmpty() && speakingStartedAt == null) {
                                             speakingStartedAt = android.os.SystemClock.elapsedRealtime()
                                         }
-                                        streamingTarget = partial
-                                        if (status == "Думает") status = ""
+                                        if (partial.startsWith(streamingTarget)) streamingTarget = partial
+                                        if (partial.isNotEmpty() && status == "Думает") status = ""
                                     }
                                 }
                             }
                             val result = answer.await()
-                            result.optString("local_reaction").takeIf { it in availableEmotions }?.let {
-                                preparedEmotion = it
-                            }
+                            val customAnimation = result.optBoolean("custom_animation")
+                            val reaction = result.optString("local_reaction").takeIf { it in availableEmotions }
+                                ?: savedMessageReaction(text, selectedImage != null, availableEmotions).takeUnless { customAnimation }
+                            if (reaction != null) preparedEmotion = reaction
+                            if (!preparedReactionVisible) preparedReactionRequestedAt = null
                             val reply = result.getString("reply")
-                            if (!usePreparedChatAnimations && streamEnabled && result.optBoolean("custom_animation")) launch {
+                            if (!usePreparedChatAnimations && streamEnabled && customAnimation) launch {
                                 try {
                                     val file = HeroLocalStore.current?.baseFile(mascotId) ?: return@launch
                                     val reference = heroReference.read(file)
@@ -961,10 +977,12 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                             speakingUntil = (speakingStartedAt ?: android.os.SystemClock.elapsedRealtime()) + speechDuration
                             android.util.Log.i("MascotPlayback", "speech characters=$characters plannedMs=$speechDuration")
                             streamingTarget = reply
-                            while (streamingVisible != streamingTarget) delay(24)
-                            streamingVisible = ""; streamingTarget = ""
-                            messages.add(ChatMessage(false, reply))
-                            historyStore.write(mascotId, messages)
+                            // Final processing can replace words already shown. Swap that
+                            // reply in place instead of replaying the typewriter from zero.
+                            if (reply.startsWith(streamingVisible)) {
+                                while (streamingVisible != reply) delay(24)
+                            }
+                            commitReply(reply)
                             answered = true
                             if (status == "Думает") status = ""
                             result.optJSONObject("calendar_event")?.let { raw ->
@@ -995,8 +1013,7 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                     catch (e: Exception) {
                         restartingPortrait = false
                         if (!answered && streamingVisible.isNotBlank()) {
-                            messages.add(ChatMessage(false, streamingVisible + "\n\nОтвет прерван."))
-                            historyStore.write(mascotId, messages)
+                            commitReply(streamingVisible + "\n\nОтвет прерван.")
                             answered = true
                         }
                         if (!answered) {
@@ -1009,6 +1026,8 @@ fun MascotChatScreen(mascotId: String, heroName: String, previewUrl: String?, an
                     }
                     finally {
                         busy = false
+                        pendingReply = false
+                        if (!preparedReactionVisible) preparedReactionRequestedAt = null
                         streamingVisible = ""; streamingTarget = ""
                         if (status == "Думает") status = ""
                     }

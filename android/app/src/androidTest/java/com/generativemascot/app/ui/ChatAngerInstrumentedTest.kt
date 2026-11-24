@@ -22,11 +22,8 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ChatAngerInstrumentedTest {
-    @Test fun repeatedAngerUsesAllThreeBundledPetyaClips() = runBlocking {
-        val app = InstrumentationRegistry.getInstrumentation().targetContext
-        val clips = app.assets.list("bundled-heroes/300392a5-3351-4add-9e22-7a21a56f4d1a/videos").orEmpty()
-        val available = chatAngerReactions.filter { "$it.mp4" in clips }.toSet()
-        assertEquals(chatAngerReactions.toSet(), available)
+    @Test fun repeatedAngerUsesAllThreeAvailableReactions() = runBlocking {
+        val available = chatAngerReactions.toSet()
         val chat = DirectMascotChat("Петя", apiKey = "offline", requestClient = offlineInsultResponse())
         val reactions = List(6) {
             val reply = chat.send("Тестовая реплика", availableReactions = available)

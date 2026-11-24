@@ -142,13 +142,13 @@ internal fun CharacterCreationFlow(
             }
         }
     }
-    if (showReferenceNotice) AlertDialog(
-        onDismissRequest = { showReferenceNotice = false },
-        containerColor = Color(0xfff2f2f2), shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-        title = { Text("Фото для персонажа", fontFamily = SbSansDisplayMedium, color = FigmaInk) },
-        text = { Text("Если загружаешь фотографию человека, используй только своё фото. Изображение будет передано сервису генерации. Видеомодель может отклонить даже собственное фото, если распознает реального человека.", fontFamily = SbSansTextRegular, color = FigmaInk) },
-        confirmButton = { TextButton(onClick = { showReferenceNotice = false; referencePicker.launch("image/*") }) { Text("Выбрать изображение", color = FigmaInk) } },
-        dismissButton = { TextButton(onClick = { showReferenceNotice = false }) { Text("Отмена", color = FigmaInk.copy(alpha = .65f)) } },
+    if (showReferenceNotice) MascotConfirmationSheet(
+        title = "Фото для персонажа",
+        message = "Если загружаешь фотографию человека, используй только своё фото. " +
+            "Изображение будет передано сервису генерации. Видеомодель может отклонить фото, если распознает реального человека.",
+        confirmLabel = "Выбрать изображение",
+        onConfirm = { showReferenceNotice = false; referencePicker.launch("image/*") },
+        onDismiss = { showReferenceNotice = false },
     )
     fun navigate(to: CreationPage) {
         if (to != CreationPage.Overview && page == CreationPage.Overview) {

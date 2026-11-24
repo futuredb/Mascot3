@@ -1,8 +1,6 @@
 package com.generativemascot.app.ui
 
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -73,17 +71,17 @@ internal fun MascotPickerCarousel(
             flingBehavior = rememberSnapFlingBehavior(lazyListState = state, snapPosition = SnapPosition.Center),
         ) {
             itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
-                val info = state.layoutInfo
-                val layout = info.visibleItemsInfo.firstOrNull { it.key == item.id }
-                val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-                val itemCenter = layout?.let { it.offset + it.size / 2f } ?: center
-                val halfViewport = ((info.viewportEndOffset - info.viewportStartOffset) / 2f).coerceAtLeast(1f)
-                val distance = ((itemCenter - center) / halfViewport).coerceIn(-1f, 1f)
-                val focus = 1f - abs(distance)
-                val scale by animateFloatAsState(.93f + focus * .07f, tween(90, easing = MascotEase), label = "carousel depth")
                 Box(Modifier.width(width).fillMaxHeight(), contentAlignment = Alignment.Center) {
                     val itemModifier = Modifier.size(if (item.selectable) 58.dp else 54.dp)
                         .graphicsLayer {
+                            val info = state.layoutInfo
+                            val layout = info.visibleItemsInfo.firstOrNull { it.key == item.id }
+                            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                            val itemCenter = layout?.let { it.offset + it.size / 2f } ?: center
+                            val halfViewport = ((info.viewportEndOffset - info.viewportStartOffset) / 2f).coerceAtLeast(1f)
+                            val distance = ((itemCenter - center) / halfViewport).coerceIn(-1f, 1f)
+                            val focus = 1f - abs(distance)
+                            val scale = .93f + focus * .07f
                             scaleX = scale; scaleY = scale
                             translationY = (1f - focus) * 15.dp.toPx()
                             rotationY = -distance * 15f

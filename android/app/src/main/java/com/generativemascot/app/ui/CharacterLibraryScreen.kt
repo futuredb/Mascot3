@@ -2,7 +2,6 @@ package com.generativemascot.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,6 +30,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -135,16 +135,12 @@ fun CharacterLibraryScreen(
                         Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(
-                            hero?.name?.takeIf { it.isNotBlank() }?.uppercase() ?: "ГЕРОЙ",
-                            color = Color.White.copy(alpha = .66f),
-                            fontFamily = RubikBubbles,
-                            fontSize = 46.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            val name = hero?.name?.takeIf { it.isNotBlank() }?.uppercase() ?: "ГЕРОЙ"
+                            Text(name, color = Color.White.copy(alpha = .66f), fontFamily = RubikBubbles,
+                                fontSize = homeHeadingFontSize(name, constraints.maxWidth, 46f, RubikBubbles, FontWeight.Normal),
+                                maxLines = 1, softWrap = false, overflow = TextOverflow.Clip, textAlign = TextAlign.Center)
+                        }
                         AsyncImage(
                             model = resolveMediaUrl(hero?.baseStill ?: hero?.baseFrames?.firstOrNull()),
                             contentDescription = hero?.name ?: "Выбранный герой",
@@ -202,24 +198,20 @@ fun CharacterLibraryScreen(
                     ) {
                         items(heroes.size, key = { heroes[it].id }) { index ->
                             val hero = heroes[index]
-                            val layoutInfo = strip.layoutInfo
-                            val itemInfo = layoutInfo.visibleItemsInfo.firstOrNull { it.key == hero.id }
-                            val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
-                            val itemCenter = itemInfo?.let { it.offset + it.size / 2f } ?: viewportCenter
-                            val halfViewport = ((layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset) / 2f)
-                                .coerceAtLeast(1f)
-                            val distance = ((itemCenter - viewportCenter) / halfViewport).coerceIn(-1f, 1f)
-                            val focus = 1f - abs(distance)
-                            val targetScale = .72f + focus * .28f
-                            val scale by animateFloatAsState(
-                                targetValue = targetScale,
-                                animationSpec = tween(90, easing = MascotEase),
-                                label = "carousel depth",
-                            )
                             val active = hero.id == selected?.id
                             Column(
                                 modifier = Modifier.width(carouselItemWidth).fillMaxHeight()
                                     .graphicsLayer {
+                                        // Only the layer needs to change while the carousel moves.
+                                        val layout = strip.layoutInfo
+                                        val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
+                                        val item = layout.visibleItemsInfo.firstOrNull { it.key == hero.id }
+                                        val itemCenter = item?.let { it.offset + it.size / 2f } ?: center
+                                        val halfViewport = ((layout.viewportEndOffset - layout.viewportStartOffset) / 2f)
+                                            .coerceAtLeast(1f)
+                                        val distance = ((itemCenter - center) / halfViewport).coerceIn(-1f, 1f)
+                                        val focus = 1f - abs(distance)
+                                        val scale = .72f + focus * .28f
                                         scaleX = scale
                                         scaleY = scale
                                         translationY = (1f - focus) * 18.dp.toPx()
@@ -298,20 +290,12 @@ fun CharacterLibraryScreen(
     }
 
     if (confirmNewHero) {
-        AlertDialog(
-            onDismissRequest = { confirmNewHero = false },
-            title = { Text("Создать нового героя?") },
-            text = {
-                Text(
-                    "Это запустит отдельную платную генерацию внешности. Видео-анимации создаются только позже и после отдельного подтверждения.",
-                )
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmNewHero = false }) { Text("Отмена") }
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmNewHero = false; onNewHero() }) { Text("Создать") }
-            },
+        MascotConfirmationSheet(
+            title = "Создать нового героя?",
+            message = "Генерация внешности оплачивается отдельно. Для видеоанимаций потребуется отдельное подтверждение.",
+            confirmLabel = "Создать",
+            onDismiss = { confirmNewHero = false },
+            onConfirm = { confirmNewHero = false; onNewHero() },
         )
     }
 }

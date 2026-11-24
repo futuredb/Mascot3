@@ -42,6 +42,7 @@ import com.generativemascot.app.data.DERIVED_SLEEP_END_MS
 import java.net.URI
 import java.util.WeakHashMap
 import com.generativemascot.app.physics.TiltLighting
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -50,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
 private const val CROSSFADE_MS = 360L
+private const val CHAT_REACTION_BLEND_MS = 180L
 private const val PREPARE_BEFORE_END_MS = 500L
 // Closed sleep clips have matching endpoints: swap on the last frame, not
 // hundreds of milliseconds early. At 24 fps this covers one frame interval.
@@ -77,6 +79,8 @@ private const val BACKGROUND_KEY_SHADER = """
     uniform float greenLow;
     uniform float greenHigh;
     uniform float greenAdaptive;
+
+    $GREEN_MATTE_EDGE_TINT_SHADER
 
     float plateMatteAt(float2 coordinate) {
         float3 rgb = float3(content.eval(coordinate).rgb);
@@ -126,12 +130,17 @@ private const val BACKGROUND_KEY_SHADER = """
         matteAlpha = mix(matteAlpha, smoothstep(0.50, 1.0, matteAlpha * matteAlpha), greenKey);
         float alpha = float(color.a) * matteAlpha;
 
-        // Despill only changes colour; the tighter adaptive matte above is
-        // driven by chroma, never by neighbour erosion, so neutral fine detail
-        // remains intact.
         float3 cleanRgb = float3(color.rgb);
-        float spill = greenKey * greenHue * smoothstep(0.005, 0.08, greenDominance);
-        cleanRgb.g = mix(cleanRgb.g, min(cleanRgb.g, max(cleanRgb.r, cleanRgb.b)), spill);
+        if (alpha <= 0.0) return half4(0.0);
+        float adaptive = greenKey * greenAdaptive;
+        float spill = greenKey * greenHue * mix(smoothstep(0.005, 0.08, greenDominance), 1.0, adaptive);
+        float edgeTint = adaptive * greenHue * greenEdgeTint(cleanRgb.r, cleanRgb.g, cleanRgb.b);
+        // Neutral silhouettes and fine props keep the original matte. Only
+        // pixels that still carry the plate's tint need the neighbor reads.
+        if (edgeTint <= 0.0 || plateAlpha <= 0.72) {
+            cleanRgb.g = mix(cleanRgb.g, min(cleanRgb.g, max(cleanRgb.r, cleanRgb.b)), spill);
+            return half4(half3(cleanRgb) * half(alpha), half(alpha));
+        }
         // Opaque spill cannot be removed by alpha keying. Detect a true
         // silhouette edge by requiring background on one side and confident
         // foreground on the opposite side, then extend the interior colour.
@@ -162,9 +171,10 @@ private const val BACKGROUND_KEY_SHADER = """
             edgeGradient = abs(diagonalUp);
             interiorPoint = coordinate + (diagonalUp > 0.0 ? float2(-edgeStep, edgeStep) : float2(edgeStep, -edgeStep));
         }
-        float edgeRecovery = greenKey * greenAdaptive *
+        float edgeRecovery = edgeTint *
             smoothstep(0.30, 0.80, edgeGradient) * smoothstep(0.72, 0.98, plateAlpha);
         cleanRgb = mix(cleanRgb, float3(content.eval(interiorPoint).rgb), edgeRecovery);
+        cleanRgb.g = mix(cleanRgb.g, min(cleanRgb.g, max(cleanRgb.r, cleanRgb.b)), spill);
         alpha *= 1.0 - edgeRecovery;
         // Preserve transparency already present in ImageView padding. Without
         // this multiplication transparent black pixels become opaque black
@@ -209,6 +219,7 @@ fun SoraMascotVideo(
     onTypingCutReady: (suspend () -> Unit)? = null,
     showNeutralOnStartup: Boolean = false,
     preloadIdleReaction: String? = null,
+    holdStandaloneGreeting: Boolean = true,
 ) {
     val playbackAllowed = playbackEnabled && rememberAppResumed()
     if (videoUrls.isEmpty()) {
@@ -252,13 +263,16 @@ fun SoraMascotVideo(
         }
     }
     val idleAction = defaultHomeVideoAction(normalizedUrls.keys)
+    val singleGreeting = holdStandaloneGreeting && greetingIsOnlyVideo(normalizedUrls.keys)
     var requestedAction by remember(normalizedUrls) {
         mutableStateOf(resolveAvailableHomeAction(action ?: "idle", normalizedUrls.keys))
     }
     var requestSerial by remember(normalizedUrls) { mutableIntStateOf(0) }
+    var explicitGreeting by remember(normalizedUrls) { mutableStateOf(false) }
 
     fun queue(actionName: String) {
         val normalized = HeroLocalStore.normalizeVideoAction(actionName)
+        explicitGreeting = normalized == "greeting"
         requestedAction = if (normalizedUrls.containsKey(normalized)) normalized else idleAction
         requestSerial += 1
         Log.i("MascotPlayback", "queue action=$requestedAction serial=$requestSerial")
@@ -283,7 +297,7 @@ fun SoraMascotVideo(
     val firstFrameCallback by rememberUpdatedState(onFirstFrame)
     val startupErrorCallback by rememberUpdatedState(onPlaybackError)
     val finishedCallback by rememberUpdatedState(onOneShotFinished)
-    val oneShotActions by rememberUpdatedState(playOnceActions)
+    val oneShotActions by rememberUpdatedState(if (singleGreeting) playOnceActions + "greeting" else playOnceActions)
     val oneShotInterrupt by rememberUpdatedState(interruptOneShotForAction)
     val beforeTypingCut by rememberUpdatedState(onTypingCutReady)
     val idleReactionToPreload by rememberUpdatedState(preloadIdleReaction)
@@ -356,10 +370,10 @@ fun SoraMascotVideo(
         },
     )
 
-    LaunchedEffect(players, playerViews, neutralView, normalizedUrls, independentMatteActions, neutralBackgroundKey, neutralMatte) {
-        if (playerViews.size != 2) return@LaunchedEffect
-        if (neutralFrameUrl != null && neutralBackgroundKey == null) return@LaunchedEffect
-        if(Build.VERSION.SDK_INT<33 && neutralFrameUrl!=null && neutralMatte==null)return@LaunchedEffect
+    suspend fun CoroutineScope.playVideo() {
+        if (playerViews.size != 2) return
+        if (neutralFrameUrl != null && neutralBackgroundKey == null) return
+        if (Build.VERSION.SDK_INT < 33 && neutralFrameUrl != null && neutralMatte == null) return
         neutralView?.let { anchor ->
             neutralBackgroundKey?.let { applyBackgroundKey(anchor, it) }
             anchor.alpha = if(Build.VERSION.SDK_INT>=33 || neutralMatte?.bitmap!=null)1f else 0f
@@ -466,18 +480,18 @@ fun SoraMascotVideo(
         prepare(activeIndex, currentAction)
         if (!waitForReady(activeIndex)) {
             if (isActive) startupErrorCallback?.invoke()
-            return@LaunchedEffect
+            return
         }
-        if (!isActive) return@LaunchedEffect
+        if (!isActive) return
         while (isActive && !playbackAllowedState) delay(200)
-        if (!isActive) return@LaunchedEffect
+        if (!isActive) return
         players[activeIndex].play()
         if (!waitForFirstFrame(activeIndex)) {
             players[activeIndex].pause()
             if (isActive) startupErrorCallback?.invoke()
-            return@LaunchedEffect
+            return
         }
-        if (!isActive) return@LaunchedEffect
+        if (!isActive) return
         playerViews[activeIndex].alpha = 1f
         firstFrameCallback?.invoke()
         visibleCallback?.invoke(currentAction)
@@ -507,8 +521,9 @@ fun SoraMascotVideo(
 
             val active = players[activeIndex]
             val inactiveIndex = 1 - activeIndex
-            if (newRequest && queuedAction == currentAction && currentAction == oneShotInterrupt) {
-                beforeTypingCut?.invoke()
+            val replayGreeting = singleGreeting && explicitGreeting && active.playbackState == Player.STATE_ENDED
+            if (newRequest && queuedAction == currentAction && (currentAction == oneShotInterrupt || replayGreeting)) {
+                if (!replayGreeting) beforeTypingCut?.invoke()
                 active.seekTo(0)
                 active.play()
                 queuedAction = null
@@ -532,8 +547,27 @@ fun SoraMascotVideo(
             // regular reaction is queued, let the current pass reach its real
             // final frame instead of cutting it mid-gesture. Typing is the one
             // intentional immediate interruption.
-            if (desiredNext != currentAction && !typingInterrupt) {
-                active.repeatMode = Player.REPEAT_MODE_OFF
+            val nativeLoop = switchActionsPromptly && currentAction !in oneShotActions && desiredNext == currentAction
+            val repeatMode = if (nativeLoop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            if (active.repeatMode != repeatMode) active.repeatMode = repeatMode
+            if (nativeLoop && active.playbackState == Player.STATE_ENDED) {
+                // A queued reaction can disappear before handoff (for example
+                // when a keyboard gesture is cancelled). Resume idle in place.
+                active.seekTo(0)
+                active.play()
+            }
+            val chatPreload = when {
+                !switchActionsPromptly || typingInterrupt -> null
+                desiredNext != currentAction -> desiredNext
+                currentAction in oneShotActions && currentAction != idleAction -> idleAction
+                else -> null
+            }
+            if (chatPreload != null && preparedAction != chatPreload) {
+                // Preparation runs alongside the outgoing clip. A 1080p
+                // decoder and its matte often need more than the final 500 ms.
+                prepare(inactiveIndex, chatPreload)
+                preparedAction = chatPreload
+                if (requestSerial != consumedSerial) continue
             }
 
             val sleepAnchor = minOf(
@@ -740,8 +774,9 @@ fun SoraMascotVideo(
                     preparedAction = null; queuedAction = null; active.seekTo(0); active.play(); delay(250); continue
                 }
                 if (!isActive) break
+                if (requestedAction != desiredNext && requestSerial != consumedSerial) continue
 
-                incoming.seekTo(0)
+                if (incoming.currentPosition != 0L) incoming.seekTo(0)
                 incoming.play()
                 val outgoingView = playerViews[activeIndex]
                 val incomingView = playerViews[inactiveIndex]
@@ -793,10 +828,11 @@ fun SoraMascotVideo(
                     outgoingView.translationZ = 0f
                     incomingView.translationZ = 1f
                     neutralView?.translationZ = 2f
+                    val blendDuration = if (switchActionsPromptly) CHAT_REACTION_BLEND_MS else CROSSFADE_MS
                     repeat(steps) { step ->
                         val blend = (step + 1f) / steps
                         incomingView.alpha = blend
-                        delay(CROSSFADE_MS / steps)
+                        delay(blendDuration / steps)
                     }
                 }
                 active.pause()
@@ -805,7 +841,7 @@ fun SoraMascotVideo(
                 incomingView.alpha = 1f
                 activeIndex = inactiveIndex
                 currentAction = desiredNext
-                if (currentAction !in setOf("greeting", "signature_move")) oneShotBoundaryReportedAt = null
+                oneShotBoundaryReportedAt = null
                 visibleCallback?.invoke(currentAction)
                 Log.i("MascotPlayback", "transition complete current=$currentAction")
                 if (queuedAction == currentAction) queuedAction = null
@@ -815,6 +851,10 @@ fun SoraMascotVideo(
             // clip is far from its boundary, then keep frame-level precision.
             delay(if (remaining > PREPARE_BEFORE_END_MS + 250 && queuedAction == null) 50 else 16)
         }
+    }
+
+    LaunchedEffect(players, playerViews, neutralView, normalizedUrls, independentMatteActions, neutralBackgroundKey, neutralMatte) {
+        withContext(Dispatchers.Main.immediate) { playVideo() }
     }
 
     DisposableEffect(players) {
@@ -880,11 +920,11 @@ internal fun applyBackgroundKey(view: View, keyColor: Int, lighting: VideoLighti
                     fun updateColor(tracks: androidx.media3.common.Tracks) {
                         val formats=tracks.groups.filter { it.type==androidx.media3.common.C.TRACK_TYPE_VIDEO }
                             .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }.map { group.getTrackFormat(it) } }
-                        // Legacy canonical-frame stitching used FFmpeg's default
-                        // BT.601 conversion without a colour tag. Media3's SDR
-                        // effect path assumes BT.709; invert that matrix only
-                        // for untagged clips. Explicit colour metadata is kept.
-                        effect.correctUntaggedBt601=formats.isNotEmpty() && formats.all(::usesUntaggedLegacyMatrix)
+                        // The legacy Android video-effect path needs this
+                        // correction for untagged BT.601 clips. The modern
+                        // decoder already maps their colours correctly.
+                        effect.correctUntaggedBt601 = Build.VERSION.SDK_INT < 33 &&
+                            formats.isNotEmpty() && formats.all(::usesUntaggedLegacyMatrix)
                     }
                     compatibilityColorListeners.remove(player)?.let(player::removeListener)
                     val listener=object:Player.Listener {

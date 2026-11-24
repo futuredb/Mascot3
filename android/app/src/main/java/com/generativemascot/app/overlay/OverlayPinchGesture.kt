@@ -6,8 +6,8 @@ import kotlin.math.hypot
 /** Two-finger scaling for a small overlay, without a screen-sized minimum span. */
 internal class OverlayPinchGesture(
     private val slop: Float,
-    private val onBegin: (Float, Float) -> Boolean,
-    private val onScale: (Float, Float, Float) -> Unit,
+    private val onBegin: () -> Boolean,
+    private val onScale: (Float) -> Unit,
     private val onEnd: () -> Unit,
 ) {
     private var first = -1
@@ -30,9 +30,7 @@ internal class OverlayPinchGesture(
         val a = indices[0]; val b = indices[1]
         first = event.getPointerId(a); second = event.getPointerId(b)
         previousSpan = hypot(event.getX(a) - event.getX(b), event.getY(a) - event.getY(b))
-        val x = (event.getX(a) + event.getX(b)) / 2 + event.rawX - event.x
-        val y = (event.getY(a) + event.getY(b)) / 2 + event.rawY - event.y
-        active = onBegin(x, y)
+        active = onBegin()
     }
 
     fun onTouchEvent(event: MotionEvent) {
@@ -52,14 +50,12 @@ internal class OverlayPinchGesture(
                 val span = hypot(event.getX(a) - event.getX(b), event.getY(a) - event.getY(b))
                 // Avoid a singular scale when the fingertips meet.
                 if (!span.isFinite() || span < slop) return
-                val x = (event.getX(a) + event.getX(b)) / 2 + event.rawX - event.x
-                val y = (event.getY(a) + event.getY(b)) / 2 + event.rawY - event.y
                 // The second finger arms the gesture immediately. Do not throw
                 // away the first inward movement, especially at maximum size.
                 if (!scaling && kotlin.math.abs(span - previousSpan) < slop) return
                 scaling = true
                 if (active && previousSpan > 0f && span != previousSpan) {
-                    onScale(span / previousSpan, x, y)
+                    onScale(span / previousSpan)
                 }
                 previousSpan = span
             }

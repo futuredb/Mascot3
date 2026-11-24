@@ -10,7 +10,10 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.text.TextUtils
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
@@ -19,6 +22,10 @@ import android.widget.TextView
 import kotlin.math.sin
 
 internal fun Context.overlayDp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
+
+private const val OVERLAY_MESSAGE_MAX_LINES = 3
+private const val OVERLAY_MESSAGE_SIZE_SP = 17.5f
+private const val OVERLAY_MESSAGE_COMPACT_SIZE_SP = 15.5f
 
 /** Small transparent window: input is never captured over the rest of the display. */
 internal class OverlayBitmapView(context: Context, private val artwork: OverlayArtwork,
@@ -139,7 +146,8 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
     val tailHeight get() = dp(20)
     private var heroTargetX: Float? = null
     private val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-    private val title = label("", 17.5f, Color.BLACK)
+    private val title = label("", OVERLAY_MESSAGE_SIZE_SP, Color.BLACK)
+    private var measuredTextWidth = 0
     private lateinit var nextButton: TextView
     private val tail = android.graphics.BitmapFactory.decodeResource(resources, com.generativemascot.app.R.drawable.overlay_tail)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -154,8 +162,8 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         title.typeface = resources.getFont(com.generativemascot.app.R.font.sb_sans_display_medium)
         title.gravity = Gravity.CENTER
         title.setLineSpacing(0f, 1f)
-        title.maxLines = 5
-        title.ellipsize = android.text.TextUtils.TruncateAt.END
+        title.maxLines = OVERLAY_MESSAGE_MAX_LINES
+        title.ellipsize = TextUtils.TruncateAt.END
         content.addView(title, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         val actions = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         fun button(text: String, width: Int, action: () -> Unit): TextView {
@@ -191,8 +199,34 @@ private class OverlayHintContent(context: Context, onNext: () -> Unit, onHide: (
         })
     }
     fun setMessage(text: String, hasMore: Boolean) {
-        title.text = text
+        if (title.text != text) {
+            measuredTextWidth = 0
+            title.text = text
+        }
         nextButton.visibility = if (hasMore) VISIBLE else GONE
+    }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val textWidth = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight -
+            content.paddingLeft - content.paddingRight - title.compoundPaddingLeft - title.compoundPaddingRight
+        if (textWidth > 0 && textWidth != measuredTextWidth) {
+            measuredTextWidth = textWidth
+            val regularPaint = TextPaint(title.paint).apply {
+                textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                    OVERLAY_MESSAGE_SIZE_SP, resources.displayMetrics)
+            }
+            val regularLayout = StaticLayout.Builder.obtain(title.text, 0, title.length(), regularPaint, textWidth)
+                .setBreakStrategy(title.breakStrategy)
+                .setHyphenationFrequency(title.hyphenationFrequency)
+                .setMaxLines(OVERLAY_MESSAGE_MAX_LINES)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .build()
+            title.textSize = if (regularLayout.lineCount == OVERLAY_MESSAGE_MAX_LINES) {
+                OVERLAY_MESSAGE_COMPACT_SIZE_SP
+            } else {
+                OVERLAY_MESSAGE_SIZE_SP
+            }
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
     fun pointTowardHero(onLeft: Boolean) { /* The new card is centred below the body. */ }
     fun aimAtHero(x: Float) { if (x.isFinite() && heroTargetX != x) { heroTargetX = x; invalidate() } }

@@ -1,5 +1,6 @@
 package com.generativemascot.app.overlay
 
+import android.graphics.PointF
 import android.graphics.RectF
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -22,6 +23,11 @@ internal class OverlayPlacement(
     private val maxY = floor(area.bottom - bottom).toInt().coerceAtLeast(minY)
 
     fun clamp(x: Int, y: Int) = OverlayPoint(x.coerceIn(minX, maxX), y.coerceIn(minY, maxY))
+
+    fun bodyCenter(point: OverlayPoint) = PointF(point.x + body.centerX(), point.y + body.centerY())
+
+    fun centeredOn(center: PointF) = clamp((center.x - body.centerX()).roundToInt(),
+        (center.y - body.centerY()).roundToInt())
 
     fun restore(x: Float, y: Float): OverlayPoint {
         fun fraction(value: Float) = if (value.isFinite()) value.coerceIn(0f, 1f) else .5f

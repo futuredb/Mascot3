@@ -27,7 +27,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.generativemascot.app.overlay.OverlayPermissionIntro
 import com.generativemascot.app.overlay.OverlayPermissionsDialog
 import androidx.compose.ui.Alignment
@@ -127,7 +126,6 @@ class MainActivity : ComponentActivity() {
                     if (id != null) { vm.clearDeleteHeroError(); deleteHeroId = id }
                 }
                 var showCharacterSettings by rememberSaveable { mutableStateOf(false) }
-                val characterSettingsState = if (showCharacterSettings) rememberSaveableStateHolder() else null
                 val characterStripState = if (showCharacterSettings) rememberLazyListState(
                     initialFirstVisibleItemIndex = liveState.heroLibrary
                         .indexOfFirst { it.id == liveState.mascot?.id }.coerceAtLeast(0),
@@ -304,7 +302,7 @@ class MainActivity : ComponentActivity() {
                                 else -> "Персонаж готов · открыть"
                             }, fontSize = 12.sp, color = Color.White)
                         }
-                        if (characterSettingsState != null && characterStripState != null && mascot != null) characterSettingsState.SaveableStateProvider(mascot.id) {
+                        if (characterStripState != null && mascot != null) {
                             val store = (application as MascotApp).heroStore
                             val openNewHero = {
                                 if (state.greetingPending || state.backgroundCreation) {

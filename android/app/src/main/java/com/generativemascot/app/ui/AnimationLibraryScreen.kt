@@ -149,8 +149,8 @@ fun AnimationLibraryScreen(
     val missingChatActions = remember(progress.readyActions) {
         chatReactionActions.distinct().filterNot(progress.readyActions::contains)
     }
-    val canGenerateChatPack = mascotId != null && onGenerateChatPack != null && sequential &&
-        missingChatActions.isNotEmpty() && !inProgress && !syncing && !greetingRequiresResume
+    val showChatPackAction = onGenerateChatPack != null && sequential && missingChatActions.isNotEmpty()
+    val canGenerateChatPack = mascotId != null && showChatPackAction && !inProgress && !syncing && !greetingRequiresResume
     val canStartIndividualGeneration = canOfferIndividualGeneration && !packReady && !inProgress &&
         !syncing && !greetingRequiresResume
     val visibleActions = galleryActions.filter { action ->
@@ -242,139 +242,134 @@ fun AnimationLibraryScreen(
                     Text(generationError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
                         maxLines = 5, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                 }
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp).clipToBounds(),
-                    contentPadding = PaddingValues(vertical = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp),
-                ) {
-                    if (chatClips.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }, key = "chat-header") {
-                            Text("ИЗ ЧАТА", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
+                val showPackButton = !packReady && mascotId != null
+                val showPackProgress = inProgress || syncing
+                val packButtonHeight = 50.dp
+                val packButtonInset = 24.dp
+                val gridBottomPadding = when {
+                    !showPackButton -> 16.dp
+                    showPackProgress -> 40.dp + packButtonHeight + packButtonInset
+                    else -> 16.dp + packButtonHeight + packButtonInset
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp).clipToBounds(),
+                        contentPadding = PaddingValues(top = 16.dp, bottom = gridBottomPadding),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(24.dp),
+                    ) {
+                        if (chatClips.isNotEmpty()) {
+                            item(span = { GridItemSpan(maxLineSpan) }, key = "chat-header") {
+                                Text("ИЗ ЧАТА", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
+                            }
+                            items(chatClips, key = { "chat-${it.id}" }) { clip ->
+                                Column(Modifier.fillMaxWidth().mascotClickable(onClickLabel = "Посмотреть реакцию из чата") { selectedAction = "chat:${clip.id}" }, horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
+                                        .background(Color.White.copy(alpha = .48f)).border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp))) {
+                                        ActionThumbnail(clip.videoUrl, baseStill, clip.title, Modifier.fillMaxSize().padding(8.dp))
+                                        Icon(Icons.Rounded.PlayArrow, null, tint = FigmaInk.copy(alpha = .70f), modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp))
+                                    }
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(clip.title, fontFamily = SbSansDisplayMedium, fontSize = 13.sp, color = FigmaInk, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            item(span = { GridItemSpan(maxLineSpan) }, key = "actions-header") {
+                                Text("ЭМОЦИИ", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
+                            }
                         }
-                        items(chatClips, key = { "chat-${it.id}" }) { clip ->
-                            Column(Modifier.fillMaxWidth().mascotClickable(onClickLabel = "Посмотреть реакцию из чата") { selectedAction = "chat:${clip.id}" }, horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
-                                    .background(Color.White.copy(alpha = .48f)).border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp))) {
-                                    ActionThumbnail(clip.videoUrl, baseStill, clip.title, Modifier.fillMaxSize().padding(8.dp))
-                                    Icon(Icons.Rounded.PlayArrow, null, tint = FigmaInk.copy(alpha = .70f), modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp))
+                        items(visibleActions, key = { it }) { stateKey ->
+                            val frames = animations[stateKey].orEmpty()
+                            val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS && frames.size <= 1 }
+                            val cardStatus = progress.cardStatus(stateKey, inProgress, syncing, interrupted, sequential, selectedBatch)
+                            val available = stateKey in playableActions
+                            val canGenerate = canStartIndividualGeneration && stateKey !in progress.readyActions
+                            Column(
+                                modifier = Modifier.fillMaxWidth()
+                                    .mascotClickable(
+                                        enabled = available || canGenerate,
+                                        onClickLabel = if (available) "Посмотреть анимацию" else "Создать анимацию",
+                                    ) {
+                                        if (available) selectedAction = stateKey else confirmAction = stateKey
+                                    },
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Box(
+                                    Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
+                                        .background(Color.White.copy(alpha = .48f))
+                                        .border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp)),
+                                ) {
+                                    ActionThumbnail(video, frames.getOrNull(frames.size / 2) ?: baseStill,
+                                        stateTitle(stateKey), Modifier.fillMaxSize().padding(8.dp)
+                                            .alpha(if (available) 1f else if (cardStatus == AnimationCardStatus.WORKING) .65f else .35f))
+                                    if (available || canGenerate) {
+                                        Icon(
+                                            if (available) Icons.Rounded.PlayArrow else Icons.Rounded.Add,
+                                            null, tint = FigmaInk.copy(alpha = .70f),
+                                            modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
+                                                .size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp),
+                                        )
+                                    } else if (cardStatus == AnimationCardStatus.WORKING) {
+                                        CircularProgressIndicator(
+                                            color = FigmaInk.copy(alpha = .65f), strokeWidth = 2.dp,
+                                            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(20.dp),
+                                        )
+                                    }
                                 }
                                 Spacer(Modifier.height(12.dp))
-                                Text(clip.title, fontFamily = SbSansDisplayMedium, fontSize = 13.sp, color = FigmaInk, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                        item(span = { GridItemSpan(maxLineSpan) }, key = "actions-header") {
-                            Text("ЭМОЦИИ", fontFamily = RubikOne, fontSize = 16.sp, color = FigmaInk)
-                        }
-                    }
-                    items(visibleActions, key = { it }) { stateKey ->
-                        val frames = animations[stateKey].orEmpty()
-                        val video = videoUrls[stateKey] ?: legacyVideoUrl?.takeIf { stateKey in LEGACY_PERFORMANCE_ACTIONS && frames.size <= 1 }
-                        val cardStatus = progress.cardStatus(stateKey, inProgress, syncing, interrupted, sequential, selectedBatch)
-                        val available = stateKey in playableActions
-                        val canGenerate = canStartIndividualGeneration && stateKey !in progress.readyActions
-                        Column(
-                            modifier = Modifier.fillMaxWidth()
-                                .mascotClickable(
-                                    enabled = available || canGenerate,
-                                    onClickLabel = if (available) "Посмотреть анимацию" else "Создать анимацию",
-                                ) {
-                                    if (available) selectedAction = stateKey else confirmAction = stateKey
-                                },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Box(
-                                Modifier.fillMaxWidth().aspectRatio(.96f).clip(RoundedCornerShape(32.dp))
-                                    .background(Color.White.copy(alpha = .48f))
-                                    .border(1.dp, Color.White.copy(alpha = .60f), RoundedCornerShape(32.dp)),
-                            ) {
-                                ActionThumbnail(video, frames.getOrNull(frames.size / 2) ?: baseStill,
-                                    stateTitle(stateKey), Modifier.fillMaxSize().padding(8.dp)
-                                        .alpha(if (available) 1f else if (cardStatus == AnimationCardStatus.WORKING) .65f else .35f))
-                                if (available || canGenerate) {
-                                    Icon(
-                                        if (available) Icons.Rounded.PlayArrow else Icons.Rounded.Add,
-                                        null, tint = FigmaInk.copy(alpha = .70f),
-                                        modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
-                                            .size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = .75f)).padding(4.dp),
-                                    )
-                                } else if (cardStatus == AnimationCardStatus.WORKING) {
-                                    CircularProgressIndicator(
-                                        color = FigmaInk.copy(alpha = .65f), strokeWidth = 2.dp,
-                                        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(20.dp),
-                                    )
+                                Text(stateTitle(stateKey), fontFamily = SbSansDisplayMedium, fontSize = 13.sp,
+                                    color = FigmaInk, textAlign = TextAlign.Center)
+                                val status = when (cardStatus) {
+                                    AnimationCardStatus.WORKING -> "В работе…"
+                                    AnimationCardStatus.QUEUED -> "В очереди"
+                                    AnimationCardStatus.PROCESSING -> "Ожидаем результат"
+                                    AnimationCardStatus.SAVING -> "Сохраняется…"
+                                    AnimationCardStatus.PAUSED -> "Ожидает продолжения"
+                                    else -> null
                                 }
+                                if (status != null) Text(status, color = FigmaInk.copy(alpha = .52f),
+                                    fontSize = 11.sp, textAlign = TextAlign.Center)
                             }
-                            Spacer(Modifier.height(12.dp))
-                            Text(stateTitle(stateKey), fontFamily = SbSansDisplayMedium, fontSize = 13.sp,
-                                color = FigmaInk, textAlign = TextAlign.Center)
-                            val status = when (cardStatus) {
-                                AnimationCardStatus.WORKING -> "В работе…"
-                                AnimationCardStatus.QUEUED -> "В очереди"
-                                AnimationCardStatus.PROCESSING -> "Ожидаем результат"
-                                AnimationCardStatus.SAVING -> "Сохраняется…"
-                                AnimationCardStatus.PAUSED -> "Ожидает продолжения"
-                                else -> null
-                            }
-                            if (status != null) Text(status, color = FigmaInk.copy(alpha = .52f),
-                                fontSize = 11.sp, textAlign = TextAlign.Center)
                         }
                     }
-                }
-                if (!packReady && mascotId != null) {
-                    if (inProgress || syncing) {
-                        Text(when {
-                            repairingAction != null -> "Восстанавливаем анимацию"
-                            syncing -> "Сохраняем анимации"
-                            else -> "Создаём анимации"
-                        },
-                            color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center)
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    Button(
-                        onClick = {
-                            if (greetingRequiresResume) onResumeGreeting() else {
-                                selectedCount = defaultAnimationBatchSize(progress.remainingCount)
-                                confirmPack = true
-                            }
-                        }, enabled = !inProgress && !syncing && progress.remainingCount > 0,
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
-                        contentPadding = PaddingValues(horizontal = 28.dp),
-                        modifier = Modifier.widthIn(max = 320.dp).height(50.dp),
+                    if (showPackButton) Column(
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = packButtonInset),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(
-                            when {
-                                greetingRequiresResume -> "Продолжить приветствие"
+                        if (showPackProgress) {
+                            Text(when {
                                 repairingAction != null -> "Восстанавливаем анимацию"
-                                inProgress -> "Создаём анимации"
                                 syncing -> "Сохраняем анимации"
-                                interrupted -> "Продолжить"
-                                else -> "Оживить персонажа"
-                            }.uppercase(),
-                            fontFamily = SbSansDisplayBold, fontWeight = FontWeight.Bold, fontSize = 13.4.sp,
-                        )
-                    }
-                    if (onGenerateChatPack != null && sequential) {
-                        Spacer(Modifier.height(10.dp))
-                        OutlinedButton(
-                            onClick = { confirmChatPack = true },
-                            enabled = canGenerateChatPack,
+                                else -> "Создаём анимации"
+                            },
+                                color = FigmaInk.copy(alpha = .52f), fontSize = 11.sp, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        Button(
+                            onClick = {
+                                if (greetingRequiresResume) onResumeGreeting() else {
+                                    selectedCount = defaultAnimationBatchSize(progress.remainingCount)
+                                    confirmPack = true
+                                }
+                            }, enabled = !inProgress && !syncing && progress.remainingCount > 0,
                             shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            modifier = Modifier.widthIn(max = 320.dp).height(48.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = FigmaInk),
+                            contentPadding = PaddingValues(horizontal = 28.dp),
+                            modifier = Modifier.widthIn(max = 320.dp).height(packButtonHeight),
                         ) {
                             Text(
-                                if (missingChatActions.isEmpty()) "ЧАТ-АНИМАЦИИ ГОТОВЫ"
-                                else "СОЗДАТЬ ВСЕ ДЛЯ ЧАТА · ${missingChatActions.size}",
-                                fontFamily = SbSansDisplayBold,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.5.sp,
+                                when {
+                                    greetingRequiresResume -> "Продолжить приветствие"
+                                    repairingAction != null -> "Восстанавливаем анимацию"
+                                    inProgress -> "Создаём анимации"
+                                    syncing -> "Сохраняем анимации"
+                                    interrupted -> "Продолжить"
+                                    else -> "Оживить персонажа"
+                                }.uppercase(),
+                                fontFamily = SbSansDisplayBold, fontWeight = FontWeight.Bold, fontSize = 13.4.sp,
                             )
                         }
                     }
-                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
@@ -382,11 +377,14 @@ fun AnimationLibraryScreen(
     if (confirmChatPack && missingChatActions.isNotEmpty()) {
         MascotConfirmationSheet(
             title = "Все анимации для чата",
-            message = "Создать ${missingChatActions.size} недостающих реакций? Генерация платная. " +
-                "Готовые ролики будут пропущены, а сохранённые задания продолжатся без повторной отправки.",
+            message = "Создать ${missingChatActions.size} недостающих реакций?",
             confirmLabel = "Создать · ${missingChatActions.size}",
             enabled = canGenerateChatPack,
-            onDismiss = { confirmChatPack = false },
+            dismissLabel = "Назад",
+            onDismiss = {
+                confirmChatPack = false
+                confirmPack = progress.remainingCount > 0 && !inProgress && !syncing
+            },
             onConfirm = {
                 confirmChatPack = false
                 onGenerateChatPack?.invoke()
@@ -400,22 +398,21 @@ fun AnimationLibraryScreen(
             )
         } == true
         if (repairable) {
-            AlertDialog(
-                onDismissRequest = { confirmAction = null },
-                title = { Text(stateTitle(action)) },
-                text = { Text("Попробовать восстановить плавный стык сохранённого ролика? Восстановление выполняется на телефоне. Создание нового ролика платное.") },
-                dismissButton = { TextButton(onClick = { confirmAction = null }) { Text("Отмена") } },
-                confirmButton = {
-                    Column(horizontalAlignment = Alignment.End) {
-                        TextButton(onClick = {
-                            confirmAction = null
-                            onRepairAction?.invoke(action)
-                        }, enabled = canStartIndividualGeneration) { Text("Восстановить") }
-                        TextButton(onClick = {
-                            confirmAction = null
-                            onGenerateAction?.invoke(action)
-                        }, enabled = canStartIndividualGeneration) { Text("Создать заново · 1") }
-                    }
+            MascotConfirmationSheet(
+                title = stateTitle(action),
+                message = "Попробовать восстановить плавный стык сохранённого ролика? " +
+                    "Восстановление выполняется на телефоне. Создание нового ролика платное.",
+                confirmLabel = "Восстановить",
+                enabled = canStartIndividualGeneration,
+                onDismiss = { confirmAction = null },
+                onConfirm = {
+                    confirmAction = null
+                    onRepairAction?.invoke(action)
+                },
+                alternativeLabel = "Создать заново · 1",
+                onAlternative = {
+                    confirmAction = null
+                    onGenerateAction?.invoke(action)
                 },
             )
         } else {
@@ -433,40 +430,33 @@ fun AnimationLibraryScreen(
         }
     }
     if (confirmPack && progress.remainingCount > 0) {
-        AlertDialog(
-            onDismissRequest = { confirmPack = false },
-            title = { Text("Сколько анимаций создать?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Выберите количество анимаций для создания")
-                    Text("$selectedCount", style = MaterialTheme.typography.headlineLarge,
-                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    if (progress.remainingCount > 1) {
-                        Slider(value = selectedCount.toFloat(),
-                            onValueChange = { selectedCount = it.roundToInt().coerceIn(1, progress.remainingCount) },
-                            valueRange = 1f..progress.remainingCount.toFloat(),
-                            steps = (progress.remainingCount - 2).coerceAtLeast(0))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            TextButton(onClick = { selectedCount = defaultAnimationBatchSize(progress.remainingCount) }) {
-                                Text("По умолчанию · ${defaultAnimationBatchSize(progress.remainingCount)}")
-                            }
-                            TextButton(onClick = { selectedCount = progress.remainingCount }) {
-                                Text("Все · ${progress.remainingCount}")
-                            }
-                        }
-                    }
-                    Text("Каждый ролик — 6–8 секунд платной генерации. " +
-                        "Готовые ролики пропустим, сохранённые задания продолжим. " +
-                        "После выбранного количества остановимся. Результаты сохраняются по одному.")
-                }
-            },
-            dismissButton = { TextButton(onClick = { confirmPack = false }) { Text("Отмена") } },
-            confirmButton = {
-                TextButton(onClick = { confirmPack = false; onComplete(selectedCount) }, enabled = !inProgress && !syncing) {
-                    Text("${if (interrupted) "Продолжить" else "Создать"} · $selectedCount")
-                }
-            },
-        )
+        val count = selectedCount.coerceIn(1, progress.remainingCount)
+        MascotModalSheet("Сколько анимаций создать?", onDismiss = { confirmPack = false }) {
+            Text("$count из ${progress.remainingCount}", fontFamily = SbSansDisplayMedium,
+                fontSize = 32.sp, color = FigmaInk, textAlign = TextAlign.Center)
+            if (progress.remainingCount > 1) {
+                Slider(
+                    value = count.toFloat(),
+                    onValueChange = { selectedCount = it.roundToInt() },
+                    valueRange = 1f..progress.remainingCount.toFloat(),
+                    steps = (progress.remainingCount - 2).coerceAtLeast(0),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            if (showChatPackAction) {
+                MascotSheetAction("Создать все для чата · ${missingChatActions.size}", onClick = {
+                    confirmPack = false
+                    confirmChatPack = true
+                }, enabled = canGenerateChatPack)
+                Spacer(Modifier.height(8.dp))
+            }
+            MascotSheetAction("${if (interrupted) "Продолжить" else "Создать"} · $count",
+                onClick = { confirmPack = false; onComplete(count) }, enabled = !inProgress && !syncing,
+                secondary = showChatPackAction)
+            Spacer(Modifier.height(8.dp))
+            MascotSheetAction("Отмена", onClick = { confirmPack = false }, secondary = true)
+        }
     }
 }
 
@@ -623,7 +613,8 @@ private fun ActionDetail(
                         lighting = phoneInteraction.lighting, modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })
                     play && selected.videoUrl != null -> SoraMascotVideo(
                         videoUrls = mapOf(selected.action to selected.videoUrl), neutralFrameUrl = neutralFrameUrl,
-                        action = selected.action, lighting = phoneInteraction.lighting, modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })
+                        action = selected.action, lighting = phoneInteraction.lighting, modifier = Modifier.fillMaxSize(),
+                        onFirstFrame = { frameVisible = true }, holdStandaloneGreeting = false)
                     play && legacyVideoUrl != null && selected.action in LEGACY_PERFORMANCE_ACTIONS -> SoraMascotVideo(
                         videoUrl = legacyVideoUrl, action = selected.action, lighting = phoneInteraction.lighting,
                         modifier = Modifier.fillMaxSize(), onFirstFrame = { frameVisible = true })

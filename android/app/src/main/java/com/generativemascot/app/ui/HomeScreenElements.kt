@@ -19,10 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +54,7 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,17 +80,23 @@ internal fun HomeFigmaIcon(asset: String, description: String?, modifier: Modifi
 }
 
 @Composable
-internal fun homeHeadingFontSize(text: String, availableWidth: Int, maxSize: Float = 70f): androidx.compose.ui.unit.TextUnit {
+internal fun homeHeadingFontSize(
+    text: String,
+    availableWidth: Int,
+    maxSize: Float = 70f,
+    fontFamily: FontFamily = SbSansDisplayExtendedSemibold,
+    fontWeight: FontWeight = FontWeight.SemiBold,
+): androidx.compose.ui.unit.TextUnit {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    return remember(text, availableWidth, maxSize, density.fontScale, density.density) {
+    return remember(text, availableWidth, maxSize, fontFamily, fontWeight, density.fontScale, density.density) {
         val annotated = AnnotatedString(text)
         var low = 1f
         var high = maxSize
         repeat(12) {
             val candidate = (low + high) / 2f
             val width = measurer.measure(annotated, style = TextStyle(
-                fontFamily = SbSansDisplayExtendedSemibold, fontWeight = FontWeight.SemiBold,
+                fontFamily = fontFamily, fontWeight = fontWeight,
                 fontSize = candidate.sp), maxLines = 1, softWrap = false).size.width
             if (width <= availableWidth - with(density) { 8.dp.toPx() }) low = candidate else high = candidate
         }

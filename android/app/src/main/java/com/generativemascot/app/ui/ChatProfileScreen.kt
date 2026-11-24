@@ -1,12 +1,6 @@
 package com.generativemascot.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,7 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,22 +35,20 @@ internal fun ChatProfileScreen(mascotId: String, heroName: String, previewUrl: S
     val file = remember(mascotId) { HeroLocalStore.current?.baseFile(mascotId) }
     val palette = heroPalette(previewUrl)
     MascotSystemBars(palette.top, palette.end)
-    val motion = rememberInfiniteTransition(label = "profile mascot")
-    val shift by motion.animateFloat(initialValue = 0f, targetValue = 0f,
-        animationSpec = infiniteRepeatable(animation = keyframes {
-            durationMillis = 2000
-            0f at 0 using androidx.compose.animation.core.FastOutSlowInEasing
-            -5.625f at 1600 using androidx.compose.animation.core.FastOutSlowInEasing
-            0f at 2000
-        }, repeatMode = RepeatMode.Restart), label = "profile float")
+    val shift = rememberMascotPortraitBob()
     BoxWithConstraints(Modifier.fillMaxSize().background(heroGradient(palette)).safeDrawingPadding()) {
         val height = maxHeight
-        Text(heroName.uppercase(), modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).align(Alignment.TopCenter).offset(y = height * .095f),
-            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            fontFamily = RubikOne, fontSize = 64.sp, color = Color.White.copy(alpha = .36f))
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+            .align(Alignment.TopCenter).offset(y = height * .095f), contentAlignment = Alignment.Center) {
+            val heading = heroName.uppercase()
+            Text(heading, textAlign = TextAlign.Center, maxLines = 1, softWrap = false,
+                overflow = TextOverflow.Clip, fontFamily = RubikOne,
+                fontSize = homeHeadingFontSize(heading, constraints.maxWidth, 64f, RubikOne, FontWeight.Normal),
+                color = Color.White.copy(alpha = .36f))
+        }
         AsyncImage(model = file ?: previewUrl, contentDescription = heroName, contentScale = ContentScale.Fit,
-            modifier = Modifier.align(Alignment.TopCenter).offset(y = height * .24f + shift.dp)
-                .fillMaxWidth(.86f).height(height * .43f))
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = height * .24f)
+                .fillMaxWidth(.86f).height(height * .43f).graphicsLayer { translationY = shift.value.dp.toPx() })
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 36.dp).padding(bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp))

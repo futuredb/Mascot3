@@ -83,6 +83,8 @@ class OverlayTest {
     }
     private val context get() = RuntimeEnvironment.getApplication()
     private val heroId = "9f226b89-df35-4d3a-9b36-96c28ea1bb62"
+    private val longOverlayReply = "Давай сделаем небольшую паузу. Отложи всё на минуту, сделай глубокий вдох " +
+        "и выбери одно простое дело, с которого тебе будет удобно начать. Остальное подождёт."
 
     private fun savedHero(id: String = heroId): File {
         val folder = File(context.filesDir, "hero/$id").apply { mkdirs() }
@@ -1002,7 +1004,8 @@ class OverlayTest {
             }
             shadowOf(Looper.getMainLooper()).idle()
             assertTrue(MascotOverlayService.status.value.running)
-            val hero = field("hero") as View
+            val hero = field("hero") as OverlayHeroView
+            val host = field("heroWindow") as OverlayHeroWindow
             val card = field("bubble") as View
             fun player() = hero.javaClass.getDeclaredField("player").apply { isAccessible = true }.get(hero)
             val originalPlayer = player()
@@ -1010,6 +1013,18 @@ class OverlayTest {
             var taps = 0; var holds = 0
             hero.setOnClickListener { taps++ }; hero.setOnLongClickListener { holds++; true }
             fun params() = hero.layoutParams as WindowManager.LayoutParams
+            fun visibleCenter() = params().let { p ->
+                hero.hintBounds(p.width, p.height, transformed = false).apply { offset(p.x.toFloat(), p.y.toFloat()) }
+            }.let { PointF(it.centerX(), it.centerY()) }
+            fun windowBounds(view: View) = (view.layoutParams as WindowManager.LayoutParams).let { p ->
+                Rect(p.x, p.y, p.x + p.width, p.y + p.height)
+            }
+            fun previewCenter(): PointF {
+                val viewport = windowBounds(host)
+                val body = hero.hintBounds(hero.width, hero.height, transformed = false)
+                return PointF(viewport.left + hero.x + body.centerX() * hero.scaleX,
+                    viewport.top + hero.y + body.centerY() * hero.scaleY)
+            }
             val initialWidth = params().width
             // Keep both pointers in this small overlay, even when the second is outside it.
             assertEquals(0, params().flags and WindowManager.LayoutParams.FLAG_SPLIT_TOUCH)
@@ -1025,38 +1040,55 @@ class OverlayTest {
                 }.toTypedArray()
                 val event = MotionEvent.obtain(0, time, action, pointers.size, properties, coordinates,
                     0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
-                // Window-local coordinates change during a pinch; raw screen coordinates must not.
+                // Deliver window-local events even as the reply card follows the hero.
                 val origin = touchTarget.layoutParams as WindowManager.LayoutParams
                 event.offsetLocation(-origin.x.toFloat(), -origin.y.toFloat())
                 touchTarget.dispatchTouchEvent(event); event.recycle()
-                shadowOf(Looper.getMainLooper()).idle()
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20))
             }
             touch(MotionEvent.ACTION_DOWN, 4 to (40f to 450f))
             touch(MotionEvent.ACTION_MOVE, 4 to (145f to 380f))
             touch(MotionEvent.ACTION_UP, 4 to (145f to 380f))
-            val centerX = params().x + params().width / 2f
-            val centerY = params().y + params().height / 2f
+            val originalCenter = visibleCenter()
+            val centerX = originalCenter.x
+            val centerY = originalCenter.y
+            fun assertCentered(center: PointF = previewCenter()) {
+                assertEquals(centerX, center.x, 1f)
+                assertEquals(centerY, center.y, 1f)
+            }
             val upSecond = MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
             val downSecond = MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
-            fun pairTouch(action: Int, span: Float) = touch(action,
-                4 to (centerX to centerY - span / 2), 9 to (centerX to centerY + span / 2))
+            fun pairTouch(action: Int, span: Float, dx: Float = 0f, dy: Float = 0f) = touch(action,
+                4 to (centerX + dx to centerY + dy - span / 2), 9 to (centerX + dx to centerY + dy + span / 2))
             touch(MotionEvent.ACTION_DOWN, 4 to (centerX to centerY - 50))
             pairTouch(downSecond, 100f)
-            pairTouch(MotionEvent.ACTION_MOVE, 110f) // The first movement already resizes.
-            pairTouch(MotionEvent.ACTION_MOVE, 117f)
-            val enlarged = params().width
-            assertTrue("Pinch width: $enlarged", enlarged > initialWidth && enlarged < initialWidth * 1.5f)
-            assertEquals(centerX, params().x + params().width / 2f, 1f)
-            assertEquals(centerY, params().y + params().height / 2f, 1f)
+            pairTouch(MotionEvent.ACTION_MOVE, 110f, dx = -55f, dy = 90f)
+            val viewport = windowBounds(host)
+            val videoLayout = hero.width to hero.height
+            val cardBounds = windowBounds(card)
+            val intermediate = hero.scaleX
+            assertTrue(intermediate > 1f)
+            assertCentered()
+            pairTouch(MotionEvent.ACTION_MOVE, 117f, dx = 45f, dy = -80f)
+            val enlarged = (hero.scaleX * initialWidth).roundToInt()
+            assertTrue(hero.scaleX > intermediate && hero.scaleX < 1.5f)
+            assertEquals(viewport, windowBounds(host))
+            assertEquals(videoLayout, hero.width to hero.height)
+            assertEquals(cardBounds, windowBounds(card))
+            assertEquals(initialWidth, params().width)
+            assertCentered()
             assertSame(originalPlayer, player())
             assertTrue(card.isAttachedToWindow)
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ViewConfiguration.getLongPressTimeout() + 1L))
             assertEquals(0, holds)
             pairTouch(upSecond, 117f)
-            val afterPinch = field("position")
             touch(MotionEvent.ACTION_MOVE, 4 to (centerX + 100 to centerY))
+            assertEquals(viewport, windowBounds(host))
+            assertCentered()
             touch(MotionEvent.ACTION_UP, 4 to (centerX + 100 to centerY))
-            assertEquals(afterPinch, field("position")); assertEquals(0, taps)
+            assertEquals(0, taps)
+            assertCentered(visibleCenter())
+            assertEquals(1f, hero.scaleX, 0f)
             val saved = OverlaySize.read(context)
             assertTrue(saved in 1.01f..1.20f)
             assertTrue(kotlin.math.abs(saved - OverlaySize.normalize(saved)) > .001f) // No 5% stepping.
@@ -1067,14 +1099,22 @@ class OverlayTest {
             assertEquals(1, taps)
 
             touchTarget = card
-            val cardWidthBefore = (card.layoutParams as WindowManager.LayoutParams).width
-            touch(MotionEvent.ACTION_DOWN, 4 to (centerX to centerY - 90))
-            pairTouch(downSecond, 180f)
-            pairTouch(MotionEvent.ACTION_MOVE, 140f)
-            pairTouch(MotionEvent.ACTION_MOVE, 60f)
-            pairTouch(upSecond, 60f)
+            val cardBefore = windowBounds(card)
+            touch(MotionEvent.ACTION_DOWN, 4 to (centerX to centerY + 110))
+            pairTouch(downSecond, 180f, dy = 200f)
+            pairTouch(MotionEvent.ACTION_MOVE, 140f, dx = 60f, dy = 230f)
+            val shrinkViewport = windowBounds(host)
+            val shrinkScale = hero.scaleX
+            assertCentered()
+            pairTouch(MotionEvent.ACTION_MOVE, 60f, dx = -70f, dy = 170f)
+            assertTrue(hero.scaleX < shrinkScale)
+            assertEquals(shrinkViewport, windowBounds(host))
+            assertEquals(cardBefore, windowBounds(card))
+            assertCentered()
+            pairTouch(upSecond, 60f, dx = -70f, dy = 170f)
             touch(MotionEvent.ACTION_UP, 4 to (centerX to centerY - 30))
-            assertEquals(cardWidthBefore, (card.layoutParams as WindowManager.LayoutParams).width)
+            assertEquals(cardBefore.width(), windowBounds(card).width())
+            assertCentered(visibleCenter())
             touchTarget = hero
             assertEquals(.7f, OverlaySize.read(context))
             assertEquals(initialWidth * .7f, params().width.toFloat(), 1f)
@@ -1272,7 +1312,7 @@ class OverlayTest {
     @Test fun pinchTracksPointerIdsAndRebasesAfterFingerReplacement() {
         val factors = mutableListOf<Float>()
         var ends = 0
-        val gesture = OverlayPinchGesture(8f, { _, _ -> true }, { factor, _, _ -> factors += factor }, { ends++ })
+        val gesture = OverlayPinchGesture(8f, { true }, { factor -> factors += factor }, { ends++ })
         fun touch(action: Int, vararg pointers: Pair<Int, Float>) {
             val properties = pointers.map { (id, _) ->
                 MotionEvent.PointerProperties().apply { this.id = id; toolType = MotionEvent.TOOL_TYPE_FINGER }
@@ -1313,7 +1353,7 @@ class OverlayTest {
 
     @Test fun pinchIgnoresSmallAccidentalChangesBeforeScaling() {
         val factors = mutableListOf<Float>()
-        val gesture = OverlayPinchGesture(8f, { _, _ -> true }, { factor, _, _ -> factors += factor }, {})
+        val gesture = OverlayPinchGesture(8f, { true }, { factor -> factors += factor }, {})
         fun touch(action: Int, x: Float, y: Float) {
             val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0 }, MotionEvent.PointerProperties().apply { id = 1 })
             val coords = arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = 0f }, MotionEvent.PointerCoords().apply { this.x = y; this.y = 0f })
@@ -1614,6 +1654,31 @@ class OverlayTest {
         }
     }
 
+    @Test fun longOverlayReplyUsesSmallerTextAndEllipsizesTheThirdLine() {
+        val card = OverlayHintView(context, {}, {})
+        fun showReply(reply: String): TextView {
+            card.setMessage(reply, hasMore = true)
+            card.measure(View.MeasureSpec.makeMeasureSpec(248, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.AT_MOST))
+            card.layout(0, 0, card.measuredWidth, card.measuredHeight)
+            val matches = arrayListOf<View>()
+            card.findViewsWithText(matches, reply, View.FIND_VIEWS_WITH_TEXT)
+            return matches.filterIsInstance<TextView>().single()
+        }
+
+        val shortReply = "Давай выдохнем"
+        val regularSize = showReply(shortReply).textSize
+        val longReply = showReply(longOverlayReply)
+        assertTrue(longReply.textSize < regularSize)
+        assertEquals(3, longReply.lineCount)
+        assertTrue(longReply.layout.getEllipsisCount(2) > 0)
+        assertEquals(longOverlayReply, longReply.text.toString())
+        val restored = showReply(shortReply)
+        assertEquals(regularSize, restored.textSize, 0f)
+        assertEquals(1, restored.lineCount)
+        assertEquals(0, restored.layout.getEllipsisCount(0))
+    }
+
     @Test fun wideVideoEdgesRemainVisibleOutsideTheNeutralSilhouetteAndAtMaximumTilt() {
         listOf(300 to 180, 180 to 300, 240 to 240).forEach { (w, h) ->
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -1861,7 +1926,7 @@ class OverlayTest {
         val compactBackdrop = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         Canvas(compactBackdrop).apply { translate(heroPos.x.toFloat(), heroPos.y.toFloat()); hero.draw(this) }
         canvas.save(); canvas.translate(heroPos.x.toFloat(), heroPos.y.toFloat()); hero.draw(canvas); canvas.restore()
-        val card = OverlayHintView(context, {}, {})
+        val card = OverlayHintView(context, {}, {}).apply { setMessage(longOverlayReply, hasMore = true) }
         val visible = hero.hintBounds(size.width, size.height)
         val anchor = OverlayPoint(heroPos.x + visible.left.roundToInt(), heroPos.y)
         val visibleWidth = visible.width().roundToInt().coerceAtLeast(1)

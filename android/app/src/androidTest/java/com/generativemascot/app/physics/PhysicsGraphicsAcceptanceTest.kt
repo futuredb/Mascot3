@@ -134,14 +134,17 @@ class PhysicsGraphicsAcceptanceTest {
         compose.waitUntil(15000) { control.frames.get() >= 10 }
         capture(view, "motion-neutral")
         val roll = kotlin.math.sin(Math.toRadians(5.0)).toFloat()
+        val reference = PhysicsSolver(pack.pack)
+        repeat(120) { reference.advance(1.0 / 120, 0f, 0f, gravityX = roll) }
+        val expectedLean = reference.leanAngle
+        assertTrue("A five-degree input must move the body", expectedLean > 0f)
+        val leanTolerance = expectedLean * .2f
         for (i in 1..60) { control.input = PhoneSample(gravityX = roll * i / 60); SystemClock.sleep(16) }
-        SystemClock.sleep(500)
+        compose.waitUntil(2500) { abs(control.lean - expectedLean) <= leanTolerance }
         capture(view, "motion-roll-positive-5deg")
-        assertTrue(control.lean > Math.toRadians(5.0))
         for (i in 1..120) { control.input = PhoneSample(gravityX = roll * (1f - i / 60f)); SystemClock.sleep(16) }
-        SystemClock.sleep(500)
+        compose.waitUntil(2500) { abs(control.lean + expectedLean) <= leanTolerance }
         capture(view, "motion-roll-negative-5deg")
-        assertTrue(control.lean < -Math.toRadians(5.0))
         control.input = PhoneSample(tiltY = .09f)
         SystemClock.sleep(700); capture(view, "motion-pitch")
         control.input = PhoneSample(accelerationX = 9f, accelerationY = -7f)

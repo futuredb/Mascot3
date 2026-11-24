@@ -9,14 +9,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.HorizontalDivider
@@ -163,11 +161,7 @@ internal fun ChatInteractionScreen(selectedIndex: Int,
                         fontFamily = SbSansTextMedium, fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
                 }
                 Spacer(Modifier.width(12.dp))
-                Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
-                    .background(if (streamChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
-                    contentAlignment = if (streamChoice) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
-                }
+                MascotSwitchTrack(streamChoice)
             }
             if (!com.generativemascot.app.BuildConfig.USE_OMNI) {
                 HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color.Black.copy(alpha = .08f))
@@ -179,20 +173,16 @@ internal fun ChatInteractionScreen(selectedIndex: Int,
                             fontSize = 12.sp, lineHeight = 16.sp, color = FigmaInk.copy(alpha = .55f))
                     }
                     Spacer(Modifier.width(12.dp))
-                    Box(Modifier.size(width = 46.dp, height = 20.dp).clip(RoundedCornerShape(50))
-                        .background(if (overlayStreamChoice) Color.Black else Color(0xFFB3B3B6)).padding(2.dp),
-                        contentAlignment = if (overlayStreamChoice) Alignment.CenterEnd else Alignment.CenterStart) {
-                        Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(50)).background(Color.White))
-                    }
+                    MascotSwitchTrack(overlayStreamChoice)
                 }
             }
             Spacer(Modifier.height(110.dp))
         }
         MascotSettingsHeader("Поведение и доступы", onBack = onBack,
             modifier = Modifier.align(Alignment.TopCenter).background(FigmaCanvas))
-        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 33.dp).clip(CircleShape).background(FigmaInk)
-            .clickable { onSave(choice, overlayStreamChoice, streamChoice) }.padding(horizontal = 28.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
-            Text("СОХРАНИТЬ", fontFamily = SbSansDisplayMedium, fontSize = 13.4.sp, color = Color.White)
-        }
+        CommunicationSaveButton(
+            onClick = { onSave(choice, overlayStreamChoice, streamChoice) },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 33.dp),
+        )
     }
 }

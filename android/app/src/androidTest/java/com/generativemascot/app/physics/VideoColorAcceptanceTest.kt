@@ -23,7 +23,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.test.platform.app.InstrumentationRegistry
 import com.generativemascot.app.data.BundledHeroImporter
-import com.generativemascot.app.ui.VideoBackgroundKey
 import com.generativemascot.app.ui.keyBitmap
 import com.generativemascot.app.ui.applyBackgroundKey
 import com.generativemascot.app.R
@@ -60,8 +59,7 @@ class VideoColorAcceptanceTest {
                         val player=builder.build()
                         view.tag=player
                         view.player=player
-                        if(pass==1)applyBackgroundKey(view,Color.GREEN)
-                        else player.setVideoEffects(listOf(VideoBackgroundKey(Color.GREEN)))
+                        applyBackgroundKey(view, Color.GREEN, forceVideoEffect = pass == 0)
                         player.addListener(object:Player.Listener { override fun onRenderedFirstFrame() { ready[pass].set(true) } })
                         player.setMediaItem(MediaItem.fromUri(File(hero,"greeting.mp4").toURI().toString()))
                         player.prepare()
@@ -103,8 +101,7 @@ class VideoColorAcceptanceTest {
             }
         }
         anchor.recycle()
-        File(out,"video-color-result.json").writeText("""{"default_rgb_mae":${errors[0]},"explicit_bt601_rgb_mae":${errors[1]}}""")
-        assertTrue("Colour correction did not improve: $errors",errors[1]<errors[0]*.75)
-        assertTrue("Video and anchor colours differ: $errors",errors[1]<8.0)
+        File(out,"video-color-result.json").writeText("""{"video_effect_rgb_mae":${errors[0]},"platform_rgb_mae":${errors[1]}}""")
+        assertTrue("Video and anchor colours differ: $errors", errors.all { it < 8.0 })
     }
 }

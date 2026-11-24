@@ -87,7 +87,7 @@ internal val chatAngerReactions = listOf("offended", "annoyed", "angry")
 
 internal fun chatMoodActions(change: String): List<String> = when (change) {
     "insult" -> listOf("annoyed", "angry", "offended", "sad")
-    "upset" -> listOf("sad", "worried")
+    "upset" -> listOf("sad", "worried", "encouraging")
     "praise" -> listOf("chat_happy", "affection", "shy", "excited", "joyful", "proud", "laughing")
     "good_news" -> listOf("joyful", "excited", "laughing", "chat_happy", "proud", "affection")
     "apology" -> listOf("affection", "chat_happy", "joyful")
