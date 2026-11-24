@@ -9,6 +9,7 @@ const crypto = require("node:crypto");
 const { chooseAnimationBatch, chooseGreetingBatch } = require("./animation_batch");
 const { PhysicsJobs } = require("../physics/jobs");
 const { LightingJobs } = require("../lighting/jobs");
+const { createProviderRelay, PREFIX: PROVIDER_PREFIX } = require("./provider-relay");
 const { handleLighting } = require("../lighting/routes");
 const { importPhysicsSeeds } = require("../physics/seed");
 const { loadEnvFileDefaults } = require("../extensions/02_tools_and_apps/_shared/env_file.js");
@@ -17,6 +18,7 @@ const ROOT = path.resolve(__dirname, "..");
 const PIPELINE = path.join(ROOT, "pipeline");
 const PUBLIC = path.join(ROOT, "public");
 const env = loadEnvFileDefaults({ env: process.env, workspaceRoot: ROOT });
+const providerRelay = createProviderRelay(env.OPENROUTER_PROXY_URL);
 const port = Number(env.MASCOT3_PORT || 8788);
 const DATA_ROOT = env.MASCOT3_DATA_DIR ? path.resolve(env.MASCOT3_DATA_DIR) : null;
 const CHARACTERS_DIR = DATA_ROOT ? path.join(DATA_ROOT, "characters") : path.join(PIPELINE, "characters");
@@ -747,6 +749,11 @@ const server = http.createServer(async (req, res) => {
       profile: PROFILE,
     });
     if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { status: "ok" });
+    if (url.pathname.startsWith(PROVIDER_PREFIX)) {
+      if (!env.MASCOT3_CLIENT_TOKEN?.trim()) return send(res, 503, { error: "provider_client_auth_not_configured" });
+      requireClientAuth(req);
+      return await providerRelay(req, res, url, send);
+    }
     if (url.pathname.startsWith('/v1/lighting/')) {
       await handleLighting({ req, res, url, lightingJobs, token: env.MASCOT3_CLIENT_TOKEN, send, serveFile });
       return;

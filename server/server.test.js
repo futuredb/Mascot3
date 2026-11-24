@@ -30,6 +30,7 @@ test("health stays public while mutations require the client token", async (t) =
       MASCOT3_DATA_DIR: dataRoot,
       MASCOT3_SKIP_SEED: "true",
       MASCOT3_CLIENT_TOKEN: "test-client-token",
+      OPENROUTER_PROXY_URL: "",
       PHYSICS_ENABLED: "false",
     },
     stdio: "ignore",
@@ -77,6 +78,14 @@ test("health stays public while mutations require the client token", async (t) =
     body: JSON.stringify({ city_id: "524901", name: "Moscow" }),
   });
   assert.equal(authorized.status, 200);
+
+  const relay = `http://127.0.0.1:${port}/v1/provider`;
+  const relayHeaders = { "x-mascot-client-token": "test-client-token" };
+  assert.equal((await fetch(`${relay}/openrouter.ai/api/v1/key`)).status, 401);
+  assert.equal((await fetch(`${relay}/openrouter.ai/api/v1/key`, { headers: relayHeaders })).status, 503);
+  assert.equal((await fetch(`${relay}/127.0.0.1/health`, { headers: relayHeaders })).status, 404);
+  assert.equal((await fetch(`${relay}/openrouter.ai.attacker.example/api/v1/key`, { headers: relayHeaders })).status, 404);
+  assert.equal((await fetch(`${relay}/openrouter.ai/api/v1/keys`, { headers: relayHeaders })).status, 404);
 
   const physics = `http://127.0.0.1:${port}/v1/physics/jobs`;
   assert.equal((await fetch(physics, {method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status,401);
